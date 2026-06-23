@@ -15,6 +15,8 @@
   let waterTexture = null;
   let lavaTexture = null;
   let light = null;
+  let skyGroup = null;
+  let cloudMaterial = null;
   let targetBox = null;
   let crackLines = null;
   let sheepMeshes = new Map();
@@ -34,6 +36,11 @@
   ];
 
   const uvCorners = [[1, 0], [1, 1], [0, 1], [0, 0]];
+  const SKY_COLOR = 0x87bfe8;
+  const SKY_FOG_COLOR = 0x87bfe8;
+  const CLOUD_HEIGHT = 46;
+  const CLOUD_SPREAD = 170;
+  const CLOUD_COUNT = 18;
   const crackSegments = [
     [0.50, 0.50, 0.38, 0.48],
     [0.38, 0.48, 0.28, 0.36],
@@ -757,16 +764,18 @@
         return false;
       }
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-      renderer.setClearColor(0x87bfe8, 1);
+      renderer.setClearColor(SKY_COLOR, 1);
       createTextureAtlas();
       scene = new THREE.Scene();
+      scene.background = new THREE.Color(SKY_COLOR);
       const cameraFar = CAMERA_FAR_CHUNKS * CHUNK_SIZE;
-      scene.fog = new THREE.Fog(0x87bfe8, Math.max(24, cameraFar * 0.34), Math.max(48, cameraFar * 0.74));
+      scene.fog = new THREE.Fog(SKY_FOG_COLOR, Math.max(24, cameraFar * 0.34), Math.max(48, cameraFar * 0.74));
       camera = new THREE.PerspectiveCamera(72, 1, 0.05, cameraFar);
       light = new THREE.DirectionalLight(0xffffff, 1.3);
       light.position.set(0.35, 1, 0.45);
       scene.add(light);
       scene.add(new THREE.HemisphereLight(0xbfe4ff, 0x3e3428, 1.35));
+      createSkyLayer();
       targetBox = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(1.02, 1.02, 1.02)),
         new THREE.LineBasicMaterial({ color: 0xfff0a0, transparent: true, opacity: 0.85 })
@@ -815,6 +824,43 @@
     const time = performance.now() * 0.001;
     if (waterTexture) waterTexture.offset.set((time * 0.045) % 1, (time * 0.025) % 1);
     if (lavaTexture) lavaTexture.offset.set((time * 0.035) % 1, (time * 0.055) % 1);
+  }
+
+  function createSkyLayer() {
+    if (skyGroup || !window.THREE) return;
+    skyGroup = new THREE.Group();
+    cloudMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+    });
+    const rng = mulberry32(0x51ca1ab5);
+    for (let i = 0; i < CLOUD_COUNT; i += 1) {
+      const cloud = new THREE.Group();
+      const parts = 3 + Math.floor(rng() * 4);
+      const baseX = (rng() - 0.5) * CLOUD_SPREAD;
+      const baseZ = (rng() - 0.5) * CLOUD_SPREAD;
+      const baseY = CLOUD_HEIGHT + (rng() - 0.5) * 8;
+      for (let p = 0; p < parts; p += 1) {
+        const sx = 7 + rng() * 10;
+        const sy = 1.5 + rng() * 1.3;
+        const sz = 4 + rng() * 7;
+        const puff = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), cloudMaterial);
+        puff.position.set((rng() - 0.5) * 16, (rng() - 0.5) * 1.5, (rng() - 0.5) * 8);
+        cloud.add(puff);
+      }
+      cloud.position.set(baseX, baseY, baseZ);
+      cloud.rotation.y = (rng() - 0.5) * 0.5;
+      skyGroup.add(cloud);
+    }
+    scene.add(skyGroup);
+  }
+
+  function updateSkyLayer(player) {
+    if (!skyGroup || !player) return;
+    const time = performance.now() * 0.001;
+    skyGroup.position.set(player.x + time * 0.7, 0, player.z + time * 0.18);
   }
 
   function getSheepMaterials() {
@@ -1062,6 +1108,7 @@
     }
     updateCracks(state);
     updateFluidTextureAnimation();
+    updateSkyLayer(player);
     syncSheepMeshes(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
