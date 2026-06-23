@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { setBlock3D, getBlock3D, setWater3D } = Game.world3d;
+  const { clearWorld3D, setBlock3D, getBlock3D, setWater3D } = Game.world3d;
 
   function hash(seed) {
     let h = 2166136261;
@@ -85,9 +85,7 @@
     const world = state.world;
     const seaLevel = 11;
     const heightMap = new Int16Array(world.w * world.d);
-    world.blocks.fill(BLOCK.AIR);
-    if (world.waterLevel) world.waterLevel.fill(255);
-    if (world.waterSources) world.waterSources.clear();
+    clearWorld3D(state);
     for (let x = 0; x < world.w; x += 1) {
       for (let z = 0; z < world.d; z += 1) {
         const h = terrainHeight(seed, x, z);

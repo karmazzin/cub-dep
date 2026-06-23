@@ -7,8 +7,7 @@
       w,
       h,
       d,
-      blocks: new Uint16Array(w * h * d),
-      waterLevel: new Uint8Array(w * h * d).fill(255),
+      chunks: new Map(),
       waterSources: new Set(),
       blockDamage: {},
       dirtyAll: true,
@@ -20,6 +19,64 @@
     return x + world.w * (z + world.d * y);
   }
 
+  function chunkCoords3D(x, y, z) {
+    const size = Game.constants3d.CHUNK_SIZE;
+    return {
+      cx: Math.floor(x / size),
+      cy: Math.floor(y / size),
+      cz: Math.floor(z / size),
+      lx: x % size,
+      ly: y % size,
+      lz: z % size,
+    };
+  }
+
+  function chunkLocalIndex3D(lx, ly, lz) {
+    const size = Game.constants3d.CHUNK_SIZE;
+    return lx + size * (lz + size * ly);
+  }
+
+  function createChunk3D(cx, cy, cz) {
+    const size = Game.constants3d.CHUNK_SIZE;
+    return {
+      cx,
+      cy,
+      cz,
+      blocks: new Uint16Array(size * size * size),
+      waterLevel: new Uint8Array(size * size * size).fill(255),
+    };
+  }
+
+  function getChunk3D(world, cx, cy, cz, create = false) {
+    if (!world || !world.chunks) return null;
+    const key = `${cx},${cy},${cz}`;
+    let chunk = world.chunks.get(key);
+    if (!chunk && create) {
+      chunk = createChunk3D(cx, cy, cz);
+      world.chunks.set(key, chunk);
+    }
+    return chunk || null;
+  }
+
+  function getChunkForBlock3D(world, x, y, z, create = false) {
+    const coords = chunkCoords3D(x, y, z);
+    const chunk = getChunk3D(world, coords.cx, coords.cy, coords.cz, create);
+    return chunk ? { chunk, coords, index: chunkLocalIndex3D(coords.lx, coords.ly, coords.lz) } : null;
+  }
+
+  function clearWorld3D(state) {
+    const world = state && state.world;
+    if (!world) return;
+    if (!world.chunks) world.chunks = new Map();
+    world.chunks.clear();
+    if (world.waterSources) world.waterSources.clear();
+    else world.waterSources = new Set();
+    world.blockDamage = {};
+    world.dirtyAll = true;
+    if (world.dirtyChunks) world.dirtyChunks.clear();
+    else world.dirtyChunks = new Set();
+  }
+
   function inBounds3D(world, x, y, z) {
     return x >= 0 && x < world.w && y >= 0 && y < world.h && z >= 0 && z < world.d;
   }
@@ -27,7 +84,8 @@
   function getBlock3D(state, x, y, z) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return BLOCK.BEDROCK;
-    return world.blocks[index3D(world, x, y, z)];
+    const entry = getChunkForBlock3D(world, x, y, z, false);
+    return entry ? entry.chunk.blocks[entry.index] : BLOCK.AIR;
   }
 
   function chunkKey3D(x, y, z) {
@@ -56,14 +114,16 @@
   function setBlock3D(state, x, y, z, id) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return false;
-    const index = index3D(world, x, y, z);
-    if (world.blocks[index] === id) return false;
-    world.blocks[index] = id;
+    let entry = getChunkForBlock3D(world, x, y, z, false);
+    if (!entry && id === BLOCK.AIR) return false;
+    if (!entry) entry = getChunkForBlock3D(world, x, y, z, true);
+    if (entry.chunk.blocks[entry.index] === id) return false;
+    entry.chunk.blocks[entry.index] = id;
     if (id === BLOCK.WATER) {
-      world.waterLevel[index] = 0;
+      entry.chunk.waterLevel[entry.index] = 0;
       world.waterSources.add(`${x},${y},${z}`);
-    } else if (world.waterLevel) {
-      world.waterLevel[index] = 255;
+    } else {
+      entry.chunk.waterLevel[entry.index] = 255;
       if (world.waterSources) world.waterSources.delete(`${x},${y},${z}`);
     }
     if (world.blockDamage) delete world.blockDamage[`${x},${y},${z}`];
@@ -73,20 +133,21 @@
 
   function getWaterLevel3D(state, x, y, z) {
     const world = state && state.world;
-    if (!world || !world.waterLevel || !inBounds3D(world, x, y, z)) return 255;
-    if (world.blocks[index3D(world, x, y, z)] !== BLOCK.WATER) return 255;
-    return world.waterLevel[index3D(world, x, y, z)];
+    if (!world || !inBounds3D(world, x, y, z)) return 255;
+    const entry = getChunkForBlock3D(world, x, y, z, false);
+    if (!entry || entry.chunk.blocks[entry.index] !== BLOCK.WATER) return 255;
+    return entry.chunk.waterLevel[entry.index];
   }
 
   function setWater3D(state, x, y, z, level = 0, source = false) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return false;
-    const index = index3D(world, x, y, z);
+    const entry = getChunkForBlock3D(world, x, y, z, true);
     const key = `${x},${y},${z}`;
     const nextLevel = Math.max(0, Math.min(7, level | 0));
-    const changed = world.blocks[index] !== BLOCK.WATER || world.waterLevel[index] !== nextLevel || (!!world.waterSources.has(key)) !== !!source;
-    world.blocks[index] = BLOCK.WATER;
-    world.waterLevel[index] = nextLevel;
+    const changed = entry.chunk.blocks[entry.index] !== BLOCK.WATER || entry.chunk.waterLevel[entry.index] !== nextLevel || (!!world.waterSources.has(key)) !== !!source;
+    entry.chunk.blocks[entry.index] = BLOCK.WATER;
+    entry.chunk.waterLevel[entry.index] = nextLevel;
     if (source) world.waterSources.add(key);
     else world.waterSources.delete(key);
     if (world.blockDamage) delete world.blockDamage[key];
@@ -105,6 +166,7 @@
 
   Game.world3d = {
     createWorld3D,
+    clearWorld3D,
     getBlock3D,
     setBlock3D,
     getWaterLevel3D,
