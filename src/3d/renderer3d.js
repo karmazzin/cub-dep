@@ -1,15 +1,16 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK, BLOCK_COLORS } = Game.blocks;
-  const { EYE_HEIGHT } = Game.constants3d;
+  const { EYE_HEIGHT, CHUNK_SIZE, CHUNK_RENDER_DISTANCE, CAMERA_FAR_CHUNKS } = Game.constants3d;
   const { getBlock3D, getWaterLevel3D } = Game.world3d;
   const { drawUI3D } = Game.ui3d;
 
   let renderer = null;
   let scene = null;
   let camera = null;
-  let mesh = null;
-  let waterMesh = null;
+  let chunkMeshes = new Map();
+  let solidMaterial = null;
+  let waterMaterial = null;
   let light = null;
   let targetBox = null;
   let crackLines = null;
@@ -485,16 +486,84 @@
     crackLines.material.opacity = 0.86;
   }
 
-  function buildWorldMesh(state, mode = 'solid') {
+  function chunkKey(cx, cy, cz) {
+    return `${cx},${cy},${cz}`;
+  }
+
+  function parseChunkKey(key) {
+    const parts = String(key).split(',').map(Number);
+    if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return null;
+    return { cx: parts[0], cy: parts[1], cz: parts[2] };
+  }
+
+  function getChunkBounds(world, cx, cy, cz) {
+    const minX = cx * CHUNK_SIZE;
+    const minY = cy * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE;
+    if (minX >= world.w || minY >= world.h || minZ >= world.d || minX < 0 || minY < 0 || minZ < 0) return null;
+    return {
+      minX,
+      minY,
+      minZ,
+      maxX: Math.min(world.w, minX + CHUNK_SIZE),
+      maxY: Math.min(world.h, minY + CHUNK_SIZE),
+      maxZ: Math.min(world.d, minZ + CHUNK_SIZE),
+    };
+  }
+
+  function getChunkCounts(world) {
+    return {
+      x: Math.ceil(world.w / CHUNK_SIZE),
+      y: Math.ceil(world.h / CHUNK_SIZE),
+      z: Math.ceil(world.d / CHUNK_SIZE),
+    };
+  }
+
+  function getPlayerChunk(player) {
+    return {
+      cx: Math.floor(player.x / CHUNK_SIZE),
+      cz: Math.floor(player.z / CHUNK_SIZE),
+    };
+  }
+
+  function isChunkInRenderDistance(entry, playerChunk) {
+    const dx = entry.cx - playerChunk.cx;
+    const dz = entry.cz - playerChunk.cz;
+    return dx * dx + dz * dz <= CHUNK_RENDER_DISTANCE * CHUNK_RENDER_DISTANCE;
+  }
+
+  function updateChunkVisibility(state) {
+    const playerChunk = getPlayerChunk(state.player);
+    let visibleChunks = 0;
+    let visibleMeshes = 0;
+    for (const entry of chunkMeshes.values()) {
+      const visible = isChunkInRenderDistance(entry, playerChunk);
+      if (entry.solid) entry.solid.visible = visible;
+      if (entry.water) entry.water.visible = visible;
+      if (visible) {
+        visibleChunks += 1;
+        if (entry.solid) visibleMeshes += 1;
+        if (entry.water) visibleMeshes += 1;
+      }
+    }
+    if (debugInfo) {
+      debugInfo.visibleChunks = visibleChunks;
+      debugInfo.visibleChunkMeshes = visibleMeshes;
+      debugInfo.renderDistanceChunks = CHUNK_RENDER_DISTANCE;
+    }
+  }
+
+  function buildWorldMesh(state, mode = 'solid', bounds = null) {
     const positions = [];
     const normals = [];
     const colors = [];
     const uvs = [];
     const indices = [];
     const world = state.world;
-    for (let y = 0; y < world.h; y += 1) {
-      for (let z = 0; z < world.d; z += 1) {
-        for (let x = 0; x < world.w; x += 1) {
+    const range = bounds || { minX: 0, minY: 0, minZ: 0, maxX: world.w, maxY: world.h, maxZ: world.d };
+    for (let y = range.minY; y < range.maxY; y += 1) {
+      for (let z = range.minZ; z < range.maxZ; z += 1) {
+        for (let x = range.minX; x < range.maxX; x += 1) {
           const id = getBlock3D(state, x, y, z);
           if (id === BLOCK.AIR) continue;
           if (mode === 'solid' && id === BLOCK.WATER) continue;
@@ -524,12 +593,7 @@
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
-    geometry.computeBoundingSphere();
-    debugInfo = {
-      vertices: positions.length / 3,
-      triangles: indices.length / 3,
-      textureTiles: atlasMeta ? atlasMeta.totalTiles : 0,
-    };
+    if (positions.length > 0) geometry.computeBoundingSphere();
     return geometry;
   }
 
@@ -546,8 +610,9 @@
       renderer.setClearColor(0x87bfe8, 1);
       createTextureAtlas();
       scene = new THREE.Scene();
-      scene.fog = new THREE.Fog(0x87bfe8, 36, 92);
-      camera = new THREE.PerspectiveCamera(72, 1, 0.05, 140);
+      const cameraFar = CAMERA_FAR_CHUNKS * CHUNK_SIZE;
+      scene.fog = new THREE.Fog(0x87bfe8, Math.max(24, cameraFar * 0.34), Math.max(48, cameraFar * 0.74));
+      camera = new THREE.PerspectiveCamera(72, 1, 0.05, cameraFar);
       light = new THREE.DirectionalLight(0xffffff, 1.3);
       light.position.set(0.35, 1, 0.45);
       scene.add(light);
@@ -568,37 +633,139 @@
     return true;
   }
 
-  function setWorld(state) {
+  function ensureMaterials() {
+    if (!solidMaterial) {
+      solidMaterial = new THREE.MeshBasicMaterial({ map: createTextureAtlas(), vertexColors: true, side: THREE.DoubleSide });
+    }
+    if (!waterMaterial) {
+      waterMaterial = new THREE.MeshBasicMaterial({
+        map: createTextureAtlas(),
+        vertexColors: true,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.68,
+        depthWrite: true,
+      });
+    }
+  }
+
+  function disposeChunkMeshes() {
+    for (const entry of chunkMeshes.values()) {
+      if (entry.solid) {
+        scene.remove(entry.solid);
+        entry.solid.geometry.dispose();
+      }
+      if (entry.water) {
+        scene.remove(entry.water);
+        entry.water.geometry.dispose();
+      }
+    }
+    chunkMeshes.clear();
+  }
+
+  function setChunkMesh(state, cx, cy, cz, mode) {
+    const bounds = getChunkBounds(state.world, cx, cy, cz);
+    if (!bounds) return { vertices: 0, triangles: 0 };
+    ensureMaterials();
+
+    const key = chunkKey(cx, cy, cz);
+    const entry = chunkMeshes.get(key) || { cx, cy, cz, solid: null, water: null };
+    entry.cx = cx;
+    entry.cy = cy;
+    entry.cz = cz;
+    const previous = entry[mode];
+    const geometry = buildWorldMesh(state, mode, bounds);
+    const vertices = geometry.getAttribute('position').count;
+    const triangles = geometry.index ? geometry.index.count / 3 : 0;
+
+    if (vertices === 0) {
+      if (previous) {
+        scene.remove(previous);
+        previous.geometry.dispose();
+        entry[mode] = null;
+      }
+      geometry.dispose();
+    } else if (previous) {
+      previous.geometry.dispose();
+      previous.geometry = geometry;
+      previous.frustumCulled = true;
+    } else {
+      const material = mode === 'water' ? waterMaterial : solidMaterial;
+      const nextMesh = new THREE.Mesh(geometry, material);
+      nextMesh.frustumCulled = true;
+      entry[mode] = nextMesh;
+      scene.add(nextMesh);
+    }
+
+    if (entry.solid || entry.water) chunkMeshes.set(key, entry);
+    else chunkMeshes.delete(key);
+    return { vertices, triangles };
+  }
+
+  function rebuildAllChunks(state) {
     if (!scene || !window.THREE) return;
-    if (mesh) {
-      scene.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.material.dispose();
-      mesh = null;
+    disposeChunkMeshes();
+    const counts = getChunkCounts(state.world);
+    const totals = { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0 };
+    for (let cy = 0; cy < counts.y; cy += 1) {
+      for (let cz = 0; cz < counts.z; cz += 1) {
+        for (let cx = 0; cx < counts.x; cx += 1) {
+          const solid = setChunkMesh(state, cx, cy, cz, 'solid');
+          const water = setChunkMesh(state, cx, cy, cz, 'water');
+          totals.vertices += solid.vertices + water.vertices;
+          totals.triangles += solid.triangles + water.triangles;
+          totals.chunks += 1;
+          if (solid.vertices > 0) totals.chunkMeshes += 1;
+          if (water.vertices > 0) totals.chunkMeshes += 1;
+        }
+      }
     }
-    if (waterMesh) {
-      scene.remove(waterMesh);
-      waterMesh.geometry.dispose();
-      waterMesh.material.dispose();
-      waterMesh = null;
-    }
-    const material = new THREE.MeshBasicMaterial({ map: createTextureAtlas(), vertexColors: true, side: THREE.DoubleSide });
-    mesh = new THREE.Mesh(buildWorldMesh(state, 'solid'), material);
-    mesh.frustumCulled = false;
-    scene.add(mesh);
-    const waterMaterial = new THREE.MeshBasicMaterial({
-      map: createTextureAtlas(),
-      vertexColors: true,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.68,
-      depthWrite: true,
-    });
-    waterMesh = new THREE.Mesh(buildWorldMesh(state, 'water'), waterMaterial);
-    waterMesh.frustumCulled = false;
-    scene.add(waterMesh);
+    debugInfo = {
+      vertices: totals.vertices,
+      triangles: totals.triangles,
+      chunks: totals.chunks,
+      chunkMeshes: totals.chunkMeshes,
+      textureTiles: atlasMeta ? atlasMeta.totalTiles : 0,
+    };
     state.world.dirtyAll = false;
     state.world.dirtyChunks.clear();
+  }
+
+  function updateDirtyChunks(state) {
+    if (!scene || !window.THREE || !state.world.dirtyChunks.size) return;
+    const totals = debugInfo || { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0, textureTiles: atlasMeta ? atlasMeta.totalTiles : 0 };
+    for (const key of state.world.dirtyChunks) {
+      const parsed = parseChunkKey(key);
+      if (!parsed) continue;
+      const oldEntry = chunkMeshes.get(key);
+      let oldVertices = 0;
+      let oldTriangles = 0;
+      let oldMeshes = 0;
+      if (oldEntry && oldEntry.solid) {
+        oldVertices += oldEntry.solid.geometry.getAttribute('position').count;
+        oldTriangles += oldEntry.solid.geometry.index ? oldEntry.solid.geometry.index.count / 3 : 0;
+        oldMeshes += 1;
+      }
+      if (oldEntry && oldEntry.water) {
+        oldVertices += oldEntry.water.geometry.getAttribute('position').count;
+        oldTriangles += oldEntry.water.geometry.index ? oldEntry.water.geometry.index.count / 3 : 0;
+        oldMeshes += 1;
+      }
+
+      const solid = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'solid');
+      const water = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'water');
+      const nextMeshes = (solid.vertices > 0 ? 1 : 0) + (water.vertices > 0 ? 1 : 0);
+      totals.vertices += solid.vertices + water.vertices - oldVertices;
+      totals.triangles += solid.triangles + water.triangles - oldTriangles;
+      totals.chunkMeshes += nextMeshes - oldMeshes;
+    }
+    totals.textureTiles = atlasMeta ? atlasMeta.totalTiles : 0;
+    debugInfo = totals;
+    state.world.dirtyChunks.clear();
+  }
+
+  function setWorld(state) {
+    rebuildAllChunks(state);
   }
 
   function resize(canvas, overlayCanvas) {
@@ -616,7 +783,8 @@
 
   function render(state, overlayCtx, overlayCanvas) {
     if (!renderer || !scene || !camera) return;
-    if (state.world.dirtyAll || state.world.dirtyChunks.size > 0) setWorld(state);
+    if (state.world.dirtyAll) rebuildAllChunks(state);
+    else if (state.world.dirtyChunks.size > 0) updateDirtyChunks(state);
     const player = state.player;
     camera.position.set(player.x, player.y + EYE_HEIGHT, player.z);
     const cosPitch = Math.cos(player.pitch);
@@ -638,6 +806,7 @@
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
       debugInfo.rotation = [camera.rotation.x, camera.rotation.y, camera.rotation.z];
     }
+    updateChunkVisibility(state);
     renderer.render(scene, camera);
     drawUI3D(overlayCtx, overlayCanvas, state);
   }

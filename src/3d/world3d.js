@@ -36,8 +36,21 @@
   }
 
   function markChunkDirty3D(state, x, y, z) {
-    if (!state || !state.world || !state.world.dirtyChunks) return;
-    state.world.dirtyChunks.add(chunkKey3D(x, y, z));
+    const world = state && state.world;
+    if (!world || !world.dirtyChunks || !inBounds3D(world, x, y, z)) return;
+    const size = Game.constants3d.CHUNK_SIZE;
+    const chunks = world.dirtyChunks;
+    const cx = Math.floor(x / size);
+    const cy = Math.floor(y / size);
+    const cz = Math.floor(z / size);
+    chunks.add(`${cx},${cy},${cz}`);
+
+    if (x % size === 0 && x > 0) chunks.add(`${cx - 1},${cy},${cz}`);
+    if (x % size === size - 1 && x < world.w - 1) chunks.add(`${cx + 1},${cy},${cz}`);
+    if (y % size === 0 && y > 0) chunks.add(`${cx},${cy - 1},${cz}`);
+    if (y % size === size - 1 && y < world.h - 1) chunks.add(`${cx},${cy + 1},${cz}`);
+    if (z % size === 0 && z > 0) chunks.add(`${cx},${cy},${cz - 1}`);
+    if (z % size === size - 1 && z < world.d - 1) chunks.add(`${cx},${cy},${cz + 1}`);
   }
 
   function setBlock3D(state, x, y, z, id) {
