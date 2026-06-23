@@ -11,6 +11,7 @@
   let chunkMeshes = new Map();
   let solidMaterial = null;
   let waterMaterial = null;
+  let waterTexture = null;
   let light = null;
   let targetBox = null;
   let crackLines = null;
@@ -101,22 +102,22 @@
   }
 
   function dirtPalette(id) {
-    if (id === BLOCK.RED_EARTH) return { r: 128, g: 72, b: 50 };
-    if (id === BLOCK.MUSHROOM_SOIL) return { r: 93, g: 78, b: 62 };
-    if (id === BLOCK.ASH) return { r: 130, g: 124, b: 118 };
-    if (id === BLOCK.PATH) return { r: 136, g: 104, b: 62 };
-    return { r: 126, g: 84, b: 48 };
+    if (id === BLOCK.RED_EARTH) return { r: 118, g: 62, b: 42 };
+    if (id === BLOCK.MUSHROOM_SOIL) return { r: 82, g: 68, b: 52 };
+    if (id === BLOCK.ASH) return { r: 108, g: 102, b: 98 };
+    if (id === BLOCK.PATH) return { r: 118, g: 86, b: 46 };
+    return { r: 116, g: 78, b: 44 };
   }
 
   function stonePalette(id) {
-    if (id === BLOCK.BEDROCK) return { r: 44, g: 44, b: 44 };
-    if (id === BLOCK.BLACKSTONE) return { r: 48, g: 48, b: 52 };
-    if (id === BLOCK.DEEPSTONE) return { r: 72, g: 76, b: 82 };
-    if (id === BLOCK.BASALT) return { r: 76, g: 72, b: 74 };
-    if (id === BLOCK.ASH_STONE) return { r: 88, g: 84, b: 82 };
-    if (id === BLOCK.ROOT_STONE) return { r: 82, g: 76, b: 68 };
-    if (id === BLOCK.CORAL_STONE) return { r: 96, g: 122, b: 130 };
-    return { r: 128, g: 128, b: 128 };
+    if (id === BLOCK.BEDROCK) return { r: 34, g: 34, b: 34 };
+    if (id === BLOCK.BLACKSTONE) return { r: 38, g: 38, b: 42 };
+    if (id === BLOCK.DEEPSTONE) return { r: 62, g: 66, b: 72 };
+    if (id === BLOCK.BASALT) return { r: 60, g: 56, b: 60 };
+    if (id === BLOCK.ASH_STONE) return { r: 72, g: 68, b: 66 };
+    if (id === BLOCK.ROOT_STONE) return { r: 70, g: 62, b: 52 };
+    if (id === BLOCK.CORAL_STONE) return { r: 74, g: 104, b: 112 };
+    return { r: 116, g: 116, b: 116 };
   }
 
   function drawNoise(ctx, rng, base, x, y, size, strength, count) {
@@ -147,17 +148,17 @@
   }
 
   function drawGrassTop(ctx, rng, x, y, size, variant) {
-    const base = variant % 2 ? { r: 86, g: 156, b: 56 } : { r: 94, g: 168, b: 62 };
-    fillPixelNoise(ctx, rng, base, x, y, size, 44, 2);
+    const base = variant % 2 ? { r: 78, g: 142, b: 38 } : { r: 92, g: 154, b: 44 };
+    fillPixelNoise(ctx, rng, base, x, y, size, 54, 2);
     for (let i = 0; i < 38; i += 1) {
-      ctx.fillStyle = rgbToCss(adjustColor(base, rng() > 0.5 ? 36 : -32));
+      ctx.fillStyle = rgbToCss(adjustColor(base, rng() > 0.5 ? 42 : -40));
       ctx.fillRect(x + Math.floor(rng() * size), y + Math.floor(rng() * size), 2, 4);
     }
   }
 
   function drawGrassSide(ctx, rng, x, y, size, variant) {
-    drawDirt(ctx, rng, x, y, size, { r: 126, g: 84, b: 48 });
-    const grass = variant % 2 ? { r: 86, g: 156, b: 56 } : { r: 94, g: 168, b: 62 };
+    drawDirt(ctx, rng, x, y, size, { r: 116, g: 78, b: 44 });
+    const grass = variant % 2 ? { r: 78, g: 142, b: 38 } : { r: 92, g: 154, b: 44 };
     const strip = 6 + Math.floor(rng() * 3);
     for (let xx = 0; xx < size; xx += 2) {
       const drop = Math.floor(rng() * 7);
@@ -382,6 +383,28 @@
     return textureAtlas;
   }
 
+  function createWaterTexture() {
+    if (waterTexture) return waterTexture;
+    const size = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+
+    ctx.fillStyle = 'rgba(42,126,204,1)';
+    ctx.fillRect(0, 0, size, size);
+
+    waterTexture = new THREE.CanvasTexture(canvas);
+    waterTexture.magFilter = THREE.NearestFilter;
+    waterTexture.minFilter = THREE.NearestFilter;
+    waterTexture.wrapS = THREE.RepeatWrapping;
+    waterTexture.wrapT = THREE.RepeatWrapping;
+    waterTexture.generateMipmaps = false;
+    waterTexture.needsUpdate = true;
+    return waterTexture;
+  }
+
   function hashBlockVariant(x, y, z, id, face) {
     if (id === BLOCK.GRASS && face.type === 'top') return 0;
     if (id === BLOCK.WATER || id === BLOCK.STEAM_WATER) return 0;
@@ -409,6 +432,18 @@
     }
   }
 
+  function pushWaterUv(uvs, face, x, y, z) {
+    const scale = 0.5;
+    for (const corner of face.corners) {
+      const wx = x + corner[0];
+      const wy = y + corner[1];
+      const wz = z + corner[2];
+      if (face.dir[1] !== 0) uvs.push(wx * scale, wz * scale);
+      else if (face.dir[0] !== 0) uvs.push(wz * scale, wy * scale);
+      else uvs.push(wx * scale, wy * scale);
+    }
+  }
+
   function isNeighborOpen(state, x, y, z, mode) {
     const world = state.world;
     if (x < 0 || x >= world.w || y < 0 || y >= world.h || z < 0 || z >= world.d) return true;
@@ -425,6 +460,23 @@
 
   function pushBlockPosition(positions, id, state, x, y, z, corner) {
     const height = id === BLOCK.WATER && corner[1] === 1 ? getWaterSurfaceHeight(state, x, y, z) : corner[1];
+    positions.push(x + corner[0], y + height, z + corner[2]);
+  }
+
+  function getWaterFaceRange(state, x, y, z, face) {
+    const nx = x + face.dir[0];
+    const ny = y + face.dir[1];
+    const nz = z + face.dir[2];
+    const height = getWaterSurfaceHeight(state, x, y, z);
+    if (getBlock3D(state, nx, ny, nz) !== BLOCK.WATER) return { lower: 0, upper: height };
+    if (face.dir[1] !== 0) return null;
+    const neighborHeight = getWaterSurfaceHeight(state, nx, ny, nz);
+    if (height <= neighborHeight + 0.001) return null;
+    return { lower: neighborHeight, upper: height };
+  }
+
+  function pushWaterBlockPosition(positions, x, y, z, corner, range) {
+    const height = corner[1] === 1 ? range.upper : range.lower;
     positions.push(x + corner[0], y + height, z + corner[2]);
   }
 
@@ -572,15 +624,19 @@
             const nx = x + face.dir[0];
             const ny = y + face.dir[1];
             const nz = z + face.dir[2];
-            if (!isNeighborOpen(state, nx, ny, nz, mode)) continue;
+            const waterRange = mode === 'water' ? getWaterFaceRange(state, x, y, z, face) : null;
+            if (mode === 'water' && !waterRange) continue;
+            if (mode !== 'water' && !isNeighborOpen(state, nx, ny, nz, mode)) continue;
             const base = positions.length / 3;
             const color = faceShade(face.shade);
             for (const corner of face.corners) {
-              pushBlockPosition(positions, id, state, x, y, z, corner);
+              if (mode === 'water') pushWaterBlockPosition(positions, x, y, z, corner, waterRange);
+              else pushBlockPosition(positions, id, state, x, y, z, corner);
               normals.push(face.dir[0], face.dir[1], face.dir[2]);
               colors.push(color.r, color.g, color.b);
             }
-            pushTileUv(uvs, id, face, x, y, z);
+            if (mode === 'water') pushWaterUv(uvs, face, x, y, z);
+            else pushTileUv(uvs, id, face, x, y, z);
             indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
           }
         }
@@ -639,14 +695,21 @@
     }
     if (!waterMaterial) {
       waterMaterial = new THREE.MeshBasicMaterial({
-        map: createTextureAtlas(),
-        vertexColors: true,
-        side: THREE.DoubleSide,
+        map: createWaterTexture(),
+        color: 0x2f82d0,
+        vertexColors: false,
+        side: THREE.FrontSide,
         transparent: true,
-        opacity: 0.68,
-        depthWrite: true,
+        opacity: 0.62,
+        depthWrite: false,
       });
     }
+  }
+
+  function updateWaterTextureAnimation() {
+    if (!waterTexture) return;
+    const time = performance.now() * 0.001;
+    waterTexture.offset.set((time * 0.045) % 1, (time * 0.025) % 1);
   }
 
   function disposeChunkMeshes() {
@@ -802,6 +865,7 @@
       }
     }
     updateCracks(state);
+    updateWaterTextureAnimation();
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
       debugInfo.rotation = [camera.rotation.x, camera.rotation.y, camera.rotation.z];

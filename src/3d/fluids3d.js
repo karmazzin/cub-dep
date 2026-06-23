@@ -3,7 +3,7 @@
   const { BLOCK } = Game.blocks;
   const { getBlock3D, setBlock3D, getWaterLevel3D, setWater3D, isWaterSource3D, inBounds3D } = Game.world3d;
 
-  const MAX_WATER_LEVEL = 7;
+  const MAX_WATER_LEVEL = 4;
   const TICK_INTERVAL = 0.14;
   const SIDE_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
