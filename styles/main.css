@@ -1,0 +1,120 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #101316;
+  color: #f4f0e8;
+  font-family: "Marcellus", serif;
+  touch-action: none;
+}
+
+.game-3d,
+.game-3d-overlay,
+.menu-root {
+  position: fixed;
+  inset: 0;
+}
+
+.game-3d {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+}
+
+.game-3d-overlay {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2;
+  pointer-events: none;
+  background: transparent;
+}
+
+.menu-root {
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background:
+    linear-gradient(180deg, rgba(22, 32, 34, 0.82), rgba(10, 12, 14, 0.94)),
+    radial-gradient(circle at 50% 20%, rgba(87, 132, 116, 0.32), transparent 42%);
+}
+
+.menu-panel {
+  width: min(440px, 100%);
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 16, 18, 0.86);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.38);
+}
+
+.menu-title {
+  margin: 0 0 6px;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.menu-subtitle {
+  margin: 0 0 22px;
+  color: rgba(244, 240, 232, 0.72);
+  font-size: 15px;
+}
+
+.menu-field {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+  color: rgba(244, 240, 232, 0.82);
+  font-size: 14px;
+}
+
+.menu-field input {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f0e8;
+  font: inherit;
+  outline: none;
+}
+
+.menu-field input:focus {
+  border-color: rgba(255, 223, 122, 0.76);
+}
+
+.menu-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.menu-btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f0e8;
+  font: inherit;
+  cursor: pointer;
+}
+
+.menu-btn-primary {
+  border-color: rgba(255, 223, 122, 0.62);
+  background: rgba(255, 223, 122, 0.16);
+}
+
+.menu-hint {
+  margin-top: 14px;
+  color: rgba(244, 240, 232, 0.62);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.is-hidden {
+  display: none;
+}

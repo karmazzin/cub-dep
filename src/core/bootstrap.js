@@ -1,0 +1,1 @@
+window.CubDep = window.CubDep || {};
