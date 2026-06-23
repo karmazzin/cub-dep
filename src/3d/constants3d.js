@@ -2,9 +2,9 @@
   const Game = window.CubDep;
 
   Game.constants3d = {
-    WORLD_W: 64,
+    WORLD_W: 256,
     WORLD_H: 32,
-    WORLD_D: 64,
+    WORLD_D: 256,
     CHUNK_SIZE: 16,
     CHUNK_RENDER_DISTANCE: 8,
     CAMERA_FAR_CHUNKS: 9,
@@ -13,7 +13,8 @@
     EYE_HEIGHT: 1.58,
     GRAVITY: 24,
     WALK_SPEED: 5.2,
-    JUMP_SPEED: 7.2,
+    SPRINT_MULTIPLIER: 1.55,
+    JUMP_SPEED: 8.0,
     REACH_DISTANCE: 5.2,
     MOUSE_SENSITIVITY: 0.0022,
     MAX_PITCH: Math.PI * 0.47,

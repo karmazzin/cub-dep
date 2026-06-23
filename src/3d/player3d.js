@@ -1,8 +1,10 @@
 (() => {
   const Game = window.CubDep;
-  const { PLAYER_RADIUS, PLAYER_HEIGHT, GRAVITY, WALK_SPEED, JUMP_SPEED, MOUSE_SENSITIVITY, MAX_PITCH } = Game.constants3d;
+  const { PLAYER_RADIUS, PLAYER_HEIGHT, GRAVITY, WALK_SPEED, SPRINT_MULTIPLIER, JUMP_SPEED, MOUSE_SENSITIVITY, MAX_PITCH } = Game.constants3d;
   const { BLOCK } = Game.blocks;
   const { getBlock3D, isSolidBlock3D } = Game.world3d;
+
+  const PHYSICS_STEP = 1 / 120;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -42,7 +44,7 @@
     }
   }
 
-  function isInWater(state) {
+  function isInLiquid(state) {
     const player = state.player;
     const minX = Math.floor(player.x - PLAYER_RADIUS);
     const maxX = Math.floor(player.x + PLAYER_RADIUS);
@@ -53,7 +55,8 @@
     for (let yy = minY; yy <= maxY; yy += 1) {
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
-          if (getBlock3D(state, xx, yy, zz) === BLOCK.WATER) return true;
+          const id = getBlock3D(state, xx, yy, zz);
+          if (id === BLOCK.WATER || id === BLOCK.LAVA) return true;
         }
       }
     }
@@ -67,8 +70,9 @@
 
     const forward = (inputState.keys.KeyW ? 1 : 0) - (inputState.keys.KeyS ? 1 : 0);
     const strafe = (inputState.keys.KeyD ? 1 : 0) - (inputState.keys.KeyA ? 1 : 0);
-    const inWater = isInWater(state);
-    const speed = inWater ? WALK_SPEED * 0.55 : WALK_SPEED;
+    const inLiquid = isInLiquid(state);
+    const sprinting = !inLiquid && (inputState.keys.ShiftLeft || inputState.keys.ShiftRight);
+    const speed = (inLiquid ? WALK_SPEED * 0.55 : WALK_SPEED) * (sprinting ? SPRINT_MULTIPLIER : 1);
     const sin = Math.sin(player.yaw);
     const cos = Math.cos(player.yaw);
     let vx = (sin * forward - cos * strafe) * speed;
@@ -80,7 +84,7 @@
     player.vx = vx;
     player.vz = vz;
 
-    if (inWater) {
+    if (inLiquid) {
       player.vy *= 0.82;
       if (inputState.keys.Space) player.vy = Math.max(player.vy, 3.2);
     } else if (inputState.keys.Space && player.onGround) {
@@ -88,11 +92,16 @@
       player.onGround = false;
     }
 
-    player.vy -= (inWater ? GRAVITY * 0.24 : GRAVITY) * dt;
     player.onGround = false;
-    moveAxis(state, 'x', player.vx * dt);
-    moveAxis(state, 'z', player.vz * dt);
-    moveAxis(state, 'y', player.vy * dt);
+    let remaining = dt;
+    while (remaining > 0) {
+      const step = Math.min(PHYSICS_STEP, remaining);
+      player.vy -= (inLiquid ? GRAVITY * 0.24 : GRAVITY) * step;
+      moveAxis(state, 'x', player.vx * step);
+      moveAxis(state, 'z', player.vz * step);
+      moveAxis(state, 'y', player.vy * step);
+      remaining -= step;
+    }
 
     if (player.y < -12) {
       player.x = state.world.w / 2 + 0.5;

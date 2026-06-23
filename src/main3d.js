@@ -67,7 +67,7 @@
         <div class="menu-actions">
           <button class="menu-btn menu-btn-primary" type="submit">Создать мир</button>
         </div>
-        <div class="menu-hint">WASD - движение, Space - прыжок/всплытие, ЛКМ - добыча, ПКМ - поставить, R - починить блок, 1-6 - выбор блока.</div>
+        <div class="menu-hint">WASD - движение, Shift - ускорение, Space - прыжок/всплытие, ЛКМ - добыча, ПКМ - поставить, R - починить блок, 1-9/0 - выбор блока.</div>
       </form>
     `;
   }
@@ -138,7 +138,9 @@
     }
     const mouse = input.consumeMouse();
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt);
+    if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
     Game.interaction3d.updateInteraction3D(state, input.input, input.consumeActions(), dt);
+    if (Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
     Game.fluids3d.updateFluids3D(state, dt);
   }
 

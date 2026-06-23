@@ -29,6 +29,7 @@
         yaw: Math.PI,
         pitch: -0.42,
         onGround: false,
+        selectedHotbarIndex: 0,
         selectedBlock: BLOCK.DIRT,
       },
       ui: {
@@ -44,6 +45,9 @@
         mineBlock: BLOCK.AIR,
         minePulse: 0,
         mineSoundTimer: 0,
+      },
+      entities: {
+        sheep: [],
       },
       pause: {
         open: false,

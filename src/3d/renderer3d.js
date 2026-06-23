@@ -2,7 +2,7 @@
   const Game = window.CubDep;
   const { BLOCK, BLOCK_COLORS } = Game.blocks;
   const { EYE_HEIGHT, CHUNK_SIZE, CHUNK_RENDER_DISTANCE, CAMERA_FAR_CHUNKS } = Game.constants3d;
-  const { getBlock3D, getWaterLevel3D } = Game.world3d;
+  const { getBlock3D, getFluidLevel3D } = Game.world3d;
   const { drawUI3D } = Game.ui3d;
 
   let renderer = null;
@@ -11,10 +11,14 @@
   let chunkMeshes = new Map();
   let solidMaterial = null;
   let waterMaterial = null;
+  let lavaMaterial = null;
   let waterTexture = null;
+  let lavaTexture = null;
   let light = null;
   let targetBox = null;
   let crackLines = null;
+  let sheepMeshes = new Map();
+  let sheepMaterials = null;
   let textureAtlas = null;
   let atlasMeta = null;
   let atlasEntries = null;
@@ -383,8 +387,87 @@
     return textureAtlas;
   }
 
+  function drawTexturedFace(ctx, id, faceType, points, x, y, w, h) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i][0], points[i][1]);
+    ctx.closePath();
+    ctx.clip();
+    drawBlockTile(ctx, id, faceType, 0, x, y, w);
+    if (h > w) drawBlockTile(ctx, id, faceType, 1, x, y + w, w);
+    ctx.restore();
+  }
+
+  function drawBlockIcon(ctx, id, x, y, size) {
+    if (!Number.isFinite(id) || id === BLOCK.AIR) return;
+    const cubeX = x + size * 0.14;
+    const cubeY = y + size * 0.2;
+    const cubeW = size * 0.58;
+    const cubeH = size * 0.48;
+    const depth = size * 0.17;
+
+    const topFace = [
+      [cubeX, cubeY + depth],
+      [cubeX + depth, cubeY],
+      [cubeX + cubeW + depth, cubeY],
+      [cubeX + cubeW, cubeY + depth],
+    ];
+    const leftFace = [
+      [cubeX, cubeY + depth],
+      [cubeX + cubeW, cubeY + depth],
+      [cubeX + cubeW, cubeY + depth + cubeH],
+      [cubeX, cubeY + depth + cubeH],
+    ];
+    const rightFace = [
+      [cubeX + cubeW, cubeY + depth],
+      [cubeX + cubeW + depth, cubeY],
+      [cubeX + cubeW + depth, cubeY + cubeH],
+      [cubeX + cubeW, cubeY + depth + cubeH],
+    ];
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    drawTexturedFace(ctx, id, 'side', leftFace, cubeX, cubeY + depth, cubeW, cubeH);
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    ctx.beginPath();
+    ctx.moveTo(leftFace[0][0], leftFace[0][1]);
+    for (let i = 1; i < leftFace.length; i += 1) ctx.lineTo(leftFace[i][0], leftFace[i][1]);
+    ctx.closePath();
+    ctx.fill();
+    drawTexturedFace(ctx, id, 'side', rightFace, cubeX + cubeW, cubeY, cubeW, cubeH);
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.moveTo(rightFace[0][0], rightFace[0][1]);
+    for (let i = 1; i < rightFace.length; i += 1) ctx.lineTo(rightFace[i][0], rightFace[i][1]);
+    ctx.closePath();
+    ctx.fill();
+    drawTexturedFace(ctx, id, 'top', topFace, cubeX, cubeY, cubeW + depth, depth * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.36)';
+    ctx.lineWidth = 1;
+    for (const face of [leftFace, rightFace, topFace]) {
+      ctx.beginPath();
+      ctx.moveTo(face[0][0], face[0][1]);
+      for (let i = 1; i < face.length; i += 1) ctx.lineTo(face[i][0], face[i][1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function createWaterTexture() {
     if (waterTexture) return waterTexture;
+    waterTexture = createFluidTexture(42, 126, 204);
+    return waterTexture;
+  }
+
+  function createLavaTexture() {
+    if (lavaTexture) return lavaTexture;
+    lavaTexture = createFluidTexture(230, 95, 0);
+    return lavaTexture;
+  }
+
+  function createFluidTexture(r, g, b) {
     const size = 2;
     const canvas = document.createElement('canvas');
     canvas.width = size;
@@ -392,17 +475,17 @@
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
 
-    ctx.fillStyle = 'rgba(42,126,204,1)';
+    ctx.fillStyle = `rgba(${r},${g},${b},1)`;
     ctx.fillRect(0, 0, size, size);
 
-    waterTexture = new THREE.CanvasTexture(canvas);
-    waterTexture.magFilter = THREE.NearestFilter;
-    waterTexture.minFilter = THREE.NearestFilter;
-    waterTexture.wrapS = THREE.RepeatWrapping;
-    waterTexture.wrapT = THREE.RepeatWrapping;
-    waterTexture.generateMipmaps = false;
-    waterTexture.needsUpdate = true;
-    return waterTexture;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
   }
 
   function hashBlockVariant(x, y, z, id, face) {
@@ -449,33 +532,42 @@
     if (x < 0 || x >= world.w || y < 0 || y >= world.h || z < 0 || z >= world.d) return true;
     const id = getBlock3D(state, x, y, z);
     if (mode === 'water') return id !== BLOCK.WATER;
-    return id === BLOCK.AIR || id === BLOCK.WATER;
+    if (mode === 'lava') return id !== BLOCK.LAVA;
+    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.LAVA;
   }
 
-  function getWaterSurfaceHeight(state, x, y, z) {
-    if (getBlock3D(state, x, y + 1, z) === BLOCK.WATER) return 1;
-    const level = getWaterLevel3D(state, x, y, z);
+  function fluidIdForMode(mode) {
+    return mode === 'lava' ? BLOCK.LAVA : BLOCK.WATER;
+  }
+
+  function isFluidMode(mode) {
+    return mode === 'water' || mode === 'lava';
+  }
+
+  function getFluidSurfaceHeight(state, fluidId, x, y, z) {
+    if (getBlock3D(state, x, y + 1, z) === fluidId) return 1;
+    const level = getFluidLevel3D(state, x, y, z, fluidId);
     return Math.max(0.32, 0.9 - Math.min(7, level) * 0.075);
   }
 
   function pushBlockPosition(positions, id, state, x, y, z, corner) {
-    const height = id === BLOCK.WATER && corner[1] === 1 ? getWaterSurfaceHeight(state, x, y, z) : corner[1];
+    const height = (id === BLOCK.WATER || id === BLOCK.LAVA) && corner[1] === 1 ? getFluidSurfaceHeight(state, id, x, y, z) : corner[1];
     positions.push(x + corner[0], y + height, z + corner[2]);
   }
 
-  function getWaterFaceRange(state, x, y, z, face) {
+  function getFluidFaceRange(state, fluidId, x, y, z, face) {
     const nx = x + face.dir[0];
     const ny = y + face.dir[1];
     const nz = z + face.dir[2];
-    const height = getWaterSurfaceHeight(state, x, y, z);
-    if (getBlock3D(state, nx, ny, nz) !== BLOCK.WATER) return { lower: 0, upper: height };
+    const height = getFluidSurfaceHeight(state, fluidId, x, y, z);
+    if (getBlock3D(state, nx, ny, nz) !== fluidId) return { lower: 0, upper: height };
     if (face.dir[1] !== 0) return null;
-    const neighborHeight = getWaterSurfaceHeight(state, nx, ny, nz);
+    const neighborHeight = getFluidSurfaceHeight(state, fluidId, nx, ny, nz);
     if (height <= neighborHeight + 0.001) return null;
     return { lower: neighborHeight, upper: height };
   }
 
-  function pushWaterBlockPosition(positions, x, y, z, corner, range) {
+  function pushFluidBlockPosition(positions, x, y, z, corner, range) {
     const height = corner[1] === 1 ? range.upper : range.lower;
     positions.push(x + corner[0], y + height, z + corner[2]);
   }
@@ -592,10 +684,12 @@
       const visible = isChunkInRenderDistance(entry, playerChunk);
       if (entry.solid) entry.solid.visible = visible;
       if (entry.water) entry.water.visible = visible;
+      if (entry.lava) entry.lava.visible = visible;
       if (visible) {
         visibleChunks += 1;
         if (entry.solid) visibleMeshes += 1;
         if (entry.water) visibleMeshes += 1;
+        if (entry.lava) visibleMeshes += 1;
       }
     }
     if (debugInfo) {
@@ -618,24 +712,27 @@
         for (let x = range.minX; x < range.maxX; x += 1) {
           const id = getBlock3D(state, x, y, z);
           if (id === BLOCK.AIR) continue;
-          if (mode === 'solid' && id === BLOCK.WATER) continue;
+          const fluidMode = isFluidMode(mode);
+          const fluidId = fluidIdForMode(mode);
+          if (mode === 'solid' && (id === BLOCK.WATER || id === BLOCK.LAVA)) continue;
           if (mode === 'water' && id !== BLOCK.WATER) continue;
+          if (mode === 'lava' && id !== BLOCK.LAVA) continue;
           for (const face of faces) {
             const nx = x + face.dir[0];
             const ny = y + face.dir[1];
             const nz = z + face.dir[2];
-            const waterRange = mode === 'water' ? getWaterFaceRange(state, x, y, z, face) : null;
-            if (mode === 'water' && !waterRange) continue;
-            if (mode !== 'water' && !isNeighborOpen(state, nx, ny, nz, mode)) continue;
+            const fluidRange = fluidMode ? getFluidFaceRange(state, fluidId, x, y, z, face) : null;
+            if (fluidMode && !fluidRange) continue;
+            if (!fluidMode && !isNeighborOpen(state, nx, ny, nz, mode)) continue;
             const base = positions.length / 3;
             const color = faceShade(face.shade);
             for (const corner of face.corners) {
-              if (mode === 'water') pushWaterBlockPosition(positions, x, y, z, corner, waterRange);
+              if (fluidMode) pushFluidBlockPosition(positions, x, y, z, corner, fluidRange);
               else pushBlockPosition(positions, id, state, x, y, z, corner);
               normals.push(face.dir[0], face.dir[1], face.dir[2]);
               colors.push(color.r, color.g, color.b);
             }
-            if (mode === 'water') pushWaterUv(uvs, face, x, y, z);
+            if (fluidMode) pushWaterUv(uvs, face, x, y, z);
             else pushTileUv(uvs, id, face, x, y, z);
             indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
           }
@@ -704,12 +801,101 @@
         depthWrite: false,
       });
     }
+    if (!lavaMaterial) {
+      lavaMaterial = new THREE.MeshBasicMaterial({
+        map: createLavaTexture(),
+        color: 0xff7818,
+        vertexColors: false,
+        side: THREE.FrontSide,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+      });
+    }
   }
 
-  function updateWaterTextureAnimation() {
-    if (!waterTexture) return;
+  function updateFluidTextureAnimation() {
     const time = performance.now() * 0.001;
-    waterTexture.offset.set((time * 0.045) % 1, (time * 0.025) % 1);
+    if (waterTexture) waterTexture.offset.set((time * 0.045) % 1, (time * 0.025) % 1);
+    if (lavaTexture) lavaTexture.offset.set((time * 0.035) % 1, (time * 0.055) % 1);
+  }
+
+  function getSheepMaterials() {
+    if (!sheepMaterials) {
+      sheepMaterials = {
+        wool: new THREE.MeshBasicMaterial({ color: 0xf2f0df }),
+        woolShade: new THREE.MeshBasicMaterial({ color: 0xd7d2bd }),
+        face: new THREE.MeshBasicMaterial({ color: 0x2f2b27 }),
+        leg: new THREE.MeshBasicMaterial({ color: 0x24211e }),
+      };
+    }
+    return sheepMaterials;
+  }
+
+  function createSheepMesh() {
+    const mats = getSheepMaterials();
+    const root = new THREE.Group();
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.58, 0.52), mats.wool);
+    body.position.set(0, 0.64, 0);
+    root.add(body);
+
+    const bodyTop = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.16, 0.42), mats.woolShade);
+    bodyTop.position.set(-0.02, 0.99, 0);
+    root.add(bodyTop);
+
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), mats.face);
+    head.position.set(0.56, 0.72, 0);
+    root.add(head);
+
+    const woolCap = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.16, 0.3), mats.wool);
+    woolCap.position.set(0.56, 0.96, 0);
+    root.add(woolCap);
+
+    const legGeometry = new THREE.BoxGeometry(0.12, 0.36, 0.12);
+    for (const [x, z] of [[-0.28, -0.18], [-0.28, 0.18], [0.28, -0.18], [0.28, 0.18]]) {
+      const leg = new THREE.Mesh(legGeometry, mats.leg);
+      leg.position.set(x, 0.22, z);
+      root.add(leg);
+    }
+
+    return root;
+  }
+
+  function disposeSheepMeshes() {
+    for (const mesh of sheepMeshes.values()) scene.remove(mesh);
+    sheepMeshes.clear();
+  }
+
+  function syncSheepMeshes(state) {
+    if (!scene) return;
+    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
+    const live = new Set();
+    const playerChunk = getPlayerChunk(state.player);
+    for (const item of sheep) {
+      live.add(item.id);
+      let mesh = sheepMeshes.get(item.id);
+      if (!mesh) {
+        mesh = createSheepMesh();
+        sheepMeshes.set(item.id, mesh);
+        scene.add(mesh);
+      }
+      mesh.position.set(item.x, item.y, item.z);
+      mesh.rotation.y = -(item.yaw || 0);
+      const head = mesh.children[2];
+      if (head) head.rotation.z = item.eating ? -0.65 : 0;
+      const cx = Math.floor(item.x / CHUNK_SIZE);
+      const cz = Math.floor(item.z / CHUNK_SIZE);
+      const dx = cx - playerChunk.cx;
+      const dz = cz - playerChunk.cz;
+      mesh.visible = dx * dx + dz * dz <= CHUNK_RENDER_DISTANCE * CHUNK_RENDER_DISTANCE;
+    }
+    for (const [id, mesh] of sheepMeshes) {
+      if (live.has(id)) continue;
+      scene.remove(mesh);
+      sheepMeshes.delete(id);
+    }
+    if (debugInfo) debugInfo.sheep = sheep.length;
   }
 
   function disposeChunkMeshes() {
@@ -722,6 +908,10 @@
         scene.remove(entry.water);
         entry.water.geometry.dispose();
       }
+      if (entry.lava) {
+        scene.remove(entry.lava);
+        entry.lava.geometry.dispose();
+      }
     }
     chunkMeshes.clear();
   }
@@ -732,7 +922,7 @@
     ensureMaterials();
 
     const key = chunkKey(cx, cy, cz);
-    const entry = chunkMeshes.get(key) || { cx, cy, cz, solid: null, water: null };
+    const entry = chunkMeshes.get(key) || { cx, cy, cz, solid: null, water: null, lava: null };
     entry.cx = cx;
     entry.cy = cy;
     entry.cz = cz;
@@ -753,14 +943,14 @@
       previous.geometry = geometry;
       previous.frustumCulled = true;
     } else {
-      const material = mode === 'water' ? waterMaterial : solidMaterial;
+      const material = mode === 'water' ? waterMaterial : (mode === 'lava' ? lavaMaterial : solidMaterial);
       const nextMesh = new THREE.Mesh(geometry, material);
       nextMesh.frustumCulled = true;
       entry[mode] = nextMesh;
       scene.add(nextMesh);
     }
 
-    if (entry.solid || entry.water) chunkMeshes.set(key, entry);
+    if (entry.solid || entry.water || entry.lava) chunkMeshes.set(key, entry);
     else chunkMeshes.delete(key);
     return { vertices, triangles };
   }
@@ -775,11 +965,13 @@
         for (let cx = 0; cx < counts.x; cx += 1) {
           const solid = setChunkMesh(state, cx, cy, cz, 'solid');
           const water = setChunkMesh(state, cx, cy, cz, 'water');
-          totals.vertices += solid.vertices + water.vertices;
-          totals.triangles += solid.triangles + water.triangles;
+          const lava = setChunkMesh(state, cx, cy, cz, 'lava');
+          totals.vertices += solid.vertices + water.vertices + lava.vertices;
+          totals.triangles += solid.triangles + water.triangles + lava.triangles;
           totals.chunks += 1;
           if (solid.vertices > 0) totals.chunkMeshes += 1;
           if (water.vertices > 0) totals.chunkMeshes += 1;
+          if (lava.vertices > 0) totals.chunkMeshes += 1;
         }
       }
     }
@@ -814,12 +1006,18 @@
         oldTriangles += oldEntry.water.geometry.index ? oldEntry.water.geometry.index.count / 3 : 0;
         oldMeshes += 1;
       }
+      if (oldEntry && oldEntry.lava) {
+        oldVertices += oldEntry.lava.geometry.getAttribute('position').count;
+        oldTriangles += oldEntry.lava.geometry.index ? oldEntry.lava.geometry.index.count / 3 : 0;
+        oldMeshes += 1;
+      }
 
       const solid = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'solid');
       const water = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'water');
-      const nextMeshes = (solid.vertices > 0 ? 1 : 0) + (water.vertices > 0 ? 1 : 0);
-      totals.vertices += solid.vertices + water.vertices - oldVertices;
-      totals.triangles += solid.triangles + water.triangles - oldTriangles;
+      const lava = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'lava');
+      const nextMeshes = (solid.vertices > 0 ? 1 : 0) + (water.vertices > 0 ? 1 : 0) + (lava.vertices > 0 ? 1 : 0);
+      totals.vertices += solid.vertices + water.vertices + lava.vertices - oldVertices;
+      totals.triangles += solid.triangles + water.triangles + lava.triangles - oldTriangles;
       totals.chunkMeshes += nextMeshes - oldMeshes;
     }
     totals.textureTiles = atlasMeta ? atlasMeta.totalTiles : 0;
@@ -828,6 +1026,7 @@
   }
 
   function setWorld(state) {
+    disposeSheepMeshes();
     rebuildAllChunks(state);
   }
 
@@ -865,7 +1064,8 @@
       }
     }
     updateCracks(state);
-    updateWaterTextureAnimation();
+    updateFluidTextureAnimation();
+    syncSheepMeshes(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
       debugInfo.rotation = [camera.rotation.x, camera.rotation.y, camera.rotation.z];
@@ -883,5 +1083,5 @@
     return debugInfo;
   }
 
-  Game.renderer3d = { init, resize, setWorld, render, setVisible, getDebugInfo };
+  Game.renderer3d = { init, resize, setWorld, render, setVisible, getDebugInfo, drawBlockIcon };
 })();

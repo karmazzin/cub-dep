@@ -4,14 +4,31 @@
   const { EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_RADIUS, REACH_DISTANCE } = Game.constants3d;
   const { getBlock3D, setBlock3D, inBounds3D, isSolidBlock3D } = Game.world3d;
 
-  const HOTBAR_BLOCKS = [BLOCK.DIRT, BLOCK.GRASS, BLOCK.STONE, BLOCK.WOOD, BLOCK.PLANK, BLOCK.WATER];
+  const HOTBAR_BLOCKS = [
+    BLOCK.DIRT,
+    BLOCK.GRASS,
+    BLOCK.STONE,
+    BLOCK.WOOD,
+    BLOCK.PLANK,
+    BLOCK.WATER,
+    BLOCK.SAND,
+    BLOCK.SANDSTONE,
+    BLOCK.LEAF,
+    BLOCK.LAVA,
+  ];
   const BLOCK_LABELS = {
     [BLOCK.GRASS]: 'Трава',
     [BLOCK.DIRT]: 'Земля',
     [BLOCK.STONE]: 'Камень',
     [BLOCK.WOOD]: 'Дерево',
+    [BLOCK.LEAF]: 'Листья',
     [BLOCK.PLANK]: 'Доски',
     [BLOCK.WATER]: 'Вода',
+    [BLOCK.LAVA]: 'Лава',
+    [BLOCK.SAND]: 'Песок',
+    [BLOCK.SANDSTONE]: 'Песчаник',
+    [BLOCK.TORCH]: 'Факел',
+    [BLOCK.FURNACE]: 'Печь',
   };
 
   function getLookDirection(player) {
@@ -91,9 +108,16 @@
     state.ui.mineSoundTimer = 0;
   }
 
+  function selectHotbarSlot(state, index) {
+    if (index < 0 || index >= HOTBAR_BLOCKS.length) return;
+    state.player.selectedHotbarIndex = index;
+    state.player.selectedBlock = HOTBAR_BLOCKS[index] || BLOCK.AIR;
+  }
+
   function updateSelectedBlock(state, input) {
     for (let i = 0; i < HOTBAR_BLOCKS.length; i += 1) {
-      if (input.keys[`Digit${i + 1}`]) state.player.selectedBlock = HOTBAR_BLOCKS[i];
+      const key = i === 9 ? 'Digit0' : `Digit${i + 1}`;
+      if (input.keys[key]) selectHotbarSlot(state, i);
     }
   }
 
@@ -105,7 +129,8 @@
     }
     if (setBlock3D(state, hit.x, hit.y, hit.z, BLOCK.AIR)) {
       if (state.world.blockDamage) delete state.world.blockDamage[targetKey(hit)];
-      state.player.selectedBlock = hit.id;
+      const hotbarIndex = HOTBAR_BLOCKS.indexOf(hit.id);
+      if (hotbarIndex >= 0) selectHotbarSlot(state, hotbarIndex);
       setNotice(state, `Добыто: ${BLOCK_LABELS[hit.id] || 'Блок'}`);
       if (Game.audio && Game.audio.playDig) Game.audio.playDig();
     }
@@ -156,11 +181,12 @@
   function placeSelectedBlock(state) {
     const hit = raycastBlock(state);
     if (!hit || !hit.place) return;
-    const blockId = state.player.selectedBlock || BLOCK.DIRT;
+    const blockId = state.player.selectedBlock;
+    if (!Number.isFinite(blockId) || blockId === BLOCK.AIR) return;
     const { x, y, z } = hit.place;
     if (!inBounds3D(state.world, x, y, z)) return;
     const targetId = getBlock3D(state, x, y, z);
-    if (targetId !== BLOCK.AIR && targetId !== BLOCK.WATER) return;
+    if (targetId !== BLOCK.AIR && targetId !== BLOCK.WATER && targetId !== BLOCK.LAVA) return;
     if (blockOverlapsPlayer(state, x, y, z)) {
       setNotice(state, 'Нельзя поставить блок внутри себя');
       return;

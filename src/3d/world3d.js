@@ -10,6 +10,7 @@
       chunks: new Map(),
       generatedChunks: new Set(),
       waterSources: new Set(),
+      lavaSources: new Set(),
       blockDamage: {},
       dirtyAll: true,
       dirtyChunks: new Set(),
@@ -44,7 +45,7 @@
       cy,
       cz,
       blocks: new Uint16Array(size * size * size),
-      waterLevel: new Uint8Array(size * size * size).fill(255),
+      fluidLevel: new Uint8Array(size * size * size).fill(255),
     };
   }
 
@@ -74,6 +75,8 @@
     else world.generatedChunks = new Set();
     if (world.waterSources) world.waterSources.clear();
     else world.waterSources = new Set();
+    if (world.lavaSources) world.lavaSources.clear();
+    else world.lavaSources = new Set();
     world.blockDamage = {};
     world.dirtyAll = true;
     if (world.dirtyChunks) world.dirtyChunks.clear();
@@ -122,45 +125,81 @@
     if (!entry) entry = getChunkForBlock3D(world, x, y, z, true);
     if (entry.chunk.blocks[entry.index] === id) return false;
     entry.chunk.blocks[entry.index] = id;
-    if (id === BLOCK.WATER) {
-      entry.chunk.waterLevel[entry.index] = 0;
-      world.waterSources.add(`${x},${y},${z}`);
+    const key = `${x},${y},${z}`;
+    if (id === BLOCK.WATER || id === BLOCK.LAVA) {
+      entry.chunk.fluidLevel[entry.index] = 0;
+      if (id === BLOCK.WATER) {
+        world.waterSources.add(key);
+        if (world.lavaSources) world.lavaSources.delete(key);
+      } else {
+        world.lavaSources.add(key);
+        if (world.waterSources) world.waterSources.delete(key);
+      }
     } else {
-      entry.chunk.waterLevel[entry.index] = 255;
-      if (world.waterSources) world.waterSources.delete(`${x},${y},${z}`);
+      entry.chunk.fluidLevel[entry.index] = 255;
+      if (world.waterSources) world.waterSources.delete(key);
+      if (world.lavaSources) world.lavaSources.delete(key);
     }
-    if (world.blockDamage) delete world.blockDamage[`${x},${y},${z}`];
+    if (world.blockDamage) delete world.blockDamage[key];
     markChunkDirty3D(state, x, y, z);
     return true;
   }
 
-  function getWaterLevel3D(state, x, y, z) {
+  function getFluidLevel3D(state, x, y, z, fluidId) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return 255;
     const entry = getChunkForBlock3D(world, x, y, z, false);
-    if (!entry || entry.chunk.blocks[entry.index] !== BLOCK.WATER) return 255;
-    return entry.chunk.waterLevel[entry.index];
+    if (!entry || entry.chunk.blocks[entry.index] !== fluidId) return 255;
+    return entry.chunk.fluidLevel[entry.index];
   }
 
-  function setWater3D(state, x, y, z, level = 0, source = false) {
+  function getWaterLevel3D(state, x, y, z) {
+    return getFluidLevel3D(state, x, y, z, BLOCK.WATER);
+  }
+
+  function getLavaLevel3D(state, x, y, z) {
+    return getFluidLevel3D(state, x, y, z, BLOCK.LAVA);
+  }
+
+  function setFluid3D(state, x, y, z, fluidId, level = 0, source = false) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return false;
     const entry = getChunkForBlock3D(world, x, y, z, true);
     const key = `${x},${y},${z}`;
     const nextLevel = Math.max(0, Math.min(7, level | 0));
-    const changed = entry.chunk.blocks[entry.index] !== BLOCK.WATER || entry.chunk.waterLevel[entry.index] !== nextLevel || (!!world.waterSources.has(key)) !== !!source;
-    entry.chunk.blocks[entry.index] = BLOCK.WATER;
-    entry.chunk.waterLevel[entry.index] = nextLevel;
-    if (source) world.waterSources.add(key);
-    else world.waterSources.delete(key);
+    const sources = fluidId === BLOCK.LAVA ? world.lavaSources : world.waterSources;
+    const otherSources = fluidId === BLOCK.LAVA ? world.waterSources : world.lavaSources;
+    const changed = entry.chunk.blocks[entry.index] !== fluidId || entry.chunk.fluidLevel[entry.index] !== nextLevel || (!!sources.has(key)) !== !!source;
+    entry.chunk.blocks[entry.index] = fluidId;
+    entry.chunk.fluidLevel[entry.index] = nextLevel;
+    if (source) sources.add(key);
+    else sources.delete(key);
+    if (otherSources) otherSources.delete(key);
     if (world.blockDamage) delete world.blockDamage[key];
     if (changed) markChunkDirty3D(state, x, y, z);
     return changed;
   }
 
-  function isWaterSource3D(state, x, y, z) {
+  function setWater3D(state, x, y, z, level = 0, source = false) {
+    return setFluid3D(state, x, y, z, BLOCK.WATER, level, source);
+  }
+
+  function setLava3D(state, x, y, z, level = 0, source = false) {
+    return setFluid3D(state, x, y, z, BLOCK.LAVA, level, source);
+  }
+
+  function isFluidSource3D(state, x, y, z, fluidId) {
     const world = state && state.world;
-    return !!(world && world.waterSources && world.waterSources.has(`${x},${y},${z}`));
+    const sources = fluidId === BLOCK.LAVA ? world && world.lavaSources : world && world.waterSources;
+    return !!(sources && sources.has(`${x},${y},${z}`));
+  }
+
+  function isWaterSource3D(state, x, y, z) {
+    return isFluidSource3D(state, x, y, z, BLOCK.WATER);
+  }
+
+  function isLavaSource3D(state, x, y, z) {
+    return isFluidSource3D(state, x, y, z, BLOCK.LAVA);
   }
 
   function isSolidBlock3D(id) {
@@ -172,9 +211,14 @@
     clearWorld3D,
     getBlock3D,
     setBlock3D,
+    getFluidLevel3D,
     getWaterLevel3D,
+    getLavaLevel3D,
     setWater3D,
+    setLava3D,
+    isFluidSource3D,
     isWaterSource3D,
+    isLavaSource3D,
     inBounds3D,
     isSolidBlock3D,
     index3D,
