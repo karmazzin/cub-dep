@@ -8,6 +8,7 @@
       h,
       d,
       chunks: new Map(),
+      generatedChunks: new Set(),
       waterSources: new Set(),
       blockDamage: {},
       dirtyAll: true,
@@ -69,6 +70,8 @@
     if (!world) return;
     if (!world.chunks) world.chunks = new Map();
     world.chunks.clear();
+    if (world.generatedChunks) world.generatedChunks.clear();
+    else world.generatedChunks = new Set();
     if (world.waterSources) world.waterSources.clear();
     else world.waterSources = new Set();
     world.blockDamage = {};

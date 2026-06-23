@@ -29,12 +29,26 @@
     };
   }
 
-  function setPlaying(playing) {
-    screen = playing ? 'playing' : 'menu';
-    menuRoot.classList.toggle('is-hidden', playing);
-    canvas3d.classList.toggle('is-hidden', !playing);
-    overlay.classList.toggle('is-hidden', !playing);
-    if (Game.renderer3d) Game.renderer3d.setVisible(canvas3d, playing);
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[char]);
+  }
+
+  function setScreen(nextScreen) {
+    screen = nextScreen;
+    const worldVisible = screen === 'playing' || screen === 'paused';
+    const menuVisible = screen === 'menu' || screen === 'paused';
+    menuRoot.classList.toggle('is-hidden', !menuVisible);
+    canvas3d.classList.toggle('is-hidden', !worldVisible);
+    overlay.classList.toggle('is-hidden', !worldVisible);
+    menuRoot.classList.toggle('is-pause-menu', screen === 'paused');
+    if (Game.renderer3d) Game.renderer3d.setVisible(canvas3d, worldVisible);
+    if (state && state.pause) state.pause.open = screen === 'paused';
   }
 
   function renderMenu() {
@@ -58,27 +72,58 @@
     `;
   }
 
+  function renderPauseMenu() {
+    const name = state && state.worldMeta && state.worldMeta.name ? state.worldMeta.name : 'Мир';
+    const seed = state && state.worldMeta && state.worldMeta.seed ? state.worldMeta.seed : '';
+    const subtitle = `${escapeHtml(name)}${seed ? ` / ${escapeHtml(seed)}` : ''}`;
+    menuRoot.innerHTML = `
+      <div class="menu-panel pause-panel">
+        <h1 class="menu-title">Пауза</h1>
+        <p class="menu-subtitle">${subtitle}</p>
+        <div class="menu-actions">
+          <button class="menu-btn menu-btn-primary" type="button" data-action="resume">Продолжить</button>
+          <button class="menu-btn" type="button" data-action="new-world">Новый мир</button>
+        </div>
+        <div class="menu-hint">После продолжения клик по миру снова захватит мышь.</div>
+      </div>
+    `;
+  }
+
   function startWorld(form) {
     const meta = createWorldMeta(form);
     state = Game.state3d.createGameState3D(meta);
     Game.generation3d.generateWorld3D(state);
     if (!Game.renderer3d.init(canvas3d)) {
       menuRoot.innerHTML = '<div class="menu-panel">WebGL не удалось запустить.</div>';
-      setPlaying(false);
+      setScreen('menu');
       return;
     }
     Game.renderer3d.resize(canvas3d, overlay);
     Game.renderer3d.setWorld(state);
     input.resetMovement();
-    setPlaying(true);
+    setScreen('playing');
   }
 
   function resize() {
-    if (screen === 'playing' && Game.renderer3d) Game.renderer3d.resize(canvas3d, overlay);
+    if ((screen === 'playing' || screen === 'paused') && Game.renderer3d) Game.renderer3d.resize(canvas3d, overlay);
+  }
+
+  function openPauseMenu() {
+    if (!state || screen !== 'playing') return;
+    input.resetMovement();
+    renderPauseMenu();
+    setScreen('paused');
+  }
+
+  function resumeWorld() {
+    if (!state) return;
+    input.resetMovement();
+    setScreen('playing');
   }
 
   function update(dt) {
     if (!state) return;
+    if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
     state.ui.fpsFrames += 1;
     state.ui.fpsAccum += dt;
     if (state.ui.fpsAccum >= 0.25) {
@@ -88,8 +133,7 @@
     }
     if (input.input.keys.Escape && !input.input.pointerLocked) {
       input.input.keys.Escape = false;
-      setPlaying(false);
-      renderMenu();
+      openPauseMenu();
       return;
     }
     const mouse = input.consumeMouse();
@@ -107,6 +151,10 @@
         Game.renderer3d.resize(canvas3d, overlay);
         Game.renderer3d.render(state, overlayCtx, overlay);
       }
+    } else if (screen === 'paused' && state) {
+      if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+      Game.renderer3d.resize(canvas3d, overlay);
+      Game.renderer3d.render(state, overlayCtx, overlay);
     }
     requestAnimationFrame(loop);
   }
@@ -120,8 +168,33 @@
     });
   });
 
+  menuRoot.addEventListener('click', (event) => {
+    const action = event.target && event.target.dataset ? event.target.dataset.action : '';
+    if (action === 'resume') {
+      resumeWorld();
+    } else if (action === 'new-world') {
+      if (state && state.pause) state.pause.open = false;
+      renderMenu();
+      setScreen('menu');
+    }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.code !== 'Escape') return;
+    if (screen === 'playing') {
+      input.input.keys.Escape = false;
+      if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
+      openPauseMenu();
+      event.preventDefault();
+    } else if (screen === 'paused') {
+      input.input.keys.Escape = false;
+      resumeWorld();
+      event.preventDefault();
+    }
+  });
+
   window.addEventListener('resize', resize);
   renderMenu();
-  setPlaying(false);
+  setScreen('menu');
   requestAnimationFrame(loop);
 })();

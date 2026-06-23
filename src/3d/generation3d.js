@@ -2,6 +2,9 @@
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
   const { clearWorld3D, setBlock3D, getBlock3D, setWater3D } = Game.world3d;
+  const { CHUNK_SIZE, CHUNK_RENDER_DISTANCE } = Game.constants3d;
+
+  const SEA_LEVEL = 11;
 
   function hash(seed) {
     let h = 2166136261;
@@ -38,6 +41,69 @@
     const broad = smoothNoise(seed, x / 18, z / 18);
     const detail = smoothNoise(seed + 91, x / 6, z / 6);
     return Math.max(4, Math.min(24, Math.floor(10 + broad * 9 + detail * 3)));
+  }
+
+  function worldSeed(state) {
+    return hash(state.worldMeta.seed || state.worldMeta.name || Date.now());
+  }
+
+  function terrainBlockAt(seed, x, y, z, world = null) {
+    const h = terrainHeight(seed, x, z);
+    if (y === 0) return BLOCK.BEDROCK;
+    if (y <= h) {
+      if (y === h) return h <= SEA_LEVEL + 1 ? BLOCK.SAND : BLOCK.GRASS;
+      if (y >= h - 3) return BLOCK.DIRT;
+      return BLOCK.STONE;
+    }
+    if (world && (x <= 0 || x >= world.w - 1 || z <= 0 || z >= world.d - 1)) return BLOCK.AIR;
+    if (h < SEA_LEVEL && y <= SEA_LEVEL) return BLOCK.WATER;
+    return BLOCK.AIR;
+  }
+
+  function chunkBounds(world, cx, cy, cz) {
+    const minX = cx * CHUNK_SIZE;
+    const minY = cy * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE;
+    if (minX >= world.w || minY >= world.h || minZ >= world.d || minX < 0 || minY < 0 || minZ < 0) return null;
+    return {
+      minX,
+      minY,
+      minZ,
+      maxX: Math.min(world.w, minX + CHUNK_SIZE),
+      maxY: Math.min(world.h, minY + CHUNK_SIZE),
+      maxZ: Math.min(world.d, minZ + CHUNK_SIZE),
+    };
+  }
+
+  function chunkKey(cx, cy, cz) {
+    return `${cx},${cy},${cz}`;
+  }
+
+  function chunkCounts(world) {
+    return {
+      x: Math.ceil(world.w / CHUNK_SIZE),
+      y: Math.ceil(world.h / CHUNK_SIZE),
+      z: Math.ceil(world.d / CHUNK_SIZE),
+    };
+  }
+
+  function generateTerrainChunk3D(state, seed, cx, cy, cz) {
+    const bounds = chunkBounds(state.world, cx, cy, cz);
+    if (!bounds) return false;
+    const key = chunkKey(cx, cy, cz);
+    if (state.world.generatedChunks && state.world.generatedChunks.has(key)) return false;
+    for (let y = bounds.minY; y < bounds.maxY; y += 1) {
+      for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
+        for (let x = bounds.minX; x < bounds.maxX; x += 1) {
+          const block = terrainBlockAt(seed, x, y, z, state.world);
+          if (block === BLOCK.WATER) setWater3D(state, x, y, z, 0, true);
+          else setBlock3D(state, x, y, z, block);
+        }
+      }
+    }
+    if (!state.world.generatedChunks) state.world.generatedChunks = new Set();
+    state.world.generatedChunks.add(key);
+    return true;
   }
 
   function canPlaceTree(state, x, groundY, z, height) {
@@ -80,32 +146,47 @@
     return true;
   }
 
-  function generateWorld3D(state) {
-    const seed = hash(state.worldMeta.seed || state.worldMeta.name || Date.now());
-    const world = state.world;
-    const seaLevel = 11;
-    const heightMap = new Int16Array(world.w * world.d);
-    clearWorld3D(state);
-    for (let x = 0; x < world.w; x += 1) {
-      for (let z = 0; z < world.d; z += 1) {
-        const h = terrainHeight(seed, x, z);
-        heightMap[x + world.w * z] = h;
-        for (let y = 0; y <= h; y += 1) {
-          let block = BLOCK.STONE;
-          if (y === 0) block = BLOCK.BEDROCK;
-          else if (y === h) block = h <= seaLevel + 1 ? BLOCK.SAND : BLOCK.GRASS;
-          else if (y >= h - 3) block = BLOCK.DIRT;
-          setBlock3D(state, x, y, z, block);
+  function generateChunk3D(state, cx, cy, cz) {
+    const seed = worldSeed(state);
+    const changed = generateTerrainChunk3D(state, seed, cx, cy, cz);
+    if (!changed) return false;
+    state.world.dirtyChunks.add(chunkKey(cx, cy, cz));
+    return true;
+  }
+
+  function ensureChunksAroundPlayer3D(state, radius = CHUNK_RENDER_DISTANCE) {
+    if (!state || !state.world || !state.player) return 0;
+    const seed = worldSeed(state);
+    const counts = chunkCounts(state.world);
+    const pcx = Math.floor(state.player.x / CHUNK_SIZE);
+    const pcz = Math.floor(state.player.z / CHUNK_SIZE);
+    let generated = 0;
+    for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
+      for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {
+        const dx = cx - pcx;
+        const dz = cz - pcz;
+        if (dx * dx + dz * dz > radius * radius) continue;
+        for (let cy = 0; cy < counts.y; cy += 1) {
+          if (generateTerrainChunk3D(state, seed, cx, cy, cz)) {
+            state.world.dirtyChunks.add(chunkKey(cx, cy, cz));
+            generated += 1;
+          }
         }
       }
     }
+    return generated;
+  }
 
-    for (let x = 1; x < world.w - 1; x += 1) {
-      for (let z = 1; z < world.d - 1; z += 1) {
-        const h = heightMap[x + world.w * z];
-        if (h >= seaLevel) continue;
-        for (let y = h + 1; y <= seaLevel; y += 1) {
-          setWater3D(state, x, y, z, 0, true);
+  function generateWorld3D(state) {
+    const seed = worldSeed(state);
+    const world = state.world;
+    clearWorld3D(state);
+
+    const counts = chunkCounts(world);
+    for (let cy = 0; cy < counts.y; cy += 1) {
+      for (let cz = 0; cz < counts.z; cz += 1) {
+        for (let cx = 0; cx < counts.x; cx += 1) {
+          generateTerrainChunk3D(state, seed, cx, cy, cz);
         }
       }
     }
@@ -143,5 +224,5 @@
     state.world.dirtyChunks.clear();
   }
 
-  Game.generation3d = { generateWorld3D };
+  Game.generation3d = { generateWorld3D, generateChunk3D, ensureChunksAroundPlayer3D };
 })();

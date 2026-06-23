@@ -44,12 +44,20 @@ body {
     radial-gradient(circle at 50% 20%, rgba(87, 132, 116, 0.32), transparent 42%);
 }
 
+.menu-root.is-pause-menu {
+  background: rgba(7, 9, 10, 0.58);
+}
+
 .menu-panel {
   width: min(440px, 100%);
   padding: 24px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(12, 16, 18, 0.86);
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.38);
+}
+
+.pause-panel {
+  width: min(360px, 100%);
 }
 
 .menu-title {
