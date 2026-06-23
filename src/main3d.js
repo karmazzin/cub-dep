@@ -8,6 +8,8 @@
   let state = null;
   let screen = 'menu';
   let last = performance.now();
+  let lastMetaSave = 0;
+  let savedWorlds = new Map();
   const input = Game.input3d.createInput3D(canvas3d, () => state);
 
   function makeSeed() {
@@ -26,6 +28,7 @@
       kind: '3d',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      player: null,
     };
   }
 
@@ -51,47 +54,134 @@
     if (state && state.pause) state.pause.open = screen === 'paused';
   }
 
-  function renderMenu() {
-    menuRoot.innerHTML = `
-      <form class="menu-panel" id="newWorldForm">
-        <h1 class="menu-title">Cubic Depths</h1>
-        <p class="menu-subtitle">3D voxel survival prototype</p>
-        <label class="menu-field">
-          <span>Название мира</span>
-          <input name="name" maxlength="40" placeholder="Новый мир" autocomplete="off" />
-        </label>
-        <label class="menu-field">
-          <span>Сид</span>
-          <input name="seed" maxlength="60" placeholder="Случайный сид" autocomplete="off" />
-        </label>
-        <div class="menu-actions">
-          <button class="menu-btn menu-btn-primary" type="submit">Создать мир</button>
+  function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main') {
+    const isPause = context === 'pause';
+    const name = state && state.worldMeta && state.worldMeta.name ? state.worldMeta.name : 'Мир';
+    const seed = state && state.worldMeta && state.worldMeta.seed ? state.worldMeta.seed : '';
+    const subtitle = isPause ? `${escapeHtml(name)}${seed ? ` / ${escapeHtml(seed)}` : ''}` : '3D voxel survival prototype';
+
+    if (view === 'load') {
+      menuRoot.innerHTML = `
+        <div class="menu-panel ${isPause ? 'pause-panel' : ''}">
+          <h1 class="menu-title">Загрузить мир</h1>
+          <p class="menu-subtitle">${subtitle}</p>
+          <div class="saved-worlds saved-worlds-standalone" id="savedWorlds">
+            <div class="saved-worlds-empty">Загрузка...</div>
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="back-menu" data-context="${context}">Назад</button>
+          </div>
         </div>
-        <div class="menu-hint">WASD - движение, Shift - ускорение, Space - прыжок/всплытие, ЛКМ - добыча, ПКМ - поставить, R - починить блок, 1-9/0 - выбор блока.</div>
+      `;
+      renderSavedWorlds();
+      return;
+    }
+
+    const fields = isPause ? '' : `
+      <label class="menu-field">
+        <span>Название мира</span>
+        <input name="name" maxlength="40" placeholder="Новый мир" autocomplete="off" />
+      </label>
+      <label class="menu-field">
+        <span>Сид</span>
+        <input name="seed" maxlength="60" placeholder="Случайный сид" autocomplete="off" />
+      </label>
+    `;
+    const primary = isPause
+      ? '<button class="menu-btn menu-btn-primary" type="button" data-action="resume">Продолжить</button>'
+      : '<button class="menu-btn menu-btn-primary" type="submit">Создать мир</button>';
+    const pauseExit = isPause
+      ? '<button class="menu-btn" type="button" data-action="main-menu">В главное меню</button>'
+      : '';
+    menuRoot.innerHTML = `
+      <form class="menu-panel ${isPause ? 'pause-panel' : ''}" id="${isPause ? 'pauseMenuForm' : 'newWorldForm'}">
+        <h1 class="menu-title">${isPause ? 'Пауза' : 'Cubic Depths'}</h1>
+        <p class="menu-subtitle">${subtitle}</p>
+        ${fields}
+        <div class="menu-actions">
+          ${primary}
+          <button class="menu-btn" type="button" data-action="show-load" data-context="${context}">Загрузить мир</button>
+          ${pauseExit}
+        </div>
+        <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, ЛКМ - добыча, ПКМ - поставить, R - починить блок, 1-9/0 - выбор блока.'}</div>
       </form>
     `;
   }
 
-  function renderPauseMenu() {
-    const name = state && state.worldMeta && state.worldMeta.name ? state.worldMeta.name : 'Мир';
-    const seed = state && state.worldMeta && state.worldMeta.seed ? state.worldMeta.seed : '';
-    const subtitle = `${escapeHtml(name)}${seed ? ` / ${escapeHtml(seed)}` : ''}`;
-    menuRoot.innerHTML = `
-      <div class="menu-panel pause-panel">
-        <h1 class="menu-title">Пауза</h1>
-        <p class="menu-subtitle">${subtitle}</p>
-        <div class="menu-actions">
-          <button class="menu-btn menu-btn-primary" type="button" data-action="resume">Продолжить</button>
-          <button class="menu-btn" type="button" data-action="new-world">Новый мир</button>
-        </div>
-        <div class="menu-hint">После продолжения клик по миру снова захватит мышь.</div>
+  function formatDate(value) {
+    if (!value) return '';
+    try {
+      return new Date(value).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+    } catch (error) {
+      return '';
+    }
+  }
+
+  async function renderSavedWorlds() {
+    const root = document.getElementById('savedWorlds');
+    if (!root) return;
+    const storage = Game.storage3d;
+    if (!storage || !storage.listWorldMetas || !storage.isAvailable()) {
+      root.innerHTML = `
+        <div class="saved-worlds-empty">IndexedDB недоступен.</div>
+      `;
+      return;
+    }
+    const worlds = await storage.listWorldMetas();
+    savedWorlds = new Map(worlds.map((world) => [world.id, world]));
+    if (!document.getElementById('savedWorlds')) return;
+    if (!worlds.length) {
+      root.innerHTML = `
+        <div class="saved-worlds-empty">Пока нет сохраненных миров.</div>
+      `;
+      return;
+    }
+    root.innerHTML = `
+      <div class="saved-worlds-list">
+        ${worlds.map((world) => `
+          <div class="saved-world-row">
+            <button class="saved-world-load" type="button" data-action="load-world" data-world-id="${escapeHtml(world.id)}">
+              <span class="saved-world-name">${escapeHtml(world.name || 'Мир')}</span>
+              <span class="saved-world-meta">${escapeHtml(world.seed || '')}${world.updatedAt ? ` / ${escapeHtml(formatDate(world.updatedAt))}` : ''}</span>
+            </button>
+            <button class="saved-world-delete" type="button" data-action="delete-world" data-world-id="${escapeHtml(world.id)}" title="Удалить">x</button>
+          </div>
+        `).join('')}
       </div>
     `;
   }
 
-  function startWorld(form) {
-    const meta = createWorldMeta(form);
+  function capturePlayerMeta() {
+    if (!state || !state.player) return null;
+    return {
+      x: state.player.x,
+      y: state.player.y,
+      z: state.player.z,
+      yaw: state.player.yaw,
+      pitch: state.player.pitch,
+    };
+  }
+
+  function persistWorldMeta(force = false) {
+    if (!state || !state.worldMeta || !Game.storage3d || !Game.storage3d.saveWorldMeta) return;
+    const now = performance.now();
+    if (!force && now - lastMetaSave < 2000) return;
+    lastMetaSave = now;
+    state.worldMeta.player = capturePlayerMeta();
+    state.worldMeta.updatedAt = Date.now();
+    Game.storage3d.saveWorldMeta(state.worldMeta);
+  }
+
+  async function startWorldFromMeta(meta, savedChunkKeys = []) {
     state = Game.state3d.createGameState3D(meta);
+    if (state.worldMeta.player && Number.isFinite(state.worldMeta.player.x)) {
+      state.player.x = state.worldMeta.player.x;
+      state.player.y = state.worldMeta.player.y;
+      state.player.z = state.worldMeta.player.z;
+      if (Number.isFinite(state.worldMeta.player.yaw)) state.player.yaw = state.worldMeta.player.yaw;
+      if (Number.isFinite(state.worldMeta.player.pitch)) state.player.pitch = state.worldMeta.player.pitch;
+    }
+    if (savedChunkKeys.length > 0) state.world.savedChunks = new Set(savedChunkKeys);
     Game.generation3d.generateWorld3D(state);
     if (!Game.renderer3d.init(canvas3d)) {
       menuRoot.innerHTML = '<div class="menu-panel">WebGL не удалось запустить.</div>';
@@ -102,6 +192,29 @@
     Game.renderer3d.setWorld(state);
     input.resetMovement();
     setScreen('playing');
+    persistWorldMeta(true);
+  }
+
+  async function startWorld(form) {
+    const meta = createWorldMeta(form);
+    if (Game.storage3d && Game.storage3d.saveWorldMeta) Game.storage3d.saveWorldMeta(meta);
+    await startWorldFromMeta(meta);
+  }
+
+  async function loadWorld(worldId) {
+    persistWorldMeta(true);
+    const meta = savedWorlds.get(worldId);
+    if (!meta) return;
+    const savedChunkKeys = Game.storage3d && Game.storage3d.listChunkKeys ? await Game.storage3d.listChunkKeys(worldId) : [];
+    await startWorldFromMeta(meta, savedChunkKeys);
+  }
+
+  async function deleteSavedWorld(worldId) {
+    const meta = savedWorlds.get(worldId);
+    if (!meta || !Game.storage3d || !Game.storage3d.deleteWorld) return;
+    if (!window.confirm(`Удалить мир "${meta.name || 'Мир'}"?`)) return;
+    await Game.storage3d.deleteWorld(worldId);
+    renderSavedWorlds();
   }
 
   function resize() {
@@ -110,8 +223,9 @@
 
   function openPauseMenu() {
     if (!state || screen !== 'playing') return;
+    persistWorldMeta(true);
     input.resetMovement();
-    renderPauseMenu();
+    renderUnifiedMenu('pause', 'main');
     setScreen('paused');
   }
 
@@ -119,6 +233,13 @@
     if (!state) return;
     input.resetMovement();
     setScreen('playing');
+  }
+
+  function returnToMainMenu() {
+    persistWorldMeta(true);
+    input.resetMovement();
+    renderUnifiedMenu('start', 'main');
+    setScreen('menu');
   }
 
   function update(dt) {
@@ -138,6 +259,7 @@
     }
     const mouse = input.consumeMouse();
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt);
+    persistWorldMeta(false);
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
     Game.interaction3d.updateInteraction3D(state, input.input, input.consumeActions(), dt);
     if (Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
@@ -171,13 +293,20 @@
   });
 
   menuRoot.addEventListener('click', (event) => {
-    const action = event.target && event.target.dataset ? event.target.dataset.action : '';
+    const target = event.target && event.target.closest ? event.target.closest('[data-action]') : event.target;
+    const action = target && target.dataset ? target.dataset.action : '';
     if (action === 'resume') {
       resumeWorld();
-    } else if (action === 'new-world') {
-      if (state && state.pause) state.pause.open = false;
-      renderMenu();
-      setScreen('menu');
+    } else if (action === 'main-menu') {
+      returnToMainMenu();
+    } else if (action === 'show-load') {
+      renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'load');
+    } else if (action === 'back-menu') {
+      renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'main');
+    } else if (action === 'load-world') {
+      loadWorld(target.dataset.worldId);
+    } else if (action === 'delete-world') {
+      deleteSavedWorld(target.dataset.worldId);
     }
   });
 
@@ -196,7 +325,8 @@
   });
 
   window.addEventListener('resize', resize);
-  renderMenu();
+  window.addEventListener('beforeunload', () => persistWorldMeta(true));
+  renderUnifiedMenu('start', 'main');
   setScreen('menu');
   requestAnimationFrame(loop);
 })();

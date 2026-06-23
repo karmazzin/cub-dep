@@ -9,6 +9,10 @@
       d,
       chunks: new Map(),
       generatedChunks: new Set(),
+      decoratedColumns: new Set(),
+      modifiedChunks: new Set(),
+      unsavedChunks: new Set(),
+      savedChunks: new Set(),
       waterSources: new Set(),
       lavaSources: new Set(),
       blockDamage: {},
@@ -60,6 +64,22 @@
     return chunk || null;
   }
 
+  function chunkBounds3D(world, cx, cy, cz) {
+    const size = Game.constants3d.CHUNK_SIZE;
+    const minX = cx * size;
+    const minY = cy * size;
+    const minZ = cz * size;
+    if (minX >= world.w || minY >= world.h || minZ >= world.d || minX < 0 || minY < 0 || minZ < 0) return null;
+    return {
+      minX,
+      minY,
+      minZ,
+      maxX: Math.min(world.w, minX + size),
+      maxY: Math.min(world.h, minY + size),
+      maxZ: Math.min(world.d, minZ + size),
+    };
+  }
+
   function getChunkForBlock3D(world, x, y, z, create = false) {
     const coords = chunkCoords3D(x, y, z);
     const chunk = getChunk3D(world, coords.cx, coords.cy, coords.cz, create);
@@ -73,11 +93,24 @@
     world.chunks.clear();
     if (world.generatedChunks) world.generatedChunks.clear();
     else world.generatedChunks = new Set();
+    if (world.decoratedColumns) world.decoratedColumns.clear();
+    else world.decoratedColumns = new Set();
+    if (world.modifiedChunks) world.modifiedChunks.clear();
+    else world.modifiedChunks = new Set();
+    if (world.unsavedChunks) world.unsavedChunks.clear();
+    else world.unsavedChunks = new Set();
+    if (world.savedChunks) world.savedChunks.clear();
+    else world.savedChunks = new Set();
     if (world.waterSources) world.waterSources.clear();
     else world.waterSources = new Set();
     if (world.lavaSources) world.lavaSources.clear();
     else world.lavaSources = new Set();
     world.blockDamage = {};
+    world.chunkLoading = null;
+    world.lastQueuedChunks = 0;
+    world.lastPendingChunks = 0;
+    world.lastDecoratedColumns = 0;
+    world.lastUnloadedChunks = 0;
     world.dirtyAll = true;
     if (world.dirtyChunks) world.dirtyChunks.clear();
     else world.dirtyChunks = new Set();
@@ -97,6 +130,19 @@
   function chunkKey3D(x, y, z) {
     const size = Game.constants3d.CHUNK_SIZE;
     return `${Math.floor(x / size)},${Math.floor(y / size)},${Math.floor(z / size)}`;
+  }
+
+  function chunkKeyFromCoords3D(cx, cy, cz) {
+    return `${cx},${cy},${cz}`;
+  }
+
+  function markChunkModified3D(state, x, y, z) {
+    const world = state && state.world;
+    if (!world || !inBounds3D(world, x, y, z) || world.suppressChunkModification) return;
+    if (!world.modifiedChunks) world.modifiedChunks = new Set();
+    world.modifiedChunks.add(chunkKey3D(x, y, z));
+    if (!world.unsavedChunks) world.unsavedChunks = new Set();
+    world.unsavedChunks.add(chunkKey3D(x, y, z));
   }
 
   function markChunkDirty3D(state, x, y, z) {
@@ -142,6 +188,7 @@
     }
     if (world.blockDamage) delete world.blockDamage[key];
     markChunkDirty3D(state, x, y, z);
+    markChunkModified3D(state, x, y, z);
     return true;
   }
 
@@ -176,7 +223,10 @@
     else sources.delete(key);
     if (otherSources) otherSources.delete(key);
     if (world.blockDamage) delete world.blockDamage[key];
-    if (changed) markChunkDirty3D(state, x, y, z);
+    if (changed) {
+      markChunkDirty3D(state, x, y, z);
+      markChunkModified3D(state, x, y, z);
+    }
     return changed;
   }
 
@@ -206,6 +256,168 @@
     return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.LAVA && id !== BLOCK.TORCH;
   }
 
+  function pruneKeySetInChunk(set, bounds) {
+    if (!set) return;
+    for (const key of Array.from(set)) {
+      const parts = key.split(',').map(Number);
+      if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) continue;
+      const [x, y, z] = parts;
+      if (x >= bounds.minX && x < bounds.maxX && y >= bounds.minY && y < bounds.maxY && z >= bounds.minZ && z < bounds.maxZ) {
+        set.delete(key);
+      }
+    }
+  }
+
+  function pruneObjectKeysInChunk(object, bounds) {
+    if (!object) return;
+    for (const key of Object.keys(object)) {
+      const parts = key.split(',').map(Number);
+      if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) continue;
+      const [x, y, z] = parts;
+      if (x >= bounds.minX && x < bounds.maxX && y >= bounds.minY && y < bounds.maxY && z >= bounds.minZ && z < bounds.maxZ) {
+        delete object[key];
+      }
+    }
+  }
+
+  function removeChunk3D(state, cx, cy, cz, options = {}) {
+    const world = state && state.world;
+    if (!world || !world.chunks) return false;
+    const size = Game.constants3d.CHUNK_SIZE;
+    const key = chunkKeyFromCoords3D(cx, cy, cz);
+    const chunk = world.chunks.get(key);
+    if (!chunk) return false;
+    const bounds = {
+      minX: cx * size,
+      minY: cy * size,
+      minZ: cz * size,
+      maxX: Math.min(world.w, (cx + 1) * size),
+      maxY: Math.min(world.h, (cy + 1) * size),
+      maxZ: Math.min(world.d, (cz + 1) * size),
+    };
+    world.chunks.delete(key);
+    if (world.generatedChunks) world.generatedChunks.delete(key);
+    if (options.clearModified && world.modifiedChunks) world.modifiedChunks.delete(key);
+    if (options.clearModified && world.unsavedChunks) world.unsavedChunks.delete(key);
+    if (world.dirtyChunks) world.dirtyChunks.add(key);
+    pruneKeySetInChunk(world.waterSources, bounds);
+    pruneKeySetInChunk(world.lavaSources, bounds);
+    pruneObjectKeysInChunk(world.blockDamage, bounds);
+    return true;
+  }
+
+  function rebuildChunkDerivedState3D(state, cx, cy, cz) {
+    const world = state && state.world;
+    const chunk = getChunk3D(world, cx, cy, cz, false);
+    if (!world || !chunk) return false;
+    const key = chunkKeyFromCoords3D(cx, cy, cz);
+    const bounds = chunkBounds3D(world, cx, cy, cz);
+    if (!bounds) return false;
+    pruneKeySetInChunk(world.waterSources, bounds);
+    pruneKeySetInChunk(world.lavaSources, bounds);
+    pruneObjectKeysInChunk(world.blockDamage, bounds);
+    const size = Game.constants3d.CHUNK_SIZE;
+    for (let ly = 0; ly < size; ly += 1) {
+      const y = cy * size + ly;
+      if (y < 0 || y >= world.h) continue;
+      for (let lz = 0; lz < size; lz += 1) {
+        const z = cz * size + lz;
+        if (z < 0 || z >= world.d) continue;
+        for (let lx = 0; lx < size; lx += 1) {
+          const x = cx * size + lx;
+          if (x < 0 || x >= world.w) continue;
+          const index = chunkLocalIndex3D(lx, ly, lz);
+          const id = chunk.blocks[index];
+          const sourceKey = `${x},${y},${z}`;
+          if (id === BLOCK.WATER) world.waterSources.add(sourceKey);
+          else if (id === BLOCK.LAVA) world.lavaSources.add(sourceKey);
+        }
+      }
+    }
+    if (world.dirtyChunks) world.dirtyChunks.add(key);
+    return true;
+  }
+
+  function installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, options = {}) {
+    const world = state && state.world;
+    if (!world || !inBounds3D(world, cx * Game.constants3d.CHUNK_SIZE, cy * Game.constants3d.CHUNK_SIZE, cz * Game.constants3d.CHUNK_SIZE)) return false;
+    const key = chunkKeyFromCoords3D(cx, cy, cz);
+    const chunk = getChunk3D(world, cx, cy, cz, true);
+    chunk.blocks.set(blocks);
+    chunk.fluidLevel.set(fluidLevel);
+    if (options.generated !== false) {
+      if (!world.generatedChunks) world.generatedChunks = new Set();
+      world.generatedChunks.add(key);
+    }
+    if (options.modified) {
+      if (!world.modifiedChunks) world.modifiedChunks = new Set();
+      world.modifiedChunks.add(key);
+    }
+    if (options.unsaved === false && world.unsavedChunks) world.unsavedChunks.delete(key);
+    return rebuildChunkDerivedState3D(state, cx, cy, cz);
+  }
+
+  function installGeneratedChunk3D(state, cx, cy, cz, blocks, fluidLevel) {
+    const world = state && state.world;
+    const key = chunkKeyFromCoords3D(cx, cy, cz);
+    if (world && world.generatedChunks && world.generatedChunks.has(key)) return false;
+    if (world && world.modifiedChunks && world.modifiedChunks.has(key)) return false;
+    return installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, { generated: true, modified: false });
+  }
+
+  function installSavedChunk3D(state, cx, cy, cz, blocks, fluidLevel, savedState = {}) {
+    const installed = installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, { generated: true, modified: true, unsaved: false });
+    if (!installed) return false;
+    const world = state.world;
+    const bounds = chunkBounds3D(world, cx, cy, cz);
+    if (!bounds) return true;
+    pruneKeySetInChunk(world.waterSources, bounds);
+    pruneKeySetInChunk(world.lavaSources, bounds);
+    pruneObjectKeysInChunk(world.blockDamage, bounds);
+    for (const key of savedState.waterSources || []) world.waterSources.add(key);
+    for (const key of savedState.lavaSources || []) world.lavaSources.add(key);
+    for (const [key, value] of Object.entries(savedState.blockDamage || {})) world.blockDamage[key] = value;
+    if (world.dirtyChunks) world.dirtyChunks.add(chunkKeyFromCoords3D(cx, cy, cz));
+    return true;
+  }
+
+  function getChunkSnapshot3D(state, chunkKey) {
+    const world = state && state.world;
+    if (!world || !world.chunks) return null;
+    const chunk = world.chunks.get(chunkKey);
+    if (!chunk) return null;
+    const bounds = chunkBounds3D(world, chunk.cx, chunk.cy, chunk.cz);
+    const waterSources = [];
+    const lavaSources = [];
+    const blockDamage = {};
+    const isInBounds = (key) => {
+      if (!bounds) return false;
+      const parts = key.split(',').map(Number);
+      if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return false;
+      const [x, y, z] = parts;
+      return x >= bounds.minX && x < bounds.maxX && y >= bounds.minY && y < bounds.maxY && z >= bounds.minZ && z < bounds.maxZ;
+    };
+    for (const key of world.waterSources || []) {
+      if (isInBounds(key)) waterSources.push(key);
+    }
+    for (const key of world.lavaSources || []) {
+      if (isInBounds(key)) lavaSources.push(key);
+    }
+    for (const [key, value] of Object.entries(world.blockDamage || {})) {
+      if (isInBounds(key)) blockDamage[key] = value;
+    }
+    return {
+      cx: chunk.cx,
+      cy: chunk.cy,
+      cz: chunk.cz,
+      blocks: chunk.blocks,
+      fluidLevel: chunk.fluidLevel,
+      waterSources,
+      lavaSources,
+      blockDamage,
+    };
+  }
+
   Game.world3d = {
     createWorld3D,
     clearWorld3D,
@@ -224,5 +436,9 @@
     index3D,
     chunkKey3D,
     markChunkDirty3D,
+    removeChunk3D,
+    installGeneratedChunk3D,
+    installSavedChunk3D,
+    getChunkSnapshot3D,
   };
 })();

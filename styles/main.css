@@ -123,6 +123,74 @@ body {
   line-height: 1.4;
 }
 
+.saved-worlds {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.saved-worlds-title {
+  margin-bottom: 10px;
+  color: rgba(244, 240, 232, 0.82);
+  font-size: 14px;
+}
+
+.saved-worlds-empty {
+  color: rgba(244, 240, 232, 0.56);
+  font-size: 13px;
+}
+
+.saved-worlds-list {
+  display: grid;
+  gap: 8px;
+  max-height: 184px;
+  overflow-y: auto;
+}
+
+.saved-world-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
+}
+
+.saved-world-load,
+.saved-world-delete {
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
+  color: #f4f0e8;
+  font: inherit;
+  cursor: pointer;
+}
+
+.saved-world-load {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.saved-world-name,
+.saved-world-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-world-name {
+  font-size: 14px;
+}
+
+.saved-world-meta {
+  color: rgba(244, 240, 232, 0.58);
+  font-size: 12px;
+}
+
+.saved-world-delete {
+  padding: 0;
+}
+
 .is-hidden {
   display: none;
 }

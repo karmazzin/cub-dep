@@ -1,10 +1,24 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { clearWorld3D, setBlock3D, getBlock3D, setWater3D, setLava3D } = Game.world3d;
-  const { CHUNK_SIZE, CHUNK_RENDER_DISTANCE } = Game.constants3d;
+  const { clearWorld3D, setBlock3D, getBlock3D, setWater3D, setLava3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
+  const {
+    CHUNK_SIZE,
+    CHUNK_RENDER_DISTANCE,
+    CHUNK_UNLOAD_DISTANCE,
+    CHUNK_START_SYNC_RADIUS,
+    CHUNK_WORKER_MAX_PENDING,
+    CHUNK_SYNC_GENERATE_BUDGET,
+    CHUNK_DECORATE_BUDGET,
+    CHUNK_UNLOAD_COLUMN_BUDGET,
+    CHUNK_SAVE_BUDGET,
+  } = Game.constants3d;
 
   const SEA_LEVEL = 11;
+  let chunkWorker = null;
+  let chunkWorkerAvailable = true;
+  let nextWorkerJobId = 1;
+  let activeState = null;
 
   function hash(seed) {
     let h = 2166136261;
@@ -171,6 +185,10 @@
     return `${cx},${cy},${cz}`;
   }
 
+  function columnKey(cx, cz) {
+    return `${cx},${cz}`;
+  }
+
   function chunkCounts(world) {
     return {
       x: Math.ceil(world.w / CHUNK_SIZE),
@@ -179,23 +197,280 @@
     };
   }
 
+  function ensureChunkLoading(state) {
+    const world = state && state.world;
+    if (!world.chunkLoading) {
+      world.chunkLoading = {
+        queue: [],
+        queued: new Set(),
+        pendingIds: new Map(),
+        pendingKeys: new Set(),
+        loadingSaved: new Set(),
+        saving: new Set(),
+      };
+    }
+    return world.chunkLoading;
+  }
+
+  function initChunkWorker(state) {
+    if (!chunkWorkerAvailable || chunkWorker || typeof Worker === 'undefined') return false;
+    try {
+      chunkWorker = new Worker('./src/3d/chunkWorker3d.js');
+      chunkWorker.onmessage = (event) => {
+        const data = event && event.data ? event.data : null;
+        const stateRef = activeState;
+        if (!data || !stateRef || !stateRef.world) return;
+        const loading = ensureChunkLoading(stateRef);
+        const job = loading.pendingIds.get(data.id);
+        if (!job) return;
+        loading.pendingIds.delete(data.id);
+        loading.pendingKeys.delete(job.key);
+        if (job.worldId !== stateRef.worldMeta.id || job.seed !== worldSeed(stateRef)) return;
+        installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel);
+      };
+      chunkWorker.onerror = () => {
+        const stateRef = activeState;
+        if (stateRef && stateRef.world && stateRef.world.chunkLoading) {
+          const loading = stateRef.world.chunkLoading;
+          for (const job of loading.pendingIds.values()) {
+            if (!loading.queued.has(job.key)) {
+              const parts = job.key.split(',').map(Number);
+              if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) {
+                loading.queue.unshift({ cx: parts[0], cy: parts[1], cz: parts[2], key: job.key });
+                loading.queued.add(job.key);
+              }
+            }
+          }
+          loading.pendingIds.clear();
+          loading.pendingKeys.clear();
+        }
+        chunkWorkerAvailable = false;
+        if (chunkWorker) {
+          chunkWorker.terminate();
+          chunkWorker = null;
+        }
+      };
+    } catch (error) {
+      chunkWorkerAvailable = false;
+      chunkWorker = null;
+    }
+    return !!chunkWorker;
+  }
+
+  function hasTerrainChunk(state, cx, cy, cz) {
+    const key = chunkKey(cx, cy, cz);
+    return !!((state.world.generatedChunks && state.world.generatedChunks.has(key)) || (state.world.modifiedChunks && state.world.modifiedChunks.has(key)));
+  }
+
+  function queueTerrainChunk3D(state, cx, cy, cz) {
+    if (hasTerrainChunk(state, cx, cy, cz)) return false;
+    const loading = ensureChunkLoading(state);
+    const key = chunkKey(cx, cy, cz);
+    if (loading.queued.has(key) || loading.pendingKeys.has(key) || loading.loadingSaved.has(key)) return false;
+    loading.queue.push({ cx, cy, cz, key });
+    loading.queued.add(key);
+    return true;
+  }
+
+  function loadSavedChunkJob(state, job) {
+    const storage = Game.storage3d;
+    const loading = ensureChunkLoading(state);
+    if (!storage || !storage.isAvailable || !storage.isAvailable() || !state.world.savedChunks || !state.world.savedChunks.has(job.key)) return false;
+    loading.loadingSaved.add(job.key);
+    storage.loadChunkSnapshot(state.worldMeta.id, job.key).then((snapshot) => {
+      loading.loadingSaved.delete(job.key);
+      if (!snapshot) {
+        if (state.world.savedChunks) state.world.savedChunks.delete(job.key);
+        if (!hasTerrainChunk(state, job.cx, job.cy, job.cz) && !loading.queued.has(job.key) && !loading.pendingKeys.has(job.key)) {
+          loading.queue.unshift(job);
+          loading.queued.add(job.key);
+        }
+        return;
+      }
+      installSavedChunk3D(state, snapshot.cx, snapshot.cy, snapshot.cz, snapshot.blocks, snapshot.fluidLevel, snapshot);
+    });
+    return true;
+  }
+
+  function queueChunksAroundPlayer3D(state, radius) {
+    const counts = chunkCounts(state.world);
+    const loading = ensureChunkLoading(state);
+    const pcx = Math.floor(state.player.x / CHUNK_SIZE);
+    const pcz = Math.floor(state.player.z / CHUNK_SIZE);
+    const candidates = [];
+    for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
+      for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {
+        const dx = cx - pcx;
+        const dz = cz - pcz;
+        const distanceSq = dx * dx + dz * dz;
+        if (distanceSq > radius * radius) continue;
+        for (let cy = 0; cy < counts.y; cy += 1) {
+          candidates.push({ cx, cy, cz, distanceSq });
+        }
+      }
+    }
+    candidates.sort((a, b) => a.distanceSq - b.distanceSq || a.cy - b.cy);
+    let queued = 0;
+    for (const item of candidates) {
+      if (queueTerrainChunk3D(state, item.cx, item.cy, item.cz)) queued += 1;
+    }
+    loading.queue = loading.queue.filter((job) => {
+      const dx = job.cx - pcx;
+      const dz = job.cz - pcz;
+      const keep = dx * dx + dz * dz <= CHUNK_UNLOAD_DISTANCE * CHUNK_UNLOAD_DISTANCE;
+      if (!keep) loading.queued.delete(job.key);
+      return keep;
+    });
+    loading.queue.sort((a, b) => {
+      const adx = a.cx - pcx;
+      const adz = a.cz - pcz;
+      const bdx = b.cx - pcx;
+      const bdz = b.cz - pcz;
+      return (adx * adx + adz * adz) - (bdx * bdx + bdz * bdz) || a.cy - b.cy;
+    });
+    return queued;
+  }
+
+  function postWorkerChunkJob(state, job, seed) {
+    const loading = ensureChunkLoading(state);
+    const id = nextWorkerJobId;
+    nextWorkerJobId += 1;
+    loading.pendingIds.set(id, {
+      key: job.key,
+      worldId: state.worldMeta.id,
+      seed,
+    });
+    loading.pendingKeys.add(job.key);
+    chunkWorker.postMessage({
+      type: 'generate',
+      id,
+      seed,
+      world: { w: state.world.w, h: state.world.h, d: state.world.d },
+      blockIds: BLOCK,
+      cx: job.cx,
+      cy: job.cy,
+      cz: job.cz,
+    });
+  }
+
+  function processTerrainQueue3D(state, seed) {
+    const loading = ensureChunkLoading(state);
+    let processed = 0;
+    activeState = state;
+
+    if (initChunkWorker(state)) {
+      while (loading.queue.length > 0 && loading.pendingIds.size < CHUNK_WORKER_MAX_PENDING) {
+        const job = loading.queue.shift();
+        loading.queued.delete(job.key);
+        if (hasTerrainChunk(state, job.cx, job.cy, job.cz)) continue;
+        if (loadSavedChunkJob(state, job)) {
+          processed += 1;
+          continue;
+        }
+        postWorkerChunkJob(state, job, seed);
+        processed += 1;
+      }
+      state.world.lastQueuedChunks = loading.queue.length;
+      state.world.lastPendingChunks = loading.pendingIds.size + loading.loadingSaved.size;
+      return processed;
+    }
+
+    while (loading.queue.length > 0 && processed < CHUNK_SYNC_GENERATE_BUDGET) {
+      const job = loading.queue.shift();
+      loading.queued.delete(job.key);
+      if (loadSavedChunkJob(state, job)) {
+        processed += 1;
+        continue;
+      }
+      if (generateTerrainChunk3D(state, seed, job.cx, job.cy, job.cz)) {
+        state.world.dirtyChunks.add(job.key);
+        processed += 1;
+      }
+    }
+    state.world.lastQueuedChunks = loading.queue.length;
+    state.world.lastPendingChunks = 0;
+    return processed;
+  }
+
+  function processChunkSaves3D(state, budget = CHUNK_SAVE_BUDGET) {
+    const storage = Game.storage3d;
+    const world = state && state.world;
+    if (!storage || !storage.isAvailable || !storage.isAvailable() || !world || !world.unsavedChunks) return 0;
+    const loading = ensureChunkLoading(state);
+    let started = 0;
+    for (const key of Array.from(world.unsavedChunks)) {
+      if (started >= budget) break;
+      if (loading.saving.has(key)) continue;
+      const snapshot = getChunkSnapshot3D(state, key);
+      if (!snapshot) {
+        world.unsavedChunks.delete(key);
+        continue;
+      }
+      loading.saving.add(key);
+      started += 1;
+      storage.saveChunkSnapshot(state.worldMeta.id, key, snapshot).then((saved) => {
+        loading.saving.delete(key);
+        if (!saved) return;
+        world.unsavedChunks.delete(key);
+        if (!world.savedChunks) world.savedChunks = new Set();
+        world.savedChunks.add(key);
+        if (state.worldMeta) {
+          state.worldMeta.updatedAt = Date.now();
+          if (Game.storage3d && Game.storage3d.saveWorldMeta) Game.storage3d.saveWorldMeta(state.worldMeta);
+        }
+      });
+    }
+    world.lastUnsavedChunks = world.unsavedChunks.size;
+    world.lastSavingChunks = loading.saving.size;
+    return started;
+  }
+
   function generateTerrainChunk3D(state, seed, cx, cy, cz) {
     const bounds = chunkBounds(state.world, cx, cy, cz);
     if (!bounds) return false;
     const key = chunkKey(cx, cy, cz);
     if (state.world.generatedChunks && state.world.generatedChunks.has(key)) return false;
-    for (let y = bounds.minY; y < bounds.maxY; y += 1) {
-      for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
-        for (let x = bounds.minX; x < bounds.maxX; x += 1) {
-          const block = terrainBlockAt(seed, x, y, z, state.world);
-          if (block === BLOCK.WATER) setWater3D(state, x, y, z, 0, true);
-          else if (block === BLOCK.LAVA) setLava3D(state, x, y, z, 0, true);
-          else setBlock3D(state, x, y, z, block);
+    if (state.world.modifiedChunks && state.world.modifiedChunks.has(key)) return false;
+    if (state.world.savedChunks && state.world.savedChunks.has(key)) return false;
+    state.world.suppressChunkModification = (state.world.suppressChunkModification || 0) + 1;
+    try {
+      for (let y = bounds.minY; y < bounds.maxY; y += 1) {
+        for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
+          for (let x = bounds.minX; x < bounds.maxX; x += 1) {
+            const block = terrainBlockAt(seed, x, y, z, state.world);
+            if (block === BLOCK.WATER) setWater3D(state, x, y, z, 0, true);
+            else if (block === BLOCK.LAVA) setLava3D(state, x, y, z, 0, true);
+            else setBlock3D(state, x, y, z, block);
+          }
         }
       }
+    } finally {
+      state.world.suppressChunkModification -= 1;
     }
     if (!state.world.generatedChunks) state.world.generatedChunks = new Set();
     state.world.generatedChunks.add(key);
+    return true;
+  }
+
+  function isTerrainColumnGenerated(world, cx, cz, counts) {
+    if (cx < 0 || cz < 0 || cx >= counts.x || cz >= counts.z) return false;
+    if (!world.generatedChunks) return false;
+    for (let cy = 0; cy < counts.y; cy += 1) {
+      if (!world.generatedChunks.has(chunkKey(cx, cy, cz))) return false;
+    }
+    return true;
+  }
+
+  function isDecorationReady(world, cx, cz, counts) {
+    if (!isTerrainColumnGenerated(world, cx, cz, counts)) return false;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        if (nx < 0 || nz < 0 || nx >= counts.x || nz >= counts.z) continue;
+        if (!isTerrainColumnGenerated(world, nx, nz, counts)) return false;
+      }
+    }
     return true;
   }
 
@@ -266,44 +541,172 @@
     return null;
   }
 
-  function generateSheep(state, seed) {
-    const world = state.world;
-    const sheep = [];
+  function hasSheep(state, id) {
+    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
+    return sheep.some((item) => item.id === id);
+  }
+
+  function generateSheepForColumn(state, seed, cx, cz, bounds) {
+    if (!state.entities) state.entities = {};
+    if (!Array.isArray(state.entities.sheep)) state.entities.sheep = [];
+
     const cellSize = 18;
-    let id = 1;
-    for (let cellZ = 0; cellZ < Math.ceil(world.d / cellSize); cellZ += 1) {
-      for (let cellX = 0; cellX < Math.ceil(world.w / cellSize); cellX += 1) {
+    const minCellX = Math.floor(bounds.minX / cellSize);
+    const maxCellX = Math.floor((bounds.maxX - 1) / cellSize);
+    const minCellZ = Math.floor(bounds.minZ / cellSize);
+    const maxCellZ = Math.floor((bounds.maxZ - 1) / cellSize);
+
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
         if (noise2(seed + 2301, cellX, cellZ) > 0.08) continue;
         const x = cellX * cellSize + Math.floor(4 + noise2(seed + 2303, cellX, cellZ) * (cellSize - 8));
         const z = cellZ * cellSize + Math.floor(4 + noise2(seed + 2305, cellX, cellZ) * (cellSize - 8));
+        if (x < bounds.minX || x >= bounds.maxX || z < bounds.minZ || z >= bounds.maxZ) continue;
+        const id = `sheep-${cellX}-${cellZ}`;
+        if (hasSheep(state, id)) continue;
         const ground = findSheepGround(state, x, z);
         if (!ground) continue;
-        sheep.push({
-          id: `sheep-${id}`,
+        state.entities.sheep.push({
+          id,
           type: 'sheep',
           x: ground.x + 0.5,
           y: ground.y + 1,
           z: ground.z + 0.5,
           yaw: noise2(seed + 2307, cellX, cellZ) * Math.PI * 2,
         });
-        id += 1;
       }
     }
-    if (!state.entities) state.entities = {};
-    state.entities.sheep = sheep;
   }
 
-  function generateChunk3D(state, cx, cy, cz) {
-    const seed = worldSeed(state);
-    const changed = generateTerrainChunk3D(state, seed, cx, cy, cz);
-    if (!changed) return false;
-    state.world.dirtyChunks.add(chunkKey(cx, cy, cz));
+  function decorateColumn3D(state, seed, cx, cz) {
+    const world = state.world;
+    const counts = chunkCounts(world);
+    if (!world.decoratedColumns) world.decoratedColumns = new Set();
+    const key = columnKey(cx, cz);
+    if (world.decoratedColumns.has(key)) return false;
+    if (!isDecorationReady(world, cx, cz, counts)) return false;
+
+    const bounds = {
+      minX: cx * CHUNK_SIZE,
+      minZ: cz * CHUNK_SIZE,
+      maxX: Math.min(world.w, (cx + 1) * CHUNK_SIZE),
+      maxZ: Math.min(world.d, (cz + 1) * CHUNK_SIZE),
+    };
+
+    world.suppressChunkModification = (world.suppressChunkModification || 0) + 1;
+    try {
+      for (let x = Math.max(4, bounds.minX); x < Math.min(world.w - 4, bounds.maxX); x += 1) {
+        for (let z = Math.max(4, bounds.minZ); z < Math.min(world.d - 4, bounds.maxZ); z += 1) {
+          if (noise2(seed + 303, x, z) > 0.028) continue;
+          let groundY = 0;
+          for (let y = world.h - 2; y >= 1; y -= 1) {
+            if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
+              groundY = y;
+              break;
+            }
+          }
+          placeTree(state, seed, x, groundY, z);
+        }
+      }
+    } finally {
+      world.suppressChunkModification -= 1;
+    }
+
+    generateSheepForColumn(state, seed, cx, cz, bounds);
+    world.decoratedColumns.add(key);
     return true;
   }
 
-  function ensureChunksAroundPlayer3D(state, radius = CHUNK_RENDER_DISTANCE) {
-    if (!state || !state.world || !state.player) return 0;
-    const seed = worldSeed(state);
+  function decorateReadyColumnsAround(state, seed, pcx, pcz, radius, budget = CHUNK_DECORATE_BUDGET) {
+    const counts = chunkCounts(state.world);
+    let decorated = 0;
+    const candidates = [];
+    for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
+      for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {
+        const dx = cx - pcx;
+        const dz = cz - pcz;
+        const distanceSq = dx * dx + dz * dz;
+        if (distanceSq > radius * radius) continue;
+        candidates.push({ cx, cz, distanceSq });
+      }
+    }
+    candidates.sort((a, b) => a.distanceSq - b.distanceSq);
+    for (const item of candidates) {
+      if (decorated >= budget) break;
+      if (decorateColumn3D(state, seed, item.cx, item.cz)) decorated += 1;
+    }
+    state.world.lastDecoratedColumns = decorated;
+    return decorated;
+  }
+
+  function isColumnProtectedFromUnload(state, cx, cz, counts) {
+    const world = state.world;
+    const loading = ensureChunkLoading(state);
+    if (!world.modifiedChunks) return false;
+    for (let cy = 0; cy < counts.y; cy += 1) {
+      const key = chunkKey(cx, cy, cz);
+      if (!world.modifiedChunks.has(key)) continue;
+      if (!world.savedChunks || !world.savedChunks.has(key)) return true;
+      if (world.unsavedChunks && world.unsavedChunks.has(key)) return true;
+      if (loading.saving && loading.saving.has(key)) return true;
+    }
+    return false;
+  }
+
+  function clearNearbyDecorationFlags(world, cx, cz) {
+    if (!world.decoratedColumns) return;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        world.decoratedColumns.delete(columnKey(cx + dx, cz + dz));
+      }
+    }
+  }
+
+  function removeSheepInColumn(state, cx, cz) {
+    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : null;
+    if (!sheep) return 0;
+    const before = sheep.length;
+    state.entities.sheep = sheep.filter((item) => Math.floor(item.x / CHUNK_SIZE) !== cx || Math.floor(item.z / CHUNK_SIZE) !== cz);
+    return before - state.entities.sheep.length;
+  }
+
+  function unloadDistantChunks3D(state, radius = CHUNK_UNLOAD_DISTANCE, budget = CHUNK_UNLOAD_COLUMN_BUDGET) {
+    if (!state || !state.world || !state.player || !state.world.chunks) return 0;
+    const world = state.world;
+    const counts = chunkCounts(world);
+    const pcx = Math.floor(state.player.x / CHUNK_SIZE);
+    const pcz = Math.floor(state.player.z / CHUNK_SIZE);
+    const columns = new Map();
+
+    for (const key of world.chunks.keys()) {
+      const parts = key.split(',').map(Number);
+      if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) continue;
+      const [cx, cy, cz] = parts;
+      const dx = cx - pcx;
+      const dz = cz - pcz;
+      if (dx * dx + dz * dz <= radius * radius) continue;
+      const column = columnKey(cx, cz);
+      if (!columns.has(column)) columns.set(column, { cx, cz, cy: [] });
+      columns.get(column).cy.push(cy);
+    }
+
+    let unloaded = 0;
+    let unloadedColumns = 0;
+    for (const column of columns.values()) {
+      if (unloadedColumns >= budget) break;
+      if (isColumnProtectedFromUnload(state, column.cx, column.cz, counts)) continue;
+      clearNearbyDecorationFlags(world, column.cx, column.cz);
+      removeSheepInColumn(state, column.cx, column.cz);
+      for (let cy = 0; cy < counts.y; cy += 1) {
+        if (removeChunk3D(state, column.cx, cy, column.cz, { clearModified: true })) unloaded += 1;
+      }
+      unloadedColumns += 1;
+    }
+    world.lastUnloadedChunks = unloaded;
+    return unloaded;
+  }
+
+  function generateChunksAroundPlayerSync3D(state, seed, radius) {
     const counts = chunkCounts(state.world);
     const pcx = Math.floor(state.player.x / CHUNK_SIZE);
     const pcz = Math.floor(state.player.z / CHUNK_SIZE);
@@ -324,56 +727,70 @@
     return generated;
   }
 
+  function generateChunk3D(state, cx, cy, cz) {
+    const seed = worldSeed(state);
+    const changed = generateTerrainChunk3D(state, seed, cx, cy, cz);
+    if (!changed) return false;
+    state.world.dirtyChunks.add(chunkKey(cx, cy, cz));
+    return true;
+  }
+
+  function ensureChunksAroundPlayer3D(state, radius = CHUNK_RENDER_DISTANCE) {
+    if (!state || !state.world || !state.player) return 0;
+    const seed = worldSeed(state);
+    const pcx = Math.floor(state.player.x / CHUNK_SIZE);
+    const pcz = Math.floor(state.player.z / CHUNK_SIZE);
+    let generated = 0;
+    queueChunksAroundPlayer3D(state, radius);
+    generated += processTerrainQueue3D(state, seed);
+    generated += decorateReadyColumnsAround(state, seed, pcx, pcz, radius);
+    processChunkSaves3D(state);
+    unloadDistantChunks3D(state);
+    return generated;
+  }
+
   function generateWorld3D(state) {
     const seed = worldSeed(state);
     const world = state.world;
+    const savedChunks = new Set(world.savedChunks || []);
+    const savedPlayer = state.worldMeta && state.worldMeta.player ? state.worldMeta.player : null;
+    const hasSavedPlayer = !!(savedPlayer && Number.isFinite(savedPlayer.x) && Number.isFinite(savedPlayer.y) && Number.isFinite(savedPlayer.z));
+    activeState = state;
     clearWorld3D(state);
+    state.world.savedChunks = savedChunks;
     if (!state.entities) state.entities = {};
     state.entities.sheep = [];
 
-    const counts = chunkCounts(world);
-    for (let cy = 0; cy < counts.y; cy += 1) {
-      for (let cz = 0; cz < counts.z; cz += 1) {
-        for (let cx = 0; cx < counts.x; cx += 1) {
-          generateTerrainChunk3D(state, seed, cx, cy, cz);
+    if (hasSavedPlayer) {
+      state.player.x = Math.max(0.5, Math.min(world.w - 0.5, savedPlayer.x));
+      state.player.y = Math.max(1, Math.min(world.h + 4, savedPlayer.y));
+      state.player.z = Math.max(0.5, Math.min(world.d - 0.5, savedPlayer.z));
+      if (Number.isFinite(savedPlayer.yaw)) state.player.yaw = savedPlayer.yaw;
+      if (Number.isFinite(savedPlayer.pitch)) state.player.pitch = savedPlayer.pitch;
+    }
+
+    generateChunksAroundPlayerSync3D(state, seed, CHUNK_START_SYNC_RADIUS);
+
+    if (!hasSavedPlayer) {
+      const spawnX = Math.floor(world.w / 2);
+      const spawnZ = Math.floor(world.d / 2);
+      let spawnY = world.h - 2;
+      for (let y = world.h - 2; y >= 1; y -= 1) {
+        if (getBlock3D(state, spawnX, y, spawnZ) !== BLOCK.AIR) {
+          spawnY = y + 2;
+          break;
         }
       }
+      state.player.x = spawnX + 0.5;
+      state.player.y = spawnY;
+      state.player.z = spawnZ + 0.5;
     }
-
-    for (let x = 4; x < world.w - 4; x += 1) {
-      for (let z = 4; z < world.d - 4; z += 1) {
-        if (noise2(seed + 303, x, z) > 0.028) continue;
-        let groundY = 0;
-        for (let y = world.h - 2; y >= 1; y -= 1) {
-          if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
-            groundY = y;
-            break;
-          }
-        }
-        placeTree(state, seed, x, groundY, z);
-      }
-    }
-
-    generateSheep(state, seed);
-
-    const spawnX = Math.floor(world.w / 2);
-    const spawnZ = Math.floor(world.d / 2);
-    let spawnY = world.h - 2;
-    for (let y = world.h - 2; y >= 1; y -= 1) {
-      if (getBlock3D(state, spawnX, y, spawnZ) !== BLOCK.AIR) {
-        spawnY = y + 2;
-        break;
-      }
-    }
-    state.player.x = spawnX + 0.5;
-    state.player.y = spawnY;
-    state.player.z = spawnZ + 0.5;
     state.player.vx = 0;
     state.player.vy = 0;
     state.player.vz = 0;
-    state.world.dirtyAll = true;
-    state.world.dirtyChunks.clear();
+    ensureChunksAroundPlayer3D(state, CHUNK_RENDER_DISTANCE);
+    state.world.dirtyAll = false;
   }
 
-  Game.generation3d = { generateWorld3D, generateChunk3D, ensureChunksAroundPlayer3D };
+  Game.generation3d = { generateWorld3D, generateChunk3D, ensureChunksAroundPlayer3D, unloadDistantChunks3D };
 })();

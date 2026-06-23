@@ -17,6 +17,7 @@
         cavernBiome: worldMeta && worldMeta.cavernBiome ? worldMeta.cavernBiome : 'mix',
         createdAt: worldMeta && worldMeta.createdAt ? worldMeta.createdAt : Date.now(),
         updatedAt: worldMeta && worldMeta.updatedAt ? worldMeta.updatedAt : Date.now(),
+        player: worldMeta && worldMeta.player ? { ...worldMeta.player } : null,
       },
       world: createWorld3D(WORLD_W, WORLD_H, WORLD_D),
       player: {

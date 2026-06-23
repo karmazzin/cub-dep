@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK, BLOCK_COLORS } = Game.blocks;
-  const { EYE_HEIGHT, CHUNK_SIZE, CHUNK_RENDER_DISTANCE, CAMERA_FAR_CHUNKS } = Game.constants3d;
+  const { EYE_HEIGHT, CHUNK_SIZE, CHUNK_RENDER_DISTANCE, CAMERA_FAR_CHUNKS, CHUNK_MESH_REBUILD_BUDGET } = Game.constants3d;
   const { getBlock3D, getFluidLevel3D } = Game.world3d;
   const { drawUI3D } = Game.ui3d;
 
@@ -655,12 +655,9 @@
     };
   }
 
-  function getChunkCounts(world) {
-    return {
-      x: Math.ceil(world.w / CHUNK_SIZE),
-      y: Math.ceil(world.h / CHUNK_SIZE),
-      z: Math.ceil(world.d / CHUNK_SIZE),
-    };
+  function getExistingChunkKeys(world) {
+    if (!world || !world.chunks) return [];
+    return Array.from(world.chunks.keys());
   }
 
   function getPlayerChunk(player) {
@@ -958,22 +955,20 @@
   function rebuildAllChunks(state) {
     if (!scene || !window.THREE) return;
     disposeChunkMeshes();
-    const counts = getChunkCounts(state.world);
+    const chunkKeys = getExistingChunkKeys(state.world);
     const totals = { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0 };
-    for (let cy = 0; cy < counts.y; cy += 1) {
-      for (let cz = 0; cz < counts.z; cz += 1) {
-        for (let cx = 0; cx < counts.x; cx += 1) {
-          const solid = setChunkMesh(state, cx, cy, cz, 'solid');
-          const water = setChunkMesh(state, cx, cy, cz, 'water');
-          const lava = setChunkMesh(state, cx, cy, cz, 'lava');
-          totals.vertices += solid.vertices + water.vertices + lava.vertices;
-          totals.triangles += solid.triangles + water.triangles + lava.triangles;
-          totals.chunks += 1;
-          if (solid.vertices > 0) totals.chunkMeshes += 1;
-          if (water.vertices > 0) totals.chunkMeshes += 1;
-          if (lava.vertices > 0) totals.chunkMeshes += 1;
-        }
-      }
+    for (const key of chunkKeys) {
+      const parsed = parseChunkKey(key);
+      if (!parsed) continue;
+      const solid = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'solid');
+      const water = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'water');
+      const lava = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'lava');
+      totals.vertices += solid.vertices + water.vertices + lava.vertices;
+      totals.triangles += solid.triangles + water.triangles + lava.triangles;
+      totals.chunks += 1;
+      if (solid.vertices > 0) totals.chunkMeshes += 1;
+      if (water.vertices > 0) totals.chunkMeshes += 1;
+      if (lava.vertices > 0) totals.chunkMeshes += 1;
     }
     debugInfo = {
       vertices: totals.vertices,
@@ -989,8 +984,10 @@
   function updateDirtyChunks(state) {
     if (!scene || !window.THREE || !state.world.dirtyChunks.size) return;
     const totals = debugInfo || { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0, textureTiles: atlasMeta ? atlasMeta.totalTiles : 0 };
-    for (const key of state.world.dirtyChunks) {
+    const keys = Array.from(state.world.dirtyChunks).slice(0, CHUNK_MESH_REBUILD_BUDGET);
+    for (const key of keys) {
       const parsed = parseChunkKey(key);
+      state.world.dirtyChunks.delete(key);
       if (!parsed) continue;
       const oldEntry = chunkMeshes.get(key);
       let oldVertices = 0;
@@ -1021,8 +1018,8 @@
       totals.chunkMeshes += nextMeshes - oldMeshes;
     }
     totals.textureTiles = atlasMeta ? atlasMeta.totalTiles : 0;
+    totals.pendingDirtyChunks = state.world.dirtyChunks.size;
     debugInfo = totals;
-    state.world.dirtyChunks.clear();
   }
 
   function setWorld(state) {
@@ -1069,6 +1066,13 @@
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
       debugInfo.rotation = [camera.rotation.x, camera.rotation.y, camera.rotation.z];
+      debugInfo.loadedChunks = state.world && state.world.chunks ? state.world.chunks.size : 0;
+      debugInfo.modifiedChunks = state.world && state.world.modifiedChunks ? state.world.modifiedChunks.size : 0;
+      debugInfo.unsavedChunks = state.world && state.world.unsavedChunks ? state.world.unsavedChunks.size : 0;
+      debugInfo.savedChunks = state.world && state.world.savedChunks ? state.world.savedChunks.size : 0;
+      debugInfo.lastUnloadedChunks = state.world && state.world.lastUnloadedChunks ? state.world.lastUnloadedChunks : 0;
+      debugInfo.queuedChunks = state.world && state.world.lastQueuedChunks ? state.world.lastQueuedChunks : 0;
+      debugInfo.pendingChunks = state.world && state.world.lastPendingChunks ? state.world.lastPendingChunks : 0;
     }
     updateChunkVisibility(state);
     renderer.render(scene, camera);
