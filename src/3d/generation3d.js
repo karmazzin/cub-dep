@@ -11,7 +11,6 @@
     CHUNK_SYNC_GENERATE_BUDGET,
     CHUNK_DECORATE_BUDGET,
     CHUNK_UNLOAD_COLUMN_BUDGET,
-    CHUNK_SAVE_BUDGET,
   } = Game.constants3d;
 
   const WATER_LEVEL = 14;
@@ -60,19 +59,41 @@
     return t * t * (3 - 2 * t);
   }
 
+  function ridgeNoise(seed, x, z, scale) {
+    return 1 - Math.abs(smoothNoise(seed, x / scale, z / scale) * 2 - 1);
+  }
+
   function mountainNoise(seed, x, z) {
-    return smoothNoise(seed + 710, x / 170, z / 170);
+    const longRidges = ridgeNoise(seed + 710, x, z, 310);
+    const crossRidges = ridgeNoise(seed + 711, x + z * 0.35, z - x * 0.18, 190);
+    const massif = smoothNoise(seed + 712, x / 460, z / 460);
+    const detail = ridgeNoise(seed + 713, x, z, 92);
+    return longRidges * 0.36 + crossRidges * 0.2 + massif * 0.34 + detail * 0.1;
   }
 
   function mountainStrength(seed, x, z) {
-    return smoothstep(0.56, 0.76, mountainNoise(seed, x, z));
+    const base = mountainNoise(seed, x, z);
+    const foothills = smoothNoise(seed + 714, x / 260, z / 260) * 0.06;
+    return smoothstep(0.66, 0.86, base + foothills);
+  }
+
+  function climateAt(seed, x, z) {
+    const heat = smoothNoise(seed + 733, x / 620, z / 620) * 0.72
+      + smoothNoise(seed + 734, x / 210, z / 210) * 0.28;
+    const moisture = smoothNoise(seed + 721, x / 560, z / 560) * 0.68
+      + smoothNoise(seed + 722, x / 190, z / 190) * 0.32;
+    const latitude = Math.abs(z - 1024) / 1024;
+    return {
+      heat: Math.max(0, Math.min(1, heat * 0.88 + (1 - latitude) * 0.12)),
+      moisture: Math.max(0, Math.min(1, moisture)),
+    };
   }
 
   function lowlandBiome(seed, x, z) {
-    const moisture = smoothNoise(seed + 721, x / 210, z / 210);
-    const heat = smoothNoise(seed + 733, x / 230, z / 230);
-    if (heat > 0.58 && moisture < 0.43) return 'desert';
-    if (moisture > 0.58) return 'forest';
+    const climate = climateAt(seed, x, z);
+    const dry = climate.heat > 0.54 && climate.moisture < 0.48;
+    if (dry && climate.moisture < 0.54 - climate.heat * 0.18) return 'desert';
+    if (climate.moisture > 0.56 || (climate.moisture > 0.5 && climate.heat < 0.46)) return 'forest';
     return 'plains';
   }
 
@@ -130,9 +151,72 @@
     return BLOCK.AIR;
   }
 
+  function riverInfo(seed, x, z) {
+    if (mountainStrength(seed, x, z) > 0.96) return { inRiver: false, shore: false, depth: 0, edge: 99 };
+    const cellSize = 640;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    let best = null;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        if (noise2(seed + 1201, cx, cz) > 0.2) continue;
+        const vertical = noise2(seed + 1203, cx, cz) > 0.5;
+        const width = 2.8 + noise2(seed + 1205, cx, cz) * 3.2;
+        const baseX = cx * cellSize;
+        const baseZ = cz * cellSize;
+        const localA = vertical ? z - baseZ : x - baseX;
+        if (localA < -24 || localA > cellSize + 24) continue;
+        const t = localA / cellSize;
+        const side = vertical ? x - baseX : z - baseZ;
+        const start = cellSize * (0.18 + noise2(seed + 1207, cx, cz) * 0.64);
+        const end = cellSize * (0.18 + noise2(seed + 1209, cx, cz) * 0.64);
+        const bend = (smoothNoise(seed + 1211, (vertical ? z : x) / 92, (vertical ? x : z) / 92) - 0.5) * 74;
+        const broadBend = Math.sin(Math.max(0, Math.min(1, t)) * Math.PI) * (noise2(seed + 1213, cx, cz) - 0.5) * 92;
+        const center = start + (end - start) * t + bend + broadBend;
+        const distance = Math.abs(side - center);
+        if (distance > width + 9) continue;
+        const score = distance - width;
+        if (!best || score < best.score) best = { score, distance, width };
+      }
+    }
+    if (!best) return { inRiver: false, shore: false, depth: 0, edge: 99 };
+    const edge = best.width - best.distance;
+    if (edge >= 0) {
+      const depth = Math.max(1, Math.min(3, Math.floor(1 + 2 * Math.min(1, edge / Math.max(1, best.width)))));
+      return { inRiver: true, shore: false, depth, edge };
+    }
+    const shoreBand = best.distance <= best.width + 5;
+    const sandyShore = shoreBand && smoothNoise(seed + 1221, x / 24, z / 24) > 0.86;
+    return { inRiver: false, shore: sandyShore, depth: 0, edge };
+  }
+
+  function warpedLakeDistance(seed, x, z, centerX, centerZ, radiusX, radiusZ, angle) {
+    const warpX = (smoothNoise(seed + 821, x / 78, z / 78) - 0.5) * radiusX * 0.42
+      + (smoothNoise(seed + 822, x / 31, z / 31) - 0.5) * radiusX * 0.14;
+    const warpZ = (smoothNoise(seed + 823, x / 84, z / 84) - 0.5) * radiusZ * 0.42
+      + (smoothNoise(seed + 824, x / 29, z / 29) - 0.5) * radiusZ * 0.14;
+    const dx = x + warpX - centerX;
+    const dz = z + warpZ - centerZ;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const rx = dx * cos + dz * sin;
+    const rz = -dx * sin + dz * cos;
+    const cove = (smoothNoise(seed + 825, x / 46, z / 46) - 0.5) * 0.18;
+    return Math.hypot(rx / radiusX, rz / radiusZ) + cove;
+  }
+
+  function riverWaterLevel(seed, x, z) {
+    return Math.max(2, Math.min(58, terrainBaseHeight(seed, x, z) - 1));
+  }
+
   function lakeInfo(seed, x, z) {
-    if (mountainStrength(seed, x, z) > 0.5) return { inLake: false, shore: false, depth: 0, edge: 99 };
-    const cellSize = 256;
+    const river = riverInfo(seed, x, z);
+    const tooHighForLake = mountainStrength(seed, x, z) > 0.68;
+    if (tooHighForLake && !(river.inRiver || river.shore)) return { inLake: false, shore: false, depth: 0, edge: 99 };
+    const climate = climateAt(seed, x, z);
+    const cellSize = 280;
     const cellX = Math.floor(x / cellSize);
     const cellZ = Math.floor(z / cellSize);
     let best = null;
@@ -141,48 +225,89 @@
         const cx = cellX + dx;
         const cz = cellZ + dz;
         const roll = noise2(seed + 811, cx, cz);
-        if (roll > 0.46) continue;
+        const lakeChance = 0.34 + Math.max(0, climate.moisture - 0.38) * 0.36;
+        if (roll > lakeChance) continue;
         const large = noise2(seed + 812, cx, cz);
-        const radius = large > 0.9
-          ? 80 + noise2(seed + 813, cx, cz) * 80
-          : (large > 0.55 ? 44 + noise2(seed + 814, cx, cz) * 42 : 24 + noise2(seed + 815, cx, cz) * 18);
-        const centerX = cx * cellSize + Math.floor(cellSize * (0.25 + noise2(seed + 816, cx, cz) * 0.5));
-        const centerZ = cz * cellSize + Math.floor(cellSize * (0.25 + noise2(seed + 817, cx, cz) * 0.5));
-        const edgeNoise = (smoothNoise(seed + 818, x / 28, z / 28) - 0.5) * 10;
-        const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
-        if (dist > radius + 10) continue;
-        const score = dist - radius;
-        if (!best || score < best.score) best = { score, dist, radius, centerX, centerZ };
+        const baseRadius = large > 0.88
+          ? 76 + noise2(seed + 813, cx, cz) * 86
+          : (large > 0.48 ? 42 + noise2(seed + 814, cx, cz) * 52 : 24 + noise2(seed + 815, cx, cz) * 24);
+        const centerX = cx * cellSize + Math.floor(cellSize * (0.2 + noise2(seed + 816, cx, cz) * 0.6));
+        const centerZ = cz * cellSize + Math.floor(cellSize * (0.2 + noise2(seed + 817, cx, cz) * 0.6));
+        if (mountainStrength(seed, centerX, centerZ) > 0.62) continue;
+        const stretch = 0.62 + noise2(seed + 826, cx, cz) * 0.92;
+        const radiusX = baseRadius * (large > 0.48 ? stretch : 1);
+        const radiusZ = baseRadius * (large > 0.48 ? 1.55 - stretch * 0.45 : 1);
+        const angle = noise2(seed + 827, cx, cz) * Math.PI;
+        const dist = warpedLakeDistance(seed, x, z, centerX, centerZ, radiusX, radiusZ, angle);
+        const shoreWidth = 0.09 + Math.min(0.08, 7 / Math.max(24, baseRadius));
+        if (dist > 1 + shoreWidth) continue;
+        const score = dist - 1;
+        if (!best || score < best.score) best = { score, dist, radius: baseRadius, centerX, centerZ };
       }
     }
-    if (!best) return { inLake: false, shore: false, depth: 0, edge: 99 };
-    const rimRadius = Math.ceil(best.radius + 11);
+    if (!best || tooHighForLake) {
+      if (river.inRiver || river.shore) {
+        return {
+          inLake: river.inRiver,
+          shore: river.shore,
+          depth: river.depth,
+          edge: river.edge,
+          kind: 'river',
+          waterLevel: riverWaterLevel(seed, x, z),
+        };
+      }
+      return { inLake: false, shore: false, depth: 0, edge: 99 };
+    }
+    const rimRadius = Math.ceil(best.radius + 16);
     const rimOffsets = [[rimRadius, 0], [-rimRadius, 0], [0, rimRadius], [0, -rimRadius], [rimRadius, rimRadius], [rimRadius, -rimRadius], [-rimRadius, rimRadius], [-rimRadius, -rimRadius]];
     let lowRimCount = 0;
     for (const [rx, rz] of rimOffsets) {
       if (terrainHeight(seed, best.centerX + rx, best.centerZ + rz) <= WATER_LEVEL) lowRimCount += 1;
     }
     if (lowRimCount > 1) return { inLake: false, shore: false, depth: 0, edge: 99 };
-    const edge = best.radius - best.dist;
-    if (edge >= 0) {
-      const depth = Math.max(1, Math.min(7, Math.floor(1 + 6 * Math.min(1, edge / Math.max(1, best.radius * 0.38)))));
-      return { inLake: true, shore: false, depth, edge };
+    const edge = 1 - best.dist;
+    if (best.dist <= 1) {
+      const depth = Math.max(1, Math.min(7, Math.floor(1 + 6 * Math.min(1, edge / 0.42))));
+      return { inLake: true, shore: false, depth, edge, kind: 'lake' };
     }
-    return { inLake: false, shore: best.dist <= best.radius + 10, depth: 0, edge };
+    if (river.inRiver) {
+      return {
+        inLake: true,
+        shore: false,
+        depth: river.depth,
+        edge: river.edge,
+        kind: 'river',
+        waterLevel: riverWaterLevel(seed, x, z),
+      };
+    }
+    const slope = Math.abs(terrainHeight(seed, x + 2, z) - terrainHeight(seed, x - 2, z))
+      + Math.abs(terrainHeight(seed, x, z + 2) - terrainHeight(seed, x, z - 2));
+    const shoreNoise = smoothNoise(seed + 829, x / 30, z / 30);
+    const beachChance = lowlandBiome(seed, x, z) === 'desert'
+      ? 0.22
+      : (slope <= 5 ? 0.14 : 0.06);
+    const sandyShore = river.shore || shoreNoise > 1 - beachChance;
+    return { inLake: false, shore: sandyShore, depth: 0, edge, kind: 'lake' };
+  }
+
+  function terrainBaseHeight(seed, x, z) {
+    const biome = lowlandBiome(seed, x, z);
+    const climate = climateAt(seed, x, z);
+    const broad = smoothNoise(seed, x / 28, z / 28);
+    const detail = smoothNoise(seed + 91, x / 7, z / 7);
+    const lowland = biome === 'forest'
+      ? 11 + broad * 8 + detail * 2 + climate.moisture * 2
+      : (biome === 'desert' ? 10 + broad * 6 + detail * 2 : 10 + broad * 7 + detail * 2);
+    const ridge = ridgeNoise(seed + 97, x, z, 44);
+    const mountain = 18 + broad * 15 + ridge * 18 + detail * 3;
+    const strength = mountainStrength(seed, x, z);
+    return Math.max(5, Math.min(58, Math.floor(lowland * (1 - strength) + mountain * strength)));
   }
 
   function terrainHeight(seed, x, z) {
-    const biome = lowlandBiome(seed, x, z);
-    const broad = smoothNoise(seed, x / 22, z / 22);
-    const detail = smoothNoise(seed + 91, x / 7, z / 7);
-    const lowland = biome === 'forest'
-      ? 11 + broad * 8 + detail * 3
-      : 10 + broad * 7 + detail * 2;
-    const ridge = smoothNoise(seed + 97, x / 36, z / 36);
-    const mountain = 18 + broad * 22 + ridge * 18 + detail * 4;
-    const cliffBoost = smoothNoise(seed + 739, x / 55, z / 55) > 0.82 ? 0.16 : 0;
-    const strength = Math.min(1, mountainStrength(seed, x, z) + cliffBoost * mountainStrength(seed, x, z));
-    return Math.max(5, Math.min(58, Math.floor(lowland * (1 - strength) + mountain * strength)));
+    const river = riverInfo(seed, x, z);
+    const riverCut = river.inRiver ? river.depth + 2 : (river.shore ? 1 : 0);
+    return Math.max(5, Math.min(58, terrainBaseHeight(seed, x, z) - riverCut));
   }
 
   function biomeAt(seed, x, z) {
@@ -307,7 +432,8 @@
     const h = terrainHeight(seed, x, z);
     const lake = lakeInfo(seed, x, z);
     const biome = lake.inLake ? 'lake' : (lake.shore ? 'beach' : (geyserValleyInfo(seed, x, z).inValley ? 'geysers' : baseLandBiome(seed, x, z)));
-    const groundH = lake.inLake ? WATER_LEVEL - lake.depth : h;
+    const waterLevel = lake.inLake && Number.isFinite(lake.waterLevel) ? lake.waterLevel : WATER_LEVEL;
+    const groundH = lake.inLake ? waterLevel - lake.depth : h;
     if (y === 0) return BLOCK.BEDROCK;
     if (y <= groundH) {
       if (undergroundLavaAt(seed, x, y, z, groundH, world)) return BLOCK.LAVA;
@@ -338,7 +464,7 @@
       return BLOCK.STONE;
     }
     if (world && (x <= 0 || x >= world.w - 1 || z <= 0 || z >= world.d - 1)) return BLOCK.AIR;
-    if (lake.inLake && y <= WATER_LEVEL) return BLOCK.WATER;
+    if (lake.inLake && y <= waterLevel) return BLOCK.WATER;
     const surfaceLiquid = surfaceLiquidAt(seed, x, y, z, h, world);
     if (surfaceLiquid !== BLOCK.AIR) return surfaceLiquid;
     return BLOCK.AIR;
@@ -578,37 +704,26 @@
     return processed;
   }
 
-  function processChunkSaves3D(state, budget = CHUNK_SAVE_BUDGET) {
+  async function saveAllModifiedChunks3D(state) {
     const storage = Game.storage3d;
     const world = state && state.world;
     if (!storage || !storage.isAvailable || !storage.isAvailable() || !world || !world.unsavedChunks) return 0;
-    const loading = ensureChunkLoading(state);
-    let started = 0;
+    let savedCount = 0;
     for (const key of Array.from(world.unsavedChunks)) {
-      if (started >= budget) break;
-      if (loading.saving.has(key)) continue;
       const snapshot = getChunkSnapshot3D(state, key);
       if (!snapshot) {
         world.unsavedChunks.delete(key);
         continue;
       }
-      loading.saving.add(key);
-      started += 1;
-      storage.saveChunkSnapshot(state.worldMeta.id, key, snapshot).then((saved) => {
-        loading.saving.delete(key);
-        if (!saved) return;
-        world.unsavedChunks.delete(key);
-        if (!world.savedChunks) world.savedChunks = new Set();
-        world.savedChunks.add(key);
-        if (state.worldMeta) {
-          state.worldMeta.updatedAt = Date.now();
-          if (Game.storage3d && Game.storage3d.saveWorldMeta) Game.storage3d.saveWorldMeta(state.worldMeta);
-        }
-      });
+      const saved = await storage.saveChunkSnapshot(state.worldMeta.id, key, snapshot);
+      if (!saved) continue;
+      world.unsavedChunks.delete(key);
+      if (!world.savedChunks) world.savedChunks = new Set();
+      world.savedChunks.add(key);
+      savedCount += 1;
     }
     world.lastUnsavedChunks = world.unsavedChunks.size;
-    world.lastSavingChunks = loading.saving.size;
-    return started;
+    return savedCount;
   }
 
   function generateTerrainChunk3D(state, seed, cx, cy, cz) {
@@ -1067,7 +1182,6 @@
     queueChunksAroundPlayer3D(state, radius);
     generated += processTerrainQueue3D(state, seed);
     generated += decorateReadyColumnsAround(state, seed, pcx, pcz, radius);
-    processChunkSaves3D(state);
     unloadDistantChunks3D(state);
     return generated;
   }
@@ -1120,6 +1234,7 @@
     generateChunk3D,
     ensureChunksAroundPlayer3D,
     unloadDistantChunks3D,
+    saveAllModifiedChunks3D,
     getBiomeAt3D,
     BIOME_LABELS,
   };

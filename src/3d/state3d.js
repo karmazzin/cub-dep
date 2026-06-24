@@ -55,6 +55,11 @@
         mobileMoveX: 0,
         mobileMoveY: 0,
         mobileHotbarPage: 0,
+        mapZoom: 1,
+        mapCenterX: WORLD_W / 2,
+        mapCenterZ: WORLD_D / 2,
+        mapBitmap: null,
+        mapBitmapKey: '',
       },
       entities: {
         sheep: [],

@@ -218,7 +218,7 @@
     const cx = mobile ? canvas.width - 42 : canvas.width - 74;
     const cy = mobile ? 88 : 64;
     const radius = mobile ? 24 : 34;
-    const northAngle = -player.yaw;
+    const headingAngle = Math.PI - player.yaw;
     ctx.save();
     ctx.fillStyle = 'rgba(8,12,16,0.62)';
     ctx.beginPath();
@@ -228,7 +228,7 @@
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.translate(cx, cy);
-    ctx.rotate(northAngle);
+    ctx.rotate(headingAngle);
     ctx.fillStyle = '#ffdf7a';
     ctx.beginPath();
     ctx.moveTo(0, mobile ? -17 : -24);
@@ -237,7 +237,7 @@
     ctx.lineTo(mobile ? -6 : -8, -5);
     ctx.closePath();
     ctx.fill();
-    ctx.rotate(-northAngle);
+    ctx.rotate(-headingAngle);
     ctx.fillStyle = '#fff8e8';
     ctx.font = mobile ? 'bold 12px Arial' : 'bold 14px Arial';
     ctx.textAlign = 'center';
