@@ -52,6 +52,9 @@
         mineBlock: BLOCK.AIR,
         minePulse: 0,
         mineSoundTimer: 0,
+        mobileMoveX: 0,
+        mobileMoveY: 0,
+        mobileHotbarPage: 0,
       },
       entities: {
         sheep: [],

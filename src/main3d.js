@@ -278,6 +278,42 @@
     setScreen('playing');
   }
 
+  function selectHotbarIndex(index) {
+    if (!state || !Number.isInteger(index)) return;
+    const hotbarSize = Game.inventory3d && Game.inventory3d.HOTBAR_SIZE ? Game.inventory3d.HOTBAR_SIZE : 10;
+    if (index < 0 || index >= hotbarSize) return;
+    state.player.selectedHotbarIndex = index;
+    state.ui.mobileHotbarPage = Math.floor(index / 5);
+    if (Game.inventory3d && Game.inventory3d.updateSelectedBlockFromHotbar) {
+      Game.inventory3d.updateSelectedBlockFromHotbar(state);
+    }
+  }
+
+  function handleMobileUiActions() {
+    const actions = input.consumeUiActions ? input.consumeUiActions() : [];
+    for (const action of actions) {
+      if (action.type === 'pause') {
+        openPauseMenu();
+        return false;
+      }
+      if (action.type === 'inventory') {
+        openInventory();
+        return false;
+      }
+      if (action.type === 'hotbar') {
+        selectHotbarIndex(action.index);
+      } else if (action.type === 'hotbarPage') {
+        const hotbar = Game.inventory3d && Game.inventory3d.ensureHotbar ? Game.inventory3d.ensureHotbar(state) : [];
+        const maxPage = Math.max(0, Math.ceil(hotbar.length / 5) - 1);
+        const current = Number.isInteger(state.ui.mobileHotbarPage)
+          ? state.ui.mobileHotbarPage
+          : Math.floor((state.player.selectedHotbarIndex || 0) / 5);
+        state.ui.mobileHotbarPage = Math.max(0, Math.min(maxPage, current + action.delta));
+      }
+    }
+    return true;
+  }
+
   function returnToMainMenu() {
     persistWorldMeta(true);
     input.resetMovement();
@@ -300,6 +336,9 @@
       openPauseMenu();
       return;
     }
+    state.ui.mobileMoveX = input.input.mobileMoveX || 0;
+    state.ui.mobileMoveY = input.input.mobileMoveY || 0;
+    if (!handleMobileUiActions()) return;
     const mouse = input.consumeMouse();
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt);
     persistWorldMeta(false);

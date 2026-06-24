@@ -122,8 +122,10 @@
     player.yaw -= mouse.dx * MOUSE_SENSITIVITY;
     player.pitch = clamp(player.pitch - mouse.dy * MOUSE_SENSITIVITY, -MAX_PITCH, MAX_PITCH);
 
-    const forward = (inputState.keys.KeyW ? 1 : 0) - (inputState.keys.KeyS ? 1 : 0);
-    const strafe = (inputState.keys.KeyD ? 1 : 0) - (inputState.keys.KeyA ? 1 : 0);
+    const mobileForward = Number.isFinite(inputState.mobileMoveY) ? -inputState.mobileMoveY : 0;
+    const mobileStrafe = Number.isFinite(inputState.mobileMoveX) ? inputState.mobileMoveX : 0;
+    const forward = clamp((inputState.keys.KeyW ? 1 : 0) - (inputState.keys.KeyS ? 1 : 0) + mobileForward, -1, 1);
+    const strafe = clamp((inputState.keys.KeyD ? 1 : 0) - (inputState.keys.KeyA ? 1 : 0) + mobileStrafe, -1, 1);
     const inLiquid = isInLiquid(state);
     const sprinting = !inLiquid && (inputState.keys.ShiftLeft || inputState.keys.ShiftRight);
     const speed = (inLiquid ? WALK_SPEED * 0.55 : WALK_SPEED) * (sprinting ? SPRINT_MULTIPLIER : 1);
@@ -140,8 +142,8 @@
 
     if (inLiquid) {
       player.vy *= 0.82;
-      if (inputState.keys.Space) player.vy = Math.max(player.vy, 3.2);
-    } else if (inputState.keys.Space && player.onGround) {
+      if (inputState.keys.Space || inputState.mobileJump) player.vy = Math.max(player.vy, 3.2);
+    } else if ((inputState.keys.Space || inputState.mobileJump) && player.onGround) {
       player.vy = JUMP_SPEED;
       player.onGround = false;
     }
