@@ -19,6 +19,12 @@
   let cloudMaterial = null;
   let cloudPuffGeometry = null;
   let cloudCells = [];
+  let cloudCellMap = new Map();
+  let cloudDriftX = 0;
+  let cloudDriftZ = 0;
+  let cloudWindX = 0;
+  let cloudWindZ = 0;
+  let cloudLastUpdateTime = 0;
   let targetBox = null;
   let crackLines = null;
   let sheepMeshes = new Map();
@@ -51,6 +57,7 @@
   const CLOUDS_PER_CELL = 4;
   const CLOUD_PUFFS_PER_CLOUD = 9;
   const CLOUD_WEATHER_CYCLE = 120;
+  const CLOUD_WIND_CYCLE = 46;
   const STEAM_PARTICLE_LIMIT = 90;
   const STEAM_GEYSER_SCAN_RADIUS = 24;
   const crackSegments = [
@@ -856,6 +863,12 @@
     });
     cloudPuffGeometry = new THREE.BoxGeometry(1, 1, 1);
     cloudCells = [];
+    cloudCellMap = new Map();
+    cloudDriftX = 0;
+    cloudDriftZ = 0;
+    cloudWindX = 0;
+    cloudWindZ = 0;
+    cloudLastUpdateTime = 0;
     const cellsPerAxis = CLOUD_GRID_RADIUS * 2 + 1;
     for (let i = 0; i < cellsPerAxis * cellsPerAxis; i += 1) {
       const cell = { key: '', group: new THREE.Group(), clouds: [] };
@@ -885,24 +898,67 @@
     return { density: 0.96, minClouds: 3, opacity: 0.8 };
   }
 
-  function cloudCellSeed(cx, cz, cycle) {
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function smoothstep(t) {
+    const v = Math.max(0, Math.min(1, t));
+    return v * v * (3 - 2 * v);
+  }
+
+  function cloudProfileForTime(time) {
+    const cycle = Math.floor(time / CLOUD_WEATHER_CYCLE);
+    const fraction = (time / CLOUD_WEATHER_CYCLE) - cycle;
+    const a = cloudProfileForCycle(cycle);
+    const b = cloudProfileForCycle(cycle + 1);
+    const t = smoothstep(fraction);
+    return {
+      density: lerp(a.density, b.density, t),
+      minClouds: Math.round(lerp(a.minClouds, b.minClouds, t)),
+      opacity: lerp(a.opacity, b.opacity, t),
+    };
+  }
+
+  function cloudWindForCycle(cycle) {
+    const rng = mulberry32(0x6e624eb7 ^ Math.imul(cycle + 31, 2246822519));
+    const angle = rng() * Math.PI * 2;
+    const speed = 0.42 + rng() * 0.42;
+    return { x: Math.cos(angle) * speed, z: Math.sin(angle) * speed };
+  }
+
+  function updateCloudWind(time) {
+    const cycle = Math.floor(time / CLOUD_WIND_CYCLE);
+    const target = cloudWindForCycle(cycle);
+    if (cloudLastUpdateTime === 0) {
+      cloudWindX = target.x;
+      cloudWindZ = target.z;
+      cloudLastUpdateTime = time;
+      return;
+    }
+    const dt = Math.max(0, Math.min(0.25, time - cloudLastUpdateTime));
+    cloudLastUpdateTime = time;
+    const blend = 1 - Math.exp(-dt * 0.035);
+    cloudWindX = lerp(cloudWindX, target.x, blend);
+    cloudWindZ = lerp(cloudWindZ, target.z, blend);
+    cloudDriftX += cloudWindX * dt;
+    cloudDriftZ += cloudWindZ * dt;
+  }
+
+  function cloudCellSeed(cx, cz) {
     let seed = Math.imul(cx + 4099, 374761393) ^ Math.imul(cz - 8191, 668265263);
-    seed ^= Math.imul(cycle + 97, 2246822519);
     return seed >>> 0;
   }
 
-  function rebuildCloudCell(cell, cx, cz, cycle, profile) {
-    const key = `${cx}:${cz}:${cycle}`;
+  function rebuildCloudCell(cell, cx, cz) {
+    const key = `${cx}:${cz}`;
     if (cell.key === key) return;
     cell.key = key;
-    const rng = mulberry32(cloudCellSeed(cx, cz, cycle));
-    let visibleCount = 0;
+    const rng = mulberry32(cloudCellSeed(cx, cz));
     for (let i = 0; i < cell.clouds.length; i += 1) {
       const cloud = cell.clouds[i];
-      const visible = rng() < profile.density || visibleCount < profile.minClouds;
-      cloud.group.visible = visible;
-      if (!visible) continue;
-      visibleCount += 1;
+      cloud.weatherRoll = rng();
+      cloud.group.visible = true;
       cloud.group.position.set(
         (rng() - 0.5) * CLOUD_CELL_SIZE,
         CLOUD_HEIGHT + (rng() - 0.5) * 10,
@@ -932,27 +988,62 @@
     }
   }
 
+  function applyCloudProfile(cell, profile) {
+    if (!cell) return;
+    for (let i = 0; i < cell.clouds.length; i += 1) {
+      const cloud = cell.clouds[i];
+      cloud.group.visible = cloud.weatherRoll < profile.density || i < profile.minClouds;
+    }
+  }
+
+  function assignCloudCell(key, usedCells, reservedCells) {
+    const existing = cloudCellMap.get(key);
+    if (existing && !usedCells.has(existing)) return existing;
+    let cell = cloudCells.find((item) => !usedCells.has(item) && !reservedCells.has(item));
+    if (!cell) cell = cloudCells.find((item) => !usedCells.has(item));
+    if (!cell) return null;
+    if (cell.key && cloudCellMap.get(cell.key) === cell) cloudCellMap.delete(cell.key);
+    cloudCellMap.set(key, cell);
+    return cell;
+  }
+
   function updateSkyLayer(player) {
     if (!skyGroup || !player) return;
     const time = performance.now() * 0.001;
-    const driftX = time * 0.7;
-    const driftZ = time * 0.18;
-    const cycle = Math.floor(time / CLOUD_WEATHER_CYCLE);
-    const profile = cloudProfileForCycle(cycle);
+    updateCloudWind(time);
+    const profile = cloudProfileForTime(time);
     cloudMaterial.opacity = profile.opacity;
-    const centerX = Math.floor((player.x + driftX) / CLOUD_CELL_SIZE);
-    const centerZ = Math.floor((player.z + driftZ) / CLOUD_CELL_SIZE);
-    let slot = 0;
+    const centerX = Math.floor((player.x + cloudDriftX) / CLOUD_CELL_SIZE);
+    const centerZ = Math.floor((player.z + cloudDriftZ) / CLOUD_CELL_SIZE);
+    const needed = [];
+    const reservedCells = new Set();
     for (let dz = -CLOUD_GRID_RADIUS; dz <= CLOUD_GRID_RADIUS; dz += 1) {
       for (let dx = -CLOUD_GRID_RADIUS; dx <= CLOUD_GRID_RADIUS; dx += 1) {
-        const cell = cloudCells[slot];
-        slot += 1;
-        if (!cell) continue;
         const cx = centerX + dx;
         const cz = centerZ + dz;
-        rebuildCloudCell(cell, cx, cz, cycle, profile);
-        cell.group.position.set(cx * CLOUD_CELL_SIZE - driftX, 0, cz * CLOUD_CELL_SIZE - driftZ);
+        const key = `${cx}:${cz}`;
+        const existing = cloudCellMap.get(key);
+        if (existing) reservedCells.add(existing);
+        needed.push({ cx, cz, key });
       }
+    }
+    const usedCells = new Set();
+    const usedKeys = new Set();
+    for (const item of needed) {
+      const cell = assignCloudCell(item.key, usedCells, reservedCells);
+      if (!cell) continue;
+      usedCells.add(cell);
+      usedKeys.add(item.key);
+      rebuildCloudCell(cell, item.cx, item.cz);
+      applyCloudProfile(cell, profile);
+      cell.group.visible = true;
+      cell.group.position.set(item.cx * CLOUD_CELL_SIZE - cloudDriftX, 0, item.cz * CLOUD_CELL_SIZE - cloudDriftZ);
+    }
+    for (const cell of cloudCells) {
+      if (!usedCells.has(cell)) cell.group.visible = false;
+    }
+    for (const key of Array.from(cloudCellMap.keys())) {
+      if (!usedKeys.has(key)) cloudCellMap.delete(key);
     }
   }
 

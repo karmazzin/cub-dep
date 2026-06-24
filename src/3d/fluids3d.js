@@ -2,6 +2,7 @@
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
   const { getBlock3D, setBlock3D, getFluidLevel3D, setWater3D, setLava3D, setHotWater3D, isFluidSource3D, inBounds3D, isSolidBlock3D } = Game.world3d;
+  const STATIC_WATER_LEVEL = Game.world3d.STATIC_WATER_LEVEL;
 
   const MAX_FLUID_LEVEL = 4;
   const HOT_WATER_MAX_FLUID_LEVEL = 7;
@@ -136,6 +137,7 @@
     if (getBlock3D(state, x, y, z) !== fluidId) return;
     const source = isFluidSource3D(state, x, y, z, fluidId);
     const level = getFluidLevel3D(state, x, y, z, fluidId);
+    if (fluidId === BLOCK.WATER && level === STATIC_WATER_LEVEL) return;
     const maxLevel = maxLevelForFluid(fluidId);
     const belowY = y - 1;
 

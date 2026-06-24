@@ -1,5 +1,6 @@
 (() => {
   const WATER_LEVEL = 14;
+  const STATIC_WATER_LEVEL = 8;
   const SNOW_LEVEL = 48;
   const DRY_MOUNTAIN_LEVEL = 36;
   const CHUNK_SIZE = 16;
@@ -328,7 +329,7 @@
           const index = localIndex(x - minX, y - minY, z - minZ);
           const block = terrainBlockAt(seed, x, y, z, world, blockIds);
           blocks[index] = block;
-          if (block === blockIds.WATER) fluidLevel[index] = 1;
+          if (block === blockIds.WATER) fluidLevel[index] = STATIC_WATER_LEVEL;
           else if (block === blockIds.LAVA) fluidLevel[index] = 0;
           else if (block === blockIds.DIRT && hasInitialGrass(seed, x, y, z, world, blockIds)) grassLevel[index] = 1;
         }

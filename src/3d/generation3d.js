@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { clearWorld3D, setBlock3D, getBlock3D, setWater3D, setLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
+  const { clearWorld3D, setBlock3D, getBlock3D, setStaticWater3D, setLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
   const {
     CHUNK_SIZE,
     CHUNK_RENDER_DISTANCE,
@@ -624,7 +624,7 @@
         for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
           for (let x = bounds.minX; x < bounds.maxX; x += 1) {
             const block = terrainBlockAt(seed, x, y, z, state.world);
-            if (block === BLOCK.WATER) setWater3D(state, x, y, z, 1, false);
+            if (block === BLOCK.WATER) setStaticWater3D(state, x, y, z);
             else if (block === BLOCK.LAVA) setLava3D(state, x, y, z, 0, true);
             else {
               setBlock3D(state, x, y, z, block);

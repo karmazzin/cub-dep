@@ -1,6 +1,9 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
+  const STATIC_WATER_LEVEL = 8;
+  const FLUID_NONE = 255;
+  const WATER_DISTURB_DIRS = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
   function createWorld3D(w, h, d) {
     return {
@@ -164,6 +167,28 @@
     if (z % size === size - 1 && z < world.d - 1) chunks.add(`${cx},${cy},${cz + 1}`);
   }
 
+  function activateStaticWaterAt(state, x, y, z) {
+    const world = state && state.world;
+    if (!world || !inBounds3D(world, x, y, z)) return false;
+    const entry = getChunkForBlock3D(world, x, y, z, false);
+    if (!entry || entry.chunk.blocks[entry.index] !== BLOCK.WATER) return false;
+    if (entry.chunk.fluidLevel[entry.index] !== STATIC_WATER_LEVEL) return false;
+    entry.chunk.fluidLevel[entry.index] = 0;
+    if (!world.waterSources) world.waterSources = new Set();
+    world.waterSources.add(`${x},${y},${z}`);
+    markChunkDirty3D(state, x, y, z);
+    markChunkModified3D(state, x, y, z);
+    return true;
+  }
+
+  function disturbStaticWaterNear(state, x, y, z) {
+    const world = state && state.world;
+    if (!world || world.suppressChunkModification) return;
+    for (const [dx, dy, dz] of WATER_DISTURB_DIRS) {
+      activateStaticWaterAt(state, x + dx, y + dy, z + dz);
+    }
+  }
+
   function setBlock3D(state, x, y, z, id) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return false;
@@ -193,6 +218,7 @@
     markChunkDirty3D(state, x, y, z);
     markChunkDirty3D(state, x, y - 1, z);
     markChunkModified3D(state, x, y, z);
+    disturbStaticWaterNear(state, x, y, z);
     return true;
   }
 
@@ -247,7 +273,10 @@
     if (!world || !inBounds3D(world, x, y, z)) return false;
     const entry = getChunkForBlock3D(world, x, y, z, true);
     const key = `${x},${y},${z}`;
-    const nextLevel = Math.max(0, Math.min(7, level | 0));
+    const requestedLevel = level | 0;
+    const nextLevel = fluidId === BLOCK.WATER && requestedLevel === STATIC_WATER_LEVEL
+      ? STATIC_WATER_LEVEL
+      : Math.max(0, Math.min(7, requestedLevel));
     const sources = fluidId === BLOCK.LAVA ? world.lavaSources : world.waterSources;
     const otherSources = fluidId === BLOCK.LAVA ? world.waterSources : world.lavaSources;
     const changed = entry.chunk.blocks[entry.index] !== fluidId || entry.chunk.fluidLevel[entry.index] !== nextLevel || (!!sources.has(key)) !== !!source;
@@ -266,6 +295,10 @@
 
   function setWater3D(state, x, y, z, level = 0, source = false) {
     return setFluid3D(state, x, y, z, BLOCK.WATER, level, source);
+  }
+
+  function setStaticWater3D(state, x, y, z) {
+    return setFluid3D(state, x, y, z, BLOCK.WATER, STATIC_WATER_LEVEL, false);
   }
 
   function setLava3D(state, x, y, z, level = 0, source = false) {
@@ -479,11 +512,15 @@
     getWaterLevel3D,
     getLavaLevel3D,
     setWater3D,
+    setStaticWater3D,
     setLava3D,
     setHotWater3D,
     isFluidSource3D,
     isWaterSource3D,
     isLavaSource3D,
+    activateStaticWaterAt,
+    STATIC_WATER_LEVEL,
+    FLUID_NONE,
     inBounds3D,
     isSolidBlock3D,
     index3D,
