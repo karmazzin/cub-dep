@@ -704,26 +704,33 @@
     return processed;
   }
 
-  async function saveAllModifiedChunks3D(state) {
+  async function saveModifiedChunks3D(state, targetWorldId, options = {}) {
     const storage = Game.storage3d;
     const world = state && state.world;
-    if (!storage || !storage.isAvailable || !storage.isAvailable() || !world || !world.unsavedChunks) return 0;
+    if (!storage || !storage.isAvailable || !storage.isAvailable() || !world || !world.unsavedChunks || !targetWorldId) return 0;
+    const keepUnsaved = Boolean(options.keepUnsaved);
     let savedCount = 0;
     for (const key of Array.from(world.unsavedChunks)) {
       const snapshot = getChunkSnapshot3D(state, key);
       if (!snapshot) {
-        world.unsavedChunks.delete(key);
+        if (!keepUnsaved) world.unsavedChunks.delete(key);
         continue;
       }
-      const saved = await storage.saveChunkSnapshot(state.worldMeta.id, key, snapshot);
+      const saved = await storage.saveChunkSnapshot(targetWorldId, key, snapshot);
       if (!saved) continue;
-      world.unsavedChunks.delete(key);
-      if (!world.savedChunks) world.savedChunks = new Set();
-      world.savedChunks.add(key);
+      if (!keepUnsaved) {
+        world.unsavedChunks.delete(key);
+        if (!world.savedChunks) world.savedChunks = new Set();
+        world.savedChunks.add(key);
+      }
       savedCount += 1;
     }
     world.lastUnsavedChunks = world.unsavedChunks.size;
     return savedCount;
+  }
+
+  async function saveAllModifiedChunks3D(state) {
+    return saveModifiedChunks3D(state, state && state.worldMeta ? state.worldMeta.id : '', { keepUnsaved: false });
   }
 
   function generateTerrainChunk3D(state, seed, cx, cy, cz) {
@@ -1235,6 +1242,7 @@
     ensureChunksAroundPlayer3D,
     unloadDistantChunks3D,
     saveAllModifiedChunks3D,
+    saveModifiedChunks3D,
     getBiomeAt3D,
     BIOME_LABELS,
   };
