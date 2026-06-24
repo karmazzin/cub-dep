@@ -14,7 +14,13 @@
   let mapCanvas = null;
   let mapCtx = null;
   let mapDrag = null;
+  let lastAutosaveAt = 0;
+  let autosaveRunning = false;
+  let autosavePending = false;
+  let autosaveBaseWorldId = '';
   const input = Game.input3d.createInput3D(canvas3d, () => state);
+  const AUTOSAVE_WORLD_ID = '__autosave__';
+  const AUTOSAVE_INTERVAL_MS = 10000;
   const MAP_BITMAP_SIZE = 512;
   const MAP_MIN_ZOOM = 0.65;
   const MAP_MAX_ZOOM = 16;
@@ -213,6 +219,60 @@
     return true;
   }
 
+  async function saveAutosaveWorld() {
+    const storage = Game.storage3d;
+    if (!state || !state.worldMeta || !storage || !storage.saveWorldMeta || !storage.isAvailable()) return false;
+    const sourceMeta = state.worldMeta;
+    const sourceWorldId = sourceMeta.id || '';
+    if (sourceWorldId !== AUTOSAVE_WORLD_ID && autosaveBaseWorldId !== sourceWorldId) {
+      const prepared = storage.copyWorldChunks
+        ? await storage.copyWorldChunks(sourceWorldId, AUTOSAVE_WORLD_ID)
+        : storage.deleteWorldChunks
+          ? await storage.deleteWorldChunks(AUTOSAVE_WORLD_ID)
+          : true;
+      if (!prepared) return false;
+      autosaveBaseWorldId = sourceWorldId;
+    }
+
+    const now = Date.now();
+    const meta = {
+      ...sourceMeta,
+      id: AUTOSAVE_WORLD_ID,
+      name: `Автосейв: ${sourceMeta.name || 'Мир'}`,
+      isAutosave: true,
+      sourceWorldId,
+      sourceWorldName: sourceMeta.name || 'Мир',
+      player: capturePlayerMeta(),
+      updatedAt: now,
+      createdAt: sourceMeta.createdAt || now,
+    };
+    const metaSaved = await storage.saveWorldMeta(meta);
+    if (!metaSaved) return false;
+    if (Game.generation3d && Game.generation3d.saveModifiedChunks3D) {
+      await Game.generation3d.saveModifiedChunks3D(state, AUTOSAVE_WORLD_ID, { keepUnsaved: true });
+    }
+    savedWorlds.set(AUTOSAVE_WORLD_ID, meta);
+    return true;
+  }
+
+  function triggerAutosave(force = false) {
+    if (!state || !state.worldMeta || screen === 'menu') return;
+    const now = Date.now();
+    if (!force && now - lastAutosaveAt < AUTOSAVE_INTERVAL_MS) return;
+    if (autosaveRunning) {
+      autosavePending = true;
+      return;
+    }
+    lastAutosaveAt = now;
+    autosaveRunning = true;
+    saveAutosaveWorld().finally(() => {
+      autosaveRunning = false;
+      if (!autosavePending) return;
+      autosavePending = false;
+      triggerAutosave(true);
+    });
+  }
+
   async function askSaveCurrentWorld() {
     if (!state || !state.worldMeta) return true;
     const name = state.worldMeta.name || 'Мир';
@@ -223,6 +283,8 @@
   }
 
   async function startWorldFromMeta(meta, savedChunkKeys = []) {
+    lastAutosaveAt = Date.now();
+    autosaveBaseWorldId = meta && meta.id === AUTOSAVE_WORLD_ID ? AUTOSAVE_WORLD_ID : '';
     state = Game.state3d.createGameState3D(meta);
     if (Game.inventory3d) {
       if (Game.inventory3d.ensureInventory) Game.inventory3d.ensureInventory(state);
@@ -580,12 +642,14 @@
     last = now;
     if (screen === 'playing' && state) {
       update(dt);
+      triggerAutosave();
       if (screen === 'playing') {
         Game.renderer3d.resize(canvas3d, overlay);
         Game.renderer3d.render(state, overlayCtx, overlay);
       }
     } else if ((screen === 'paused' || screen === 'inventory' || screen === 'map') && state) {
       if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+      triggerAutosave();
       Game.renderer3d.resize(canvas3d, overlay);
       Game.renderer3d.render(state, overlayCtx, overlay);
       if (screen === 'map') renderMap();
@@ -764,6 +828,11 @@
   });
 
   window.addEventListener('resize', resize);
+  window.addEventListener('pagehide', () => triggerAutosave(true));
+  window.addEventListener('beforeunload', () => triggerAutosave(true));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') triggerAutosave(true);
+  });
   renderUnifiedMenu('start', 'main');
   setScreen('menu');
   requestAnimationFrame(loop);

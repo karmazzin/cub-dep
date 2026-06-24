@@ -143,8 +143,9 @@
     const db = await openDb();
     if (!db || !sourceWorldId || !targetWorldId || sourceWorldId === targetWorldId) return false;
     try {
+      const deleted = await deleteWorldChunks(targetWorldId);
+      if (!deleted) return false;
       const tx = db.transaction(CHUNK_STORE, 'readwrite');
-      deleteWorldChunksInTransaction(tx, targetWorldId);
       const chunkStore = tx.objectStore(CHUNK_STORE);
       const index = chunkStore.index('worldId');
       index.openCursor(IDBKeyRange.only(sourceWorldId)).onsuccess = (event) => {
