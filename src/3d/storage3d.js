@@ -115,6 +115,55 @@
     }
   }
 
+  function deleteWorldChunksInTransaction(tx, worldId) {
+    const chunkStore = tx.objectStore(CHUNK_STORE);
+    const index = chunkStore.index('worldId');
+    index.openCursor(IDBKeyRange.only(worldId)).onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (!cursor) return;
+      cursor.delete();
+      cursor.continue();
+    };
+  }
+
+  async function deleteWorldChunks(worldId) {
+    const db = await openDb();
+    if (!db || !worldId) return false;
+    try {
+      const tx = db.transaction(CHUNK_STORE, 'readwrite');
+      deleteWorldChunksInTransaction(tx, worldId);
+      await transactionToPromise(tx);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function copyWorldChunks(sourceWorldId, targetWorldId) {
+    const db = await openDb();
+    if (!db || !sourceWorldId || !targetWorldId || sourceWorldId === targetWorldId) return false;
+    try {
+      const tx = db.transaction(CHUNK_STORE, 'readwrite');
+      deleteWorldChunksInTransaction(tx, targetWorldId);
+      const chunkStore = tx.objectStore(CHUNK_STORE);
+      const index = chunkStore.index('worldId');
+      index.openCursor(IDBKeyRange.only(sourceWorldId)).onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (!cursor) return;
+        const record = { ...cursor.value };
+        record.id = chunkRecordId(targetWorldId, record.chunkKey);
+        record.worldId = targetWorldId;
+        record.updatedAt = Date.now();
+        chunkStore.put(record);
+        cursor.continue();
+      };
+      await transactionToPromise(tx);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   async function saveChunkSnapshot(worldId, chunkKey, snapshot) {
     const db = await openDb();
     if (!db || !worldId || !chunkKey || !snapshot || !snapshot.blocks || !snapshot.fluidLevel) return false;
@@ -174,6 +223,8 @@
     listWorldMetas,
     listChunkKeys,
     deleteWorld,
+    deleteWorldChunks,
+    copyWorldChunks,
     saveChunkSnapshot,
     loadChunkSnapshot,
     isAvailable: () => available,
