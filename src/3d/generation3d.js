@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { clearWorld3D, setBlock3D, getBlock3D, setWater3D, setLava3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
+  const { clearWorld3D, setBlock3D, getBlock3D, setWater3D, setLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
   const {
     CHUNK_SIZE,
     CHUNK_RENDER_DISTANCE,
@@ -155,7 +155,7 @@
     if (y === 0) return BLOCK.BEDROCK;
     if (y <= h) {
       if (undergroundLavaAt(seed, x, y, z, h, world)) return BLOCK.LAVA;
-      if (y === h) return h <= SEA_LEVEL + 1 ? BLOCK.SAND : BLOCK.GRASS;
+      if (y === h) return h <= SEA_LEVEL + 1 ? BLOCK.SAND : BLOCK.DIRT;
       if (y >= h - 3) return BLOCK.DIRT;
       return BLOCK.STONE;
     }
@@ -164,6 +164,12 @@
     if (surfaceLiquid !== BLOCK.AIR) return surfaceLiquid;
     if (h < SEA_LEVEL && y <= SEA_LEVEL) return BLOCK.WATER;
     return BLOCK.AIR;
+  }
+
+  function hasInitialGrass(seed, x, y, z, world) {
+    return y === terrainHeight(seed, x, z)
+      && y > SEA_LEVEL + 1
+      && terrainBlockAt(seed, x, y + 1, z, world) === BLOCK.AIR;
   }
 
   function chunkBounds(world, cx, cy, cz) {
@@ -226,7 +232,7 @@
         loading.pendingIds.delete(data.id);
         loading.pendingKeys.delete(job.key);
         if (job.worldId !== stateRef.worldMeta.id || job.seed !== worldSeed(stateRef)) return;
-        installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel);
+        installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel, data.grassLevel || null);
       };
       chunkWorker.onerror = () => {
         const stateRef = activeState;
@@ -440,7 +446,12 @@
             const block = terrainBlockAt(seed, x, y, z, state.world);
             if (block === BLOCK.WATER) setWater3D(state, x, y, z, 0, true);
             else if (block === BLOCK.LAVA) setLava3D(state, x, y, z, 0, true);
-            else setBlock3D(state, x, y, z, block);
+            else {
+              setBlock3D(state, x, y, z, block);
+              if (block === BLOCK.DIRT && hasInitialGrass(seed, x, y, z, state.world)) {
+                setGrassLevel3D(state, x, y, z, 1, { skipModified: true });
+              }
+            }
           }
         }
       }
@@ -481,7 +492,7 @@
     const spawnX = Math.floor(world.w / 2);
     const spawnZ = Math.floor(world.d / 2);
     if (Math.hypot(x - spawnX, z - spawnZ) < 8) return false;
-    if (getBlock3D(state, x, groundY, z) !== BLOCK.GRASS) return false;
+    if (getBlock3D(state, x, groundY, z) !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) return false;
     for (let y = groundY + 1; y <= groundY + height + 3; y += 1) {
       for (let zz = z - 2; zz <= z + 2; zz += 1) {
         for (let xx = x - 2; xx <= x + 2; xx += 1) {
@@ -518,7 +529,7 @@
     const world = state.world;
     if (x < 2 || x >= world.w - 2 || z < 2 || z >= world.d - 2) return false;
     if (!farFromSpawn(world, x, z, 18)) return false;
-    if (getBlock3D(state, x, groundY, z) !== BLOCK.GRASS) return false;
+    if (getBlock3D(state, x, groundY, z) !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) return false;
     return getBlock3D(state, x, groundY + 1, z) === BLOCK.AIR && getBlock3D(state, x, groundY + 2, z) === BLOCK.AIR;
   }
 

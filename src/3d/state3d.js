@@ -31,7 +31,13 @@
         pitch: -0.42,
         onGround: false,
         selectedHotbarIndex: 0,
-        selectedBlock: BLOCK.DIRT,
+        selectedBlock: BLOCK.AIR,
+        inventory: worldMeta && worldMeta.player && Array.isArray(worldMeta.player.inventory)
+          ? worldMeta.player.inventory.map((slot) => slot ? { id: slot.id, count: slot.count } : null)
+          : [],
+        hotbar: worldMeta && worldMeta.player && Array.isArray(worldMeta.player.hotbar)
+          ? worldMeta.player.hotbar.map((slot) => slot ? { id: slot.id, count: slot.count } : null)
+          : [],
       },
       ui: {
         fps: 0,

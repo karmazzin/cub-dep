@@ -2,9 +2,9 @@
   const Game = window.CubDep;
 
   Game.constants3d = {
-    WORLD_W: 256,
+    WORLD_W: 2048,
     WORLD_H: 32,
-    WORLD_D: 256,
+    WORLD_D: 2048,
     CHUNK_SIZE: 16,
     CHUNK_RENDER_DISTANCE: 8,
     CHUNK_UNLOAD_DISTANCE: 10,

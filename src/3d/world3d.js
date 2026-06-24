@@ -50,6 +50,7 @@
       cz,
       blocks: new Uint16Array(size * size * size),
       fluidLevel: new Uint8Array(size * size * size).fill(255),
+      grassLevel: new Uint8Array(size * size * size),
     };
   }
 
@@ -169,12 +170,14 @@
     let entry = getChunkForBlock3D(world, x, y, z, false);
     if (!entry && id === BLOCK.AIR) return false;
     if (!entry) entry = getChunkForBlock3D(world, x, y, z, true);
+    if (!entry.chunk.grassLevel) entry.chunk.grassLevel = new Uint8Array(entry.chunk.blocks.length);
     if (entry.chunk.blocks[entry.index] === id) return false;
     entry.chunk.blocks[entry.index] = id;
+    entry.chunk.grassLevel[entry.index] = 0;
     const key = `${x},${y},${z}`;
-    if (id === BLOCK.WATER || id === BLOCK.LAVA) {
+    if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) {
       entry.chunk.fluidLevel[entry.index] = 0;
-      if (id === BLOCK.WATER) {
+      if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) {
         world.waterSources.add(key);
         if (world.lavaSources) world.lavaSources.delete(key);
       } else {
@@ -188,7 +191,38 @@
     }
     if (world.blockDamage) delete world.blockDamage[key];
     markChunkDirty3D(state, x, y, z);
+    markChunkDirty3D(state, x, y - 1, z);
     markChunkModified3D(state, x, y, z);
+    return true;
+  }
+
+  function getGrassLevel3D(state, x, y, z) {
+    const world = state && state.world;
+    if (!world || !inBounds3D(world, x, y, z)) return 0;
+    const entry = getChunkForBlock3D(world, x, y, z, false);
+    if (!entry) return 0;
+    const id = entry.chunk.blocks[entry.index];
+    if (id !== BLOCK.DIRT) return 0;
+    return entry.chunk.grassLevel && entry.chunk.grassLevel[entry.index] ? 1 : 0;
+  }
+
+  function setGrassLevel3D(state, x, y, z, level, options = {}) {
+    const world = state && state.world;
+    if (!world || !inBounds3D(world, x, y, z)) return false;
+    const entry = getChunkForBlock3D(world, x, y, z, false);
+    if (!entry) return false;
+    const id = entry.chunk.blocks[entry.index];
+    if (id !== BLOCK.DIRT) return false;
+    const next = level ? 1 : 0;
+    const current = entry.chunk.grassLevel && entry.chunk.grassLevel[entry.index] ? 1 : 0;
+    if (!entry.chunk.grassLevel) {
+      const size = Game.constants3d.CHUNK_SIZE;
+      entry.chunk.grassLevel = new Uint8Array(size * size * size);
+    }
+    if (current === next) return false;
+    entry.chunk.grassLevel[entry.index] = next;
+    markChunkDirty3D(state, x, y, z);
+    if (!options.skipModified) markChunkModified3D(state, x, y, z);
     return true;
   }
 
@@ -238,6 +272,10 @@
     return setFluid3D(state, x, y, z, BLOCK.LAVA, level, source);
   }
 
+  function setHotWater3D(state, x, y, z, level = 0, source = false) {
+    return setFluid3D(state, x, y, z, BLOCK.HOT_WATER, level, source);
+  }
+
   function isFluidSource3D(state, x, y, z, fluidId) {
     const world = state && state.world;
     const sources = fluidId === BLOCK.LAVA ? world && world.lavaSources : world && world.waterSources;
@@ -253,7 +291,7 @@
   }
 
   function isSolidBlock3D(id) {
-    return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.LAVA && id !== BLOCK.TORCH;
+    return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA && id !== BLOCK.TORCH;
   }
 
   function pruneKeySetInChunk(set, bounds) {
@@ -329,7 +367,7 @@
           const index = chunkLocalIndex3D(lx, ly, lz);
           const id = chunk.blocks[index];
           const sourceKey = `${x},${y},${z}`;
-          if (id === BLOCK.WATER) world.waterSources.add(sourceKey);
+          if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) world.waterSources.add(sourceKey);
           else if (id === BLOCK.LAVA) world.lavaSources.add(sourceKey);
         }
       }
@@ -338,13 +376,16 @@
     return true;
   }
 
-  function installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, options = {}) {
+  function installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, grassLevel = null, options = {}) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, cx * Game.constants3d.CHUNK_SIZE, cy * Game.constants3d.CHUNK_SIZE, cz * Game.constants3d.CHUNK_SIZE)) return false;
     const key = chunkKeyFromCoords3D(cx, cy, cz);
     const chunk = getChunk3D(world, cx, cy, cz, true);
     chunk.blocks.set(blocks);
     chunk.fluidLevel.set(fluidLevel);
+    if (!chunk.grassLevel) chunk.grassLevel = new Uint8Array(chunk.blocks.length);
+    if (grassLevel) chunk.grassLevel.set(grassLevel);
+    else chunk.grassLevel.fill(0);
     if (options.generated !== false) {
       if (!world.generatedChunks) world.generatedChunks = new Set();
       world.generatedChunks.add(key);
@@ -357,16 +398,16 @@
     return rebuildChunkDerivedState3D(state, cx, cy, cz);
   }
 
-  function installGeneratedChunk3D(state, cx, cy, cz, blocks, fluidLevel) {
+  function installGeneratedChunk3D(state, cx, cy, cz, blocks, fluidLevel, grassLevel = null) {
     const world = state && state.world;
     const key = chunkKeyFromCoords3D(cx, cy, cz);
     if (world && world.generatedChunks && world.generatedChunks.has(key)) return false;
     if (world && world.modifiedChunks && world.modifiedChunks.has(key)) return false;
-    return installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, { generated: true, modified: false });
+    return installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, grassLevel, { generated: true, modified: false });
   }
 
   function installSavedChunk3D(state, cx, cy, cz, blocks, fluidLevel, savedState = {}) {
-    const installed = installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, { generated: true, modified: true, unsaved: false });
+    const installed = installChunkArrays3D(state, cx, cy, cz, blocks, fluidLevel, savedState.grassLevel || null, { generated: true, modified: true, unsaved: false });
     if (!installed) return false;
     const world = state.world;
     const bounds = chunkBounds3D(world, cx, cy, cz);
@@ -412,6 +453,7 @@
       cz: chunk.cz,
       blocks: chunk.blocks,
       fluidLevel: chunk.fluidLevel,
+      grassLevel: chunk.grassLevel,
       waterSources,
       lavaSources,
       blockDamage,
@@ -423,11 +465,14 @@
     clearWorld3D,
     getBlock3D,
     setBlock3D,
+    getGrassLevel3D,
+    setGrassLevel3D,
     getFluidLevel3D,
     getWaterLevel3D,
     getLavaLevel3D,
     setWater3D,
     setLava3D,
+    setHotWater3D,
     isFluidSource3D,
     isWaterSource3D,
     isLavaSource3D,

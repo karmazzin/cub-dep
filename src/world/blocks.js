@@ -26,7 +26,6 @@
     DOOR: 21,
     PATH: 22,
     SAND: 23,
-    SANDSTONE: 24,
     CACTUS: 25,
     DRY_BUSH: 26,
     IRON_ORE: 27,
@@ -91,6 +90,7 @@
     SEQUOIA_WOOD: 86,
     SEQUOIA_LEAF: 87,
     SEQUOIA_PLANK: 88,
+    HOT_WATER: 89,
   };
 
   const BLOCK_COLORS = {
@@ -117,7 +117,6 @@
     [BLOCK.DOOR]: '#68431f',
     [BLOCK.PATH]: '#806039',
     [BLOCK.SAND]: '#c9b15f',
-    [BLOCK.SANDSTONE]: '#aa8845',
     [BLOCK.CACTUS]: '#247a35',
     [BLOCK.DRY_BUSH]: '#725d32',
     [BLOCK.IRON_ORE]: '#7e695b',
@@ -182,6 +181,7 @@
     [BLOCK.SEQUOIA_WOOD]: '#6b281f',
     [BLOCK.SEQUOIA_LEAF]: '#24533d',
     [BLOCK.SEQUOIA_PLANK]: '#884836',
+    [BLOCK.HOT_WATER]: '#2879c8',
   };
 
   const BREAK_TIME = {
@@ -201,7 +201,6 @@
     [BLOCK.DOOR]: 0.5,
     [BLOCK.PATH]: 0.8,
     [BLOCK.SAND]: 0.7,
-    [BLOCK.SANDSTONE]: 3.4,
     [BLOCK.CACTUS]: 0.4,
     [BLOCK.DRY_BUSH]: 0.15,
     [BLOCK.IRON_ORE]: 4.2,
@@ -273,10 +272,10 @@
     [BLOCK.BEDROCK]: Infinity,
     [BLOCK.WATER]: Infinity,
     [BLOCK.LAVA]: Infinity,
+    [BLOCK.HOT_WATER]: Infinity,
   };
 
   const PLACEABLE = new Set([
-    BLOCK.GRASS,
     BLOCK.DIRT,
     BLOCK.STONE,
     BLOCK.WOOD,
@@ -290,7 +289,6 @@
     BLOCK.DOOR,
     BLOCK.PATH,
     BLOCK.SAND,
-    BLOCK.SANDSTONE,
     BLOCK.CACTUS,
     BLOCK.DRY_BUSH,
     BLOCK.IRON_ORE,

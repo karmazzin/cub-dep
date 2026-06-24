@@ -56,9 +56,63 @@
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           const id = getBlock3D(state, xx, yy, zz);
-          if (id === BLOCK.WATER || id === BLOCK.LAVA) return true;
+          if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) return true;
         }
       }
+    }
+    return false;
+  }
+
+  function overlapsColumn(player, x, z) {
+    const minX = player.x - PLAYER_RADIUS;
+    const maxX = player.x + PLAYER_RADIUS;
+    const minZ = player.z - PLAYER_RADIUS;
+    const maxZ = player.z + PLAYER_RADIUS;
+    return x < maxX && x + 1 > minX && z < maxZ && z + 1 > minZ;
+  }
+
+  function getPlayerGeyserLift(state) {
+    const fluids = Game.fluids3d;
+    if (!fluids || !fluids.getGeyserInfo3D) return null;
+    const player = state.player;
+    const minX = Math.floor(player.x - PLAYER_RADIUS);
+    const maxX = Math.floor(player.x + PLAYER_RADIUS);
+    const minZ = Math.floor(player.z - PLAYER_RADIUS);
+    const maxZ = Math.floor(player.z + PLAYER_RADIUS);
+    const minY = Math.max(0, Math.floor(player.y - 8));
+    const maxY = Math.min(state.world.h - 1, Math.floor(player.y + 1));
+    let best = null;
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let z = minZ; z <= maxZ; z += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          if (!overlapsColumn(player, x, z)) continue;
+          const geyser = fluids.getGeyserInfo3D(state, x, y, z);
+          if (!geyser) continue;
+          const baseY = geyser.y + 0.9;
+          const topY = baseY + geyser.height;
+          if (player.y + PLAYER_HEIGHT < baseY || player.y > topY + 0.24) continue;
+          if (!best || topY > best.topY) best = { ...geyser, baseY, topY };
+        }
+      }
+    }
+    return best;
+  }
+
+  function applyGeyserLift(state) {
+    const player = state.player;
+    const lift = getPlayerGeyserLift(state);
+    if (!lift) return false;
+    const remaining = lift.topY - player.y;
+    if (remaining > 0.08) {
+      const ratio = clamp(remaining / Math.max(0.1, lift.height), 0, 1);
+      player.vy = Math.max(player.vy, 5.5 + ratio * 5.2);
+      player.onGround = false;
+      return true;
+    }
+    if (player.y <= lift.topY + 0.24) {
+      player.vy = Math.max(player.vy, 0);
+      player.onGround = true;
+      return true;
     }
     return false;
   }
@@ -97,6 +151,7 @@
     while (remaining > 0) {
       const step = Math.min(PHYSICS_STEP, remaining);
       player.vy -= (inLiquid ? GRAVITY * 0.24 : GRAVITY) * step;
+      applyGeyserLift(state);
       moveAxis(state, 'x', player.vx * step);
       moveAxis(state, 'z', player.vz * step);
       moveAxis(state, 'y', player.vy * step);

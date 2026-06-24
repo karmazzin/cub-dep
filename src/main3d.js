@@ -4,6 +4,7 @@
   const overlay = document.getElementById('game3dOverlay');
   const overlayCtx = overlay.getContext('2d');
   const menuRoot = document.getElementById('menuRoot');
+  const inventoryRoot = document.getElementById('inventoryRoot');
 
   let state = null;
   let screen = 'menu';
@@ -21,7 +22,7 @@
       id: `world-${Date.now().toString(36)}`,
       name: form.name && form.name.trim() ? form.name.trim() : 'Новый мир',
       seed: form.seed && form.seed.trim() ? form.seed.trim() : makeSeed(),
-      mode: 'survival',
+      mode: form.mode === 'creative' ? 'creative' : 'survival',
       worldType: 'normal',
       singleBiome: 'forest',
       cavernBiome: 'mix',
@@ -44,14 +45,16 @@
 
   function setScreen(nextScreen) {
     screen = nextScreen;
-    const worldVisible = screen === 'playing' || screen === 'paused';
+    const worldVisible = screen === 'playing' || screen === 'paused' || screen === 'inventory';
     const menuVisible = screen === 'menu' || screen === 'paused';
+    const inventoryVisible = screen === 'inventory';
     menuRoot.classList.toggle('is-hidden', !menuVisible);
+    if (inventoryRoot) inventoryRoot.classList.toggle('is-hidden', !inventoryVisible);
     canvas3d.classList.toggle('is-hidden', !worldVisible);
     overlay.classList.toggle('is-hidden', !worldVisible);
     menuRoot.classList.toggle('is-pause-menu', screen === 'paused');
     if (Game.renderer3d) Game.renderer3d.setVisible(canvas3d, worldVisible);
-    if (state && state.pause) state.pause.open = screen === 'paused';
+    if (state && state.pause) state.pause.open = screen === 'paused' || screen === 'inventory';
   }
 
   function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main') {
@@ -86,6 +89,19 @@
         <span>Сид</span>
         <input name="seed" maxlength="60" placeholder="Случайный сид" autocomplete="off" />
       </label>
+      <div class="menu-field">
+        <span>Режим</span>
+        <div class="menu-mode-options">
+          <label class="menu-mode-option">
+            <input type="radio" name="mode" value="survival" checked />
+            <span>Survival</span>
+          </label>
+          <label class="menu-mode-option">
+            <input type="radio" name="mode" value="creative" />
+            <span>Creative</span>
+          </label>
+        </div>
+      </div>
     `;
     const primary = isPause
       ? '<button class="menu-btn menu-btn-primary" type="button" data-action="resume">Продолжить</button>'
@@ -159,6 +175,12 @@
       z: state.player.z,
       yaw: state.player.yaw,
       pitch: state.player.pitch,
+      inventory: Array.isArray(state.player.inventory)
+        ? state.player.inventory.map((slot) => slot ? { id: slot.id, count: slot.count } : null)
+        : [],
+      hotbar: Array.isArray(state.player.hotbar)
+        ? state.player.hotbar.map((slot) => slot ? { id: slot.id, count: slot.count } : null)
+        : [],
     };
   }
 
@@ -174,6 +196,10 @@
 
   async function startWorldFromMeta(meta, savedChunkKeys = []) {
     state = Game.state3d.createGameState3D(meta);
+    if (Game.inventory3d) {
+      if (Game.inventory3d.ensureInventory) Game.inventory3d.ensureInventory(state);
+      if (Game.inventory3d.ensureHotbar) Game.inventory3d.ensureHotbar(state);
+    }
     if (state.worldMeta.player && Number.isFinite(state.worldMeta.player.x)) {
       state.player.x = state.worldMeta.player.x;
       state.player.y = state.worldMeta.player.y;
@@ -218,7 +244,7 @@
   }
 
   function resize() {
-    if ((screen === 'playing' || screen === 'paused') && Game.renderer3d) Game.renderer3d.resize(canvas3d, overlay);
+    if ((screen === 'playing' || screen === 'paused' || screen === 'inventory') && Game.renderer3d) Game.renderer3d.resize(canvas3d, overlay);
   }
 
   function openPauseMenu() {
@@ -231,6 +257,23 @@
 
   function resumeWorld() {
     if (!state) return;
+    input.resetMovement();
+    if (Game.inventory3d && Game.inventory3d.clearCarried) Game.inventory3d.clearCarried(state);
+    setScreen('playing');
+  }
+
+  function openInventory() {
+    if (!state || screen !== 'playing') return;
+    persistWorldMeta(true);
+    input.resetMovement();
+    if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
+    if (Game.inventory3d && inventoryRoot) Game.inventory3d.renderInventory(inventoryRoot, state);
+    setScreen('inventory');
+  }
+
+  function closeInventory() {
+    if (!state || screen !== 'inventory') return;
+    if (Game.inventory3d && Game.inventory3d.clearCarried) Game.inventory3d.clearCarried(state);
     input.resetMovement();
     setScreen('playing');
   }
@@ -275,7 +318,7 @@
         Game.renderer3d.resize(canvas3d, overlay);
         Game.renderer3d.render(state, overlayCtx, overlay);
       }
-    } else if (screen === 'paused' && state) {
+    } else if ((screen === 'paused' || screen === 'inventory') && state) {
       if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
       Game.renderer3d.resize(canvas3d, overlay);
       Game.renderer3d.render(state, overlayCtx, overlay);
@@ -289,6 +332,7 @@
     startWorld({
       name: data.get('name') || '',
       seed: data.get('seed') || '',
+      mode: data.get('mode') || 'survival',
     });
   });
 
@@ -310,7 +354,52 @@
     }
   });
 
+  if (inventoryRoot) {
+    inventoryRoot.addEventListener('click', (event) => {
+      if (!state || !Game.inventory3d) return;
+      const result = Game.inventory3d.handleInventoryClick(state, event);
+      if (result.close) {
+        closeInventory();
+        return;
+      }
+      if (result.full && state.ui) {
+        state.ui.noticeText = 'Инвентарь полон';
+        state.ui.noticeTimer = 1.35;
+      }
+      Game.inventory3d.renderInventory(inventoryRoot, state);
+    });
+    inventoryRoot.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      if (!state || !Game.inventory3d) return;
+      const result = Game.inventory3d.handleInventoryClick(state, event);
+      if (result.full && state.ui) {
+        state.ui.noticeText = 'Инвентарь полон';
+        state.ui.noticeTimer = 1.35;
+      }
+      Game.inventory3d.renderInventory(inventoryRoot, state);
+    });
+    inventoryRoot.addEventListener('mousemove', (event) => {
+      if (!state || !Game.inventory3d || !Game.inventory3d.updatePointer) return;
+      Game.inventory3d.updatePointer(event);
+      if (Game.inventory3d.hasCarried && Game.inventory3d.hasCarried()) {
+        Game.inventory3d.renderInventory(inventoryRoot, state);
+      }
+    });
+  }
+
   window.addEventListener('keydown', (event) => {
+    if ((event.code === 'KeyE' || event.code === 'KeyY') && screen === 'playing') {
+      input.input.keys[event.code] = false;
+      openInventory();
+      event.preventDefault();
+      return;
+    }
+    if ((event.code === 'KeyE' || event.code === 'KeyY') && screen === 'inventory') {
+      input.input.keys[event.code] = false;
+      closeInventory();
+      event.preventDefault();
+      return;
+    }
     if (event.code !== 'Escape') return;
     if (screen === 'playing') {
       input.input.keys.Escape = false;
@@ -320,6 +409,10 @@
     } else if (screen === 'paused') {
       input.input.keys.Escape = false;
       resumeWorld();
+      event.preventDefault();
+    } else if (screen === 'inventory') {
+      input.input.keys.Escape = false;
+      closeInventory();
       event.preventDefault();
     }
   });

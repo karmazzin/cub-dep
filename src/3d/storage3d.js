@@ -127,6 +127,9 @@
       cz: snapshot.cz,
       blocks: snapshot.blocks.buffer.slice(snapshot.blocks.byteOffset, snapshot.blocks.byteOffset + snapshot.blocks.byteLength),
       fluidLevel: snapshot.fluidLevel.buffer.slice(snapshot.fluidLevel.byteOffset, snapshot.fluidLevel.byteOffset + snapshot.fluidLevel.byteLength),
+      grassLevel: snapshot.grassLevel
+        ? snapshot.grassLevel.buffer.slice(snapshot.grassLevel.byteOffset, snapshot.grassLevel.byteOffset + snapshot.grassLevel.byteLength)
+        : null,
       waterSources: snapshot.waterSources || [],
       lavaSources: snapshot.lavaSources || [],
       blockDamage: snapshot.blockDamage || {},
@@ -156,6 +159,7 @@
         chunkKey: record.chunkKey,
         blocks: new Uint16Array(record.blocks),
         fluidLevel: new Uint8Array(record.fluidLevel),
+        grassLevel: record.grassLevel ? new Uint8Array(record.grassLevel) : null,
         waterSources: record.waterSources || [],
         lavaSources: record.lavaSources || [],
         blockDamage: record.blockDamage || {},

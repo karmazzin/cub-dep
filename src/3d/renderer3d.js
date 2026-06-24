@@ -2,7 +2,7 @@
   const Game = window.CubDep;
   const { BLOCK, BLOCK_COLORS } = Game.blocks;
   const { EYE_HEIGHT, CHUNK_SIZE, CHUNK_RENDER_DISTANCE, CAMERA_FAR_CHUNKS, CHUNK_MESH_REBUILD_BUDGET } = Game.constants3d;
-  const { getBlock3D, getFluidLevel3D } = Game.world3d;
+  const { getBlock3D, getFluidLevel3D, getGrassLevel3D } = Game.world3d;
   const { drawUI3D } = Game.ui3d;
 
   let renderer = null;
@@ -17,6 +17,8 @@
   let light = null;
   let skyGroup = null;
   let cloudMaterial = null;
+  let cloudPuffGeometry = null;
+  let cloudCells = [];
   let targetBox = null;
   let crackLines = null;
   let sheepMeshes = new Map();
@@ -25,6 +27,11 @@
   let atlasMeta = null;
   let atlasEntries = null;
   let debugInfo = null;
+  let steamGroup = null;
+  let steamMaterial = null;
+  let steamGeometry = null;
+  let steamParticles = [];
+  let lastSteamUpdate = 0;
 
   const faces = [
     { dir: [1, 0, 0], type: 'side', corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], shade: 0.86 },
@@ -38,9 +45,14 @@
   const uvCorners = [[1, 0], [1, 1], [0, 1], [0, 0]];
   const SKY_COLOR = 0x87bfe8;
   const SKY_FOG_COLOR = 0x87bfe8;
-  const CLOUD_HEIGHT = 46;
-  const CLOUD_SPREAD = 170;
-  const CLOUD_COUNT = 18;
+  const CLOUD_HEIGHT = 64;
+  const CLOUD_CELL_SIZE = 76;
+  const CLOUD_GRID_RADIUS = 2;
+  const CLOUDS_PER_CELL = 4;
+  const CLOUD_PUFFS_PER_CLOUD = 9;
+  const CLOUD_WEATHER_CYCLE = 120;
+  const STEAM_PARTICLE_LIMIT = 90;
+  const STEAM_GEYSER_SCAN_RADIUS = 24;
   const crackSegments = [
     [0.50, 0.50, 0.38, 0.48],
     [0.38, 0.48, 0.28, 0.36],
@@ -96,11 +108,11 @@
   function blockKind(id) {
     const B = BLOCK;
     if (id === B.GRASS || id === B.MOSS || id === B.MUSHROOM_SOIL || id === B.RED_EARTH || id === B.ASH) return 'soil';
-    if (id === B.DIRT || id === B.PATH || id === B.SAND || id === B.SANDSTONE || id === B.SNOW || id === B.CLOUD) return 'soft';
+    if (id === B.DIRT || id === B.PATH || id === B.SAND || id === B.SNOW || id === B.CLOUD) return 'soft';
     if (id === B.WOOD || id === B.SPRUCE_WOOD || id === B.GREAT_TREE_WOOD || id === B.SEQUOIA_WOOD || id === B.PILLAR) return 'wood';
     if (id === B.PLANK || id === B.SEQUOIA_PLANK || id === B.DOOR || id === B.CHEST || id === B.LADDER) return 'plank';
     if (id === B.LEAF || id === B.SPRUCE_LEAF || id === B.SEQUOIA_LEAF || id === B.DRY_BUSH || id === B.CACTUS) return 'leaf';
-    if (id === B.WATER || id === B.STEAM_WATER) return 'water';
+    if (id === B.WATER || id === B.HOT_WATER || id === B.STEAM_WATER) return 'water';
     if (id === B.LAVA || id === B.FIRE_PORTAL || id === B.AIR_DIMENSION_PORTAL || id === B.AIR_THIEF_PORTAL || id === B.AIR_HOME_PORTAL || id === B.ELEMENTAL_RETURN_PORTAL || id === B.END_GATE || id === B.WATER_DIMENSION_PORTAL) return 'glow';
     if (id === B.COAL_ORE || id === B.GOLD_ORE || id === B.IRON_ORE || id === B.DIAMOND_ORE || id === B.DEEP_ORE || id === B.FRIENDSHIP_ORE || id === B.STEAM_ORE || id === B.INVISIBLE_ORE) return 'ore';
     if (id === B.TORCH || id === B.GOLDEN_FLOWER || id === B.EMBER_FLOWER || id === B.EMBER_SHRUB || id === B.GLOW_ALGAE || id === B.TALL_GLOW_ALGAE || id === B.SMALL_GLOW_MUSHROOM) return 'plant';
@@ -497,7 +509,7 @@
 
   function hashBlockVariant(x, y, z, id, face) {
     if (id === BLOCK.GRASS && face.type === 'top') return 0;
-    if (id === BLOCK.WATER || id === BLOCK.STEAM_WATER) return 0;
+    if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.STEAM_WATER) return 0;
     if (id === BLOCK.DIRT || id === BLOCK.PATH || id === BLOCK.MUSHROOM_SOIL || id === BLOCK.RED_EARTH || id === BLOCK.ASH) return 0;
     if ((id === BLOCK.WOOD || id === BLOCK.SPRUCE_WOOD || id === BLOCK.GREAT_TREE_WOOD || id === BLOCK.SEQUOIA_WOOD) && face.type === 'side') return 0;
     let hash = Math.imul(x + 101, 374761393) ^ Math.imul(y + 59, 668265263) ^ Math.imul(z + 211, 2147483647);
@@ -522,6 +534,12 @@
     }
   }
 
+  function getRenderedBlockId(state, id, x, y, z) {
+    if (id === BLOCK.DIRT && getGrassLevel3D && getGrassLevel3D(state, x, y, z) > 0) return BLOCK.GRASS;
+    if (id === BLOCK.GRASS) return BLOCK.GRASS;
+    return id;
+  }
+
   function pushWaterUv(uvs, face, x, y, z) {
     const scale = 0.5;
     for (const corner of face.corners) {
@@ -538,27 +556,28 @@
     const world = state.world;
     if (x < 0 || x >= world.w || y < 0 || y >= world.h || z < 0 || z >= world.d) return true;
     const id = getBlock3D(state, x, y, z);
-    if (mode === 'water') return id !== BLOCK.WATER;
+    if (mode === 'water') return id !== BLOCK.WATER && id !== BLOCK.HOT_WATER;
     if (mode === 'lava') return id !== BLOCK.LAVA;
-    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.LAVA;
-  }
-
-  function fluidIdForMode(mode) {
-    return mode === 'lava' ? BLOCK.LAVA : BLOCK.WATER;
+    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
   }
 
   function isFluidMode(mode) {
     return mode === 'water' || mode === 'lava';
   }
 
+  function isSameRenderedFluid(a, b) {
+    if ((a === BLOCK.WATER || a === BLOCK.HOT_WATER) && (b === BLOCK.WATER || b === BLOCK.HOT_WATER)) return true;
+    return a === b;
+  }
+
   function getFluidSurfaceHeight(state, fluidId, x, y, z) {
-    if (getBlock3D(state, x, y + 1, z) === fluidId) return 1;
+    if (isSameRenderedFluid(getBlock3D(state, x, y + 1, z), fluidId)) return 1;
     const level = getFluidLevel3D(state, x, y, z, fluidId);
     return Math.max(0.32, 0.9 - Math.min(7, level) * 0.075);
   }
 
   function pushBlockPosition(positions, id, state, x, y, z, corner) {
-    const height = (id === BLOCK.WATER || id === BLOCK.LAVA) && corner[1] === 1 ? getFluidSurfaceHeight(state, id, x, y, z) : corner[1];
+    const height = (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) && corner[1] === 1 ? getFluidSurfaceHeight(state, id, x, y, z) : corner[1];
     positions.push(x + corner[0], y + height, z + corner[2]);
   }
 
@@ -567,9 +586,10 @@
     const ny = y + face.dir[1];
     const nz = z + face.dir[2];
     const height = getFluidSurfaceHeight(state, fluidId, x, y, z);
-    if (getBlock3D(state, nx, ny, nz) !== fluidId) return { lower: 0, upper: height };
+    const neighborId = getBlock3D(state, nx, ny, nz);
+    if (!isSameRenderedFluid(neighborId, fluidId)) return { lower: 0, upper: height };
     if (face.dir[1] !== 0) return null;
-    const neighborHeight = getFluidSurfaceHeight(state, fluidId, nx, ny, nz);
+    const neighborHeight = getFluidSurfaceHeight(state, neighborId, nx, ny, nz);
     if (height <= neighborHeight + 0.001) return null;
     return { lower: neighborHeight, upper: height };
   }
@@ -717,15 +737,14 @@
           const id = getBlock3D(state, x, y, z);
           if (id === BLOCK.AIR) continue;
           const fluidMode = isFluidMode(mode);
-          const fluidId = fluidIdForMode(mode);
-          if (mode === 'solid' && (id === BLOCK.WATER || id === BLOCK.LAVA)) continue;
-          if (mode === 'water' && id !== BLOCK.WATER) continue;
+          if (mode === 'solid' && (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA)) continue;
+          if (mode === 'water' && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER) continue;
           if (mode === 'lava' && id !== BLOCK.LAVA) continue;
           for (const face of faces) {
             const nx = x + face.dir[0];
             const ny = y + face.dir[1];
             const nz = z + face.dir[2];
-            const fluidRange = fluidMode ? getFluidFaceRange(state, fluidId, x, y, z, face) : null;
+            const fluidRange = fluidMode ? getFluidFaceRange(state, id, x, y, z, face) : null;
             if (fluidMode && !fluidRange) continue;
             if (!fluidMode && !isNeighborOpen(state, nx, ny, nz, mode)) continue;
             const base = positions.length / 3;
@@ -737,7 +756,7 @@
               colors.push(color.r, color.g, color.b);
             }
             if (fluidMode) pushWaterUv(uvs, face, x, y, z);
-            else pushTileUv(uvs, id, face, x, y, z);
+            else pushTileUv(uvs, getRenderedBlockId(state, id, x, y, z), face, x, y, z);
             indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
           }
         }
@@ -835,41 +854,220 @@
       opacity: 0.72,
       depthWrite: false,
     });
-    const rng = mulberry32(0x51ca1ab5);
-    for (let i = 0; i < CLOUD_COUNT; i += 1) {
-      const cloud = new THREE.Group();
-      const parts = 3 + Math.floor(rng() * 4);
-      const baseX = (rng() - 0.5) * CLOUD_SPREAD;
-      const baseZ = (rng() - 0.5) * CLOUD_SPREAD;
-      const baseY = CLOUD_HEIGHT + (rng() - 0.5) * 8;
-      for (let p = 0; p < parts; p += 1) {
-        const sx = 7 + rng() * 10;
-        const sy = 1.5 + rng() * 1.3;
-        const sz = 4 + rng() * 7;
-        const puff = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), cloudMaterial);
-        puff.position.set((rng() - 0.5) * 16, (rng() - 0.5) * 1.5, (rng() - 0.5) * 8);
-        cloud.add(puff);
+    cloudPuffGeometry = new THREE.BoxGeometry(1, 1, 1);
+    cloudCells = [];
+    const cellsPerAxis = CLOUD_GRID_RADIUS * 2 + 1;
+    for (let i = 0; i < cellsPerAxis * cellsPerAxis; i += 1) {
+      const cell = { key: '', group: new THREE.Group(), clouds: [] };
+      for (let c = 0; c < CLOUDS_PER_CELL; c += 1) {
+        const cloud = new THREE.Group();
+        const puffs = [];
+        for (let p = 0; p < CLOUD_PUFFS_PER_CLOUD; p += 1) {
+          const puff = new THREE.Mesh(cloudPuffGeometry, cloudMaterial);
+          cloud.add(puff);
+          puffs.push(puff);
+        }
+        cell.group.add(cloud);
+        cell.clouds.push({ group: cloud, puffs });
       }
-      cloud.position.set(baseX, baseY, baseZ);
-      cloud.rotation.y = (rng() - 0.5) * 0.5;
-      skyGroup.add(cloud);
+      skyGroup.add(cell.group);
+      cloudCells.push(cell);
     }
     scene.add(skyGroup);
+  }
+
+  function cloudProfileForCycle(cycle) {
+    const rng = mulberry32(0x3b9ac9f1 ^ Math.imul(cycle + 19, 2654435761));
+    const roll = rng();
+    if (roll < 0.18) return { density: 0.1, minClouds: 0, opacity: 0.6 };
+    if (roll < 0.46) return { density: 0.38, minClouds: 1, opacity: 0.68 };
+    if (roll < 0.8) return { density: 0.7, minClouds: 2, opacity: 0.74 };
+    return { density: 0.96, minClouds: 3, opacity: 0.8 };
+  }
+
+  function cloudCellSeed(cx, cz, cycle) {
+    let seed = Math.imul(cx + 4099, 374761393) ^ Math.imul(cz - 8191, 668265263);
+    seed ^= Math.imul(cycle + 97, 2246822519);
+    return seed >>> 0;
+  }
+
+  function rebuildCloudCell(cell, cx, cz, cycle, profile) {
+    const key = `${cx}:${cz}:${cycle}`;
+    if (cell.key === key) return;
+    cell.key = key;
+    const rng = mulberry32(cloudCellSeed(cx, cz, cycle));
+    let visibleCount = 0;
+    for (let i = 0; i < cell.clouds.length; i += 1) {
+      const cloud = cell.clouds[i];
+      const visible = rng() < profile.density || visibleCount < profile.minClouds;
+      cloud.group.visible = visible;
+      if (!visible) continue;
+      visibleCount += 1;
+      cloud.group.position.set(
+        (rng() - 0.5) * CLOUD_CELL_SIZE,
+        CLOUD_HEIGHT + (rng() - 0.5) * 10,
+        (rng() - 0.5) * CLOUD_CELL_SIZE
+      );
+      cloud.group.rotation.y = -0.25 + (rng() - 0.5) * 0.45;
+      const activePuffs = 5 + Math.floor(rng() * (CLOUD_PUFFS_PER_CLOUD - 4));
+      const length = 28 + rng() * 22;
+      const width = 10 + rng() * 9;
+      for (let p = 0; p < cloud.puffs.length; p += 1) {
+        const puff = cloud.puffs[p];
+        puff.visible = p < activePuffs;
+        if (!puff.visible) continue;
+        const t = activePuffs === 1 ? 0.5 : p / (activePuffs - 1);
+        const centerBias = 1 - Math.abs(t - 0.5) * 1.4;
+        const layer = p % 3;
+        const x = (t - 0.5) * length + (rng() - 0.5) * 8;
+        const z = (layer - 1) * width * 0.34 + (rng() - 0.5) * 6;
+        const y = (rng() - 0.5) * 1.2 + Math.max(0, centerBias) * 0.7;
+        puff.position.set(x, y, z);
+        puff.scale.set(
+          11 + rng() * 12 + Math.max(0, centerBias) * 8,
+          1.8 + rng() * 1.8 + Math.max(0, centerBias) * 0.9,
+          6 + rng() * 8 + Math.max(0, centerBias) * 4
+        );
+      }
+    }
   }
 
   function updateSkyLayer(player) {
     if (!skyGroup || !player) return;
     const time = performance.now() * 0.001;
-    skyGroup.position.set(player.x + time * 0.7, 0, player.z + time * 0.18);
+    const driftX = time * 0.7;
+    const driftZ = time * 0.18;
+    const cycle = Math.floor(time / CLOUD_WEATHER_CYCLE);
+    const profile = cloudProfileForCycle(cycle);
+    cloudMaterial.opacity = profile.opacity;
+    const centerX = Math.floor((player.x + driftX) / CLOUD_CELL_SIZE);
+    const centerZ = Math.floor((player.z + driftZ) / CLOUD_CELL_SIZE);
+    let slot = 0;
+    for (let dz = -CLOUD_GRID_RADIUS; dz <= CLOUD_GRID_RADIUS; dz += 1) {
+      for (let dx = -CLOUD_GRID_RADIUS; dx <= CLOUD_GRID_RADIUS; dx += 1) {
+        const cell = cloudCells[slot];
+        slot += 1;
+        if (!cell) continue;
+        const cx = centerX + dx;
+        const cz = centerZ + dz;
+        rebuildCloudCell(cell, cx, cz, cycle, profile);
+        cell.group.position.set(cx * CLOUD_CELL_SIZE - driftX, 0, cz * CLOUD_CELL_SIZE - driftZ);
+      }
+    }
+  }
+
+  function ensureSteamParticles() {
+    if (steamGroup || !window.THREE || !scene) return;
+    steamGroup = new THREE.Group();
+    steamMaterial = new THREE.MeshBasicMaterial({
+      color: 0xeef8ff,
+      transparent: true,
+      opacity: 0.68,
+      depthWrite: false,
+    });
+    steamGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+    steamParticles = [];
+    for (let i = 0; i < STEAM_PARTICLE_LIMIT; i += 1) {
+      const mesh = new THREE.Mesh(steamGeometry, steamMaterial);
+      mesh.visible = false;
+      steamGroup.add(mesh);
+      steamParticles.push({
+        mesh,
+        active: false,
+        x: 0,
+        y: 0,
+        z: 0,
+        baseY: 0,
+        maxHeight: 1,
+        life: 0,
+        age: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+      });
+    }
+    scene.add(steamGroup);
+  }
+
+  function collectVisibleGeysers(state) {
+    const geysers = [];
+    const player = state.player;
+    const fluids = Game.fluids3d;
+    if (!player || !fluids || !fluids.getActiveGeysers3D) return geysers;
+    const px = Math.floor(player.x);
+    const py = Math.floor(player.y);
+    const pz = Math.floor(player.z);
+    const geyserList = fluids.getActiveGeysers3D(state);
+    for (const geyser of geyserList) {
+      if (Math.abs(geyser.x - px) > STEAM_GEYSER_SCAN_RADIUS) continue;
+      if (Math.abs(geyser.z - pz) > STEAM_GEYSER_SCAN_RADIUS) continue;
+      if (Math.abs(geyser.y - py) > 12) continue;
+      geysers.push(geyser);
+      if (geysers.length >= 24) return geysers;
+    }
+    return geysers;
+  }
+
+  function spawnSteamParticle(geyser) {
+    const particle = steamParticles.find((item) => !item.active);
+    if (!particle) return;
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * 0.28;
+    particle.active = true;
+    particle.baseY = geyser.y + 0.9;
+    particle.maxHeight = Math.max(1, Math.min(7, geyser.height || 1));
+    particle.x = geyser.x + 0.5 + Math.cos(angle) * radius;
+    particle.y = particle.baseY;
+    particle.z = geyser.z + 0.5 + Math.sin(angle) * radius;
+    particle.vx = (Math.random() - 0.5) * 0.12;
+    particle.vy = 0.65 + particle.maxHeight * 0.16 + Math.random() * 0.35;
+    particle.vz = (Math.random() - 0.5) * 0.12;
+    particle.life = Math.max(1, particle.maxHeight / Math.max(0.1, particle.vy)) + Math.random() * 0.25;
+    particle.age = 0;
+    particle.mesh.visible = true;
+    particle.mesh.scale.setScalar(0.7 + Math.random() * 0.8);
+  }
+
+  function updateSteamParticles(state) {
+    ensureSteamParticles();
+    if (!steamGroup) return;
+    const now = performance.now() * 0.001;
+    const dt = Math.min(0.05, lastSteamUpdate ? now - lastSteamUpdate : 0);
+    lastSteamUpdate = now;
+    const geysers = collectVisibleGeysers(state);
+    if (geysers.length > 0 && !state.pause.open) {
+      const spawnCount = Math.min(geysers.length * 2, 8);
+      for (let i = 0; i < spawnCount; i += 1) {
+        if (Math.random() > 0.72) continue;
+        spawnSteamParticle(geysers[Math.floor(Math.random() * geysers.length)]);
+      }
+    }
+    for (const particle of steamParticles) {
+      if (!particle.active) continue;
+      particle.age += dt;
+      particle.x += particle.vx * dt;
+      particle.y += particle.vy * dt;
+      particle.z += particle.vz * dt;
+      const height = particle.y - particle.baseY;
+      if (particle.age >= particle.life || height >= particle.maxHeight) {
+        particle.active = false;
+        particle.mesh.visible = false;
+        continue;
+      }
+      const fade = 1 - Math.max(0, height) / Math.max(0.1, particle.maxHeight);
+      particle.mesh.position.set(particle.x, particle.y, particle.z);
+      particle.mesh.scale.setScalar(Math.max(0.25, fade) * 1.25);
+    }
   }
 
   function getSheepMaterials() {
     if (!sheepMaterials) {
       sheepMaterials = {
-        wool: new THREE.MeshBasicMaterial({ color: 0xf2f0df }),
-        woolShade: new THREE.MeshBasicMaterial({ color: 0xd7d2bd }),
-        face: new THREE.MeshBasicMaterial({ color: 0x2f2b27 }),
-        leg: new THREE.MeshBasicMaterial({ color: 0x24211e }),
+        wool: new THREE.MeshBasicMaterial({ color: 0xd8d0b8 }),
+        woolLight: new THREE.MeshBasicMaterial({ color: 0xf0e8d2 }),
+        woolShade: new THREE.MeshBasicMaterial({ color: 0xa89b80 }),
+        face: new THREE.MeshBasicMaterial({ color: 0x3a3128 }),
+        leg: new THREE.MeshBasicMaterial({ color: 0x2a241e }),
       };
     }
     return sheepMaterials;
@@ -879,21 +1077,42 @@
     const mats = getSheepMaterials();
     const root = new THREE.Group();
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.58, 0.52), mats.wool);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.54, 0.5), mats.wool);
     body.position.set(0, 0.64, 0);
     root.add(body);
 
-    const bodyTop = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.16, 0.42), mats.woolShade);
+    const bodyTop = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.16, 0.42), mats.woolLight);
     bodyTop.position.set(-0.02, 0.99, 0);
     root.add(bodyTop);
+
+    const bodySide = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.28, 0.56), mats.woolShade);
+    bodySide.position.set(-0.35, 0.62, 0);
+    root.add(bodySide);
+
+    const rump = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.36, 0.44), mats.woolShade);
+    rump.position.set(-0.52, 0.66, 0);
+    root.add(rump);
 
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), mats.face);
     head.position.set(0.56, 0.72, 0);
     root.add(head);
+    root.userData.head = head;
 
-    const woolCap = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.16, 0.3), mats.wool);
+    const snout = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.24), mats.leg);
+    snout.position.set(0.76, 0.67, 0);
+    root.add(snout);
+
+    const woolCap = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.32), mats.woolLight);
     woolCap.position.set(0.56, 0.96, 0);
     root.add(woolCap);
+
+    const hornLeft = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.08), mats.woolShade);
+    hornLeft.position.set(0.52, 0.88, -0.2);
+    root.add(hornLeft);
+
+    const hornRight = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.08), mats.woolShade);
+    hornRight.position.set(0.52, 0.88, 0.2);
+    root.add(hornRight);
 
     const legGeometry = new THREE.BoxGeometry(0.12, 0.36, 0.12);
     for (const [x, z] of [[-0.28, -0.18], [-0.28, 0.18], [0.28, -0.18], [0.28, 0.18]]) {
@@ -925,7 +1144,7 @@
       }
       mesh.position.set(item.x, item.y, item.z);
       mesh.rotation.y = -(item.yaw || 0);
-      const head = mesh.children[2];
+      const head = mesh.userData && mesh.userData.head;
       if (head) head.rotation.z = item.eating ? -0.65 : 0;
       const cx = Math.floor(item.x / CHUNK_SIZE);
       const cz = Math.floor(item.z / CHUNK_SIZE);
@@ -1109,6 +1328,7 @@
     updateCracks(state);
     updateFluidTextureAnimation();
     updateSkyLayer(player);
+    updateSteamParticles(state);
     syncSheepMeshes(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];

@@ -4,29 +4,32 @@
   const { EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_RADIUS, REACH_DISTANCE } = Game.constants3d;
   const { getBlock3D, setBlock3D, inBounds3D, isSolidBlock3D } = Game.world3d;
 
+  const ITEM = {
+    SHEEP_SPAWN_EGG: -1,
+  };
+
   const HOTBAR_BLOCKS = [
     BLOCK.DIRT,
-    BLOCK.GRASS,
     BLOCK.STONE,
     BLOCK.WOOD,
     BLOCK.PLANK,
     BLOCK.WATER,
     BLOCK.SAND,
-    BLOCK.SANDSTONE,
+    ITEM.SHEEP_SPAWN_EGG,
     BLOCK.LEAF,
     BLOCK.LAVA,
   ];
   const BLOCK_LABELS = {
-    [BLOCK.GRASS]: 'Трава',
     [BLOCK.DIRT]: 'Земля',
     [BLOCK.STONE]: 'Камень',
     [BLOCK.WOOD]: 'Дерево',
     [BLOCK.LEAF]: 'Листья',
     [BLOCK.PLANK]: 'Доски',
     [BLOCK.WATER]: 'Вода',
+    [BLOCK.HOT_WATER]: 'Горячая вода',
     [BLOCK.LAVA]: 'Лава',
     [BLOCK.SAND]: 'Песок',
-    [BLOCK.SANDSTONE]: 'Песчаник',
+    [ITEM.SHEEP_SPAWN_EGG]: 'Яйцо призыва овцы',
     [BLOCK.TORCH]: 'Факел',
     [BLOCK.FURNACE]: 'Печь',
   };
@@ -66,9 +69,40 @@
           y: Math.max(-1, Math.min(1, previous.y - y)),
           z: Math.max(-1, Math.min(1, previous.z - z)),
         } : { x: 0, y: 1, z: 0 };
-        return { x, y, z, id, place: previous, normal };
+        return { x, y, z, id, place: previous, normal, distance };
       }
       previous = current;
+    }
+    return null;
+  }
+
+  function raycastSheep(state) {
+    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
+    if (!sheep.length) return null;
+    const player = state.player;
+    const dir = getLookDirection(player);
+    const origin = {
+      x: player.x,
+      y: player.y + EYE_HEIGHT,
+      z: player.z,
+    };
+    let best = null;
+    const step = 0.045;
+    for (let distance = 0; distance <= REACH_DISTANCE; distance += step) {
+      const px = origin.x + dir.x * distance;
+      const py = origin.y + dir.y * distance;
+      const pz = origin.z + dir.z * distance;
+      for (const item of sheep) {
+        const minX = item.x - 0.42;
+        const maxX = item.x + 0.42;
+        const minY = item.y;
+        const maxY = item.y + 1.08;
+        const minZ = item.z - 0.34;
+        const maxZ = item.z + 0.34;
+        if (px < minX || px > maxX || py < minY || py > maxY || pz < minZ || pz > maxZ) continue;
+        if (!best || distance < best.distance) best = { sheep: item, distance };
+      }
+      if (best) return best;
     }
     return null;
   }
@@ -109,13 +143,19 @@
   }
 
   function selectHotbarSlot(state, index) {
-    if (index < 0 || index >= HOTBAR_BLOCKS.length) return;
+    const size = Game.inventory3d && Game.inventory3d.HOTBAR_SIZE ? Game.inventory3d.HOTBAR_SIZE : HOTBAR_BLOCKS.length;
+    if (index < 0 || index >= size) return;
     state.player.selectedHotbarIndex = index;
-    state.player.selectedBlock = HOTBAR_BLOCKS[index] || BLOCK.AIR;
+    if (Game.inventory3d && Game.inventory3d.updateSelectedBlockFromHotbar) {
+      Game.inventory3d.updateSelectedBlockFromHotbar(state);
+    } else {
+      state.player.selectedBlock = BLOCK.AIR;
+    }
   }
 
   function updateSelectedBlock(state, input) {
-    for (let i = 0; i < HOTBAR_BLOCKS.length; i += 1) {
+    const size = Game.inventory3d && Game.inventory3d.HOTBAR_SIZE ? Game.inventory3d.HOTBAR_SIZE : HOTBAR_BLOCKS.length;
+    for (let i = 0; i < size; i += 1) {
       const key = i === 9 ? 'Digit0' : `Digit${i + 1}`;
       if (input.keys[key]) selectHotbarSlot(state, i);
     }
@@ -127,11 +167,18 @@
       setNotice(state, 'Бедрок нельзя добыть');
       return;
     }
+    const dropId = hit.id;
+    if (Game.inventory3d && Game.inventory3d.addMinedItem) {
+      const result = Game.inventory3d.addMinedItem(state, dropId, 1);
+      if (result.remaining > 0) {
+        if (state.world.blockDamage) delete state.world.blockDamage[targetKey(hit)];
+        setNotice(state, 'Инвентарь полон');
+        return;
+      }
+    }
     if (setBlock3D(state, hit.x, hit.y, hit.z, BLOCK.AIR)) {
       if (state.world.blockDamage) delete state.world.blockDamage[targetKey(hit)];
-      const hotbarIndex = HOTBAR_BLOCKS.indexOf(hit.id);
-      if (hotbarIndex >= 0) selectHotbarSlot(state, hotbarIndex);
-      setNotice(state, `Добыто: ${BLOCK_LABELS[hit.id] || 'Блок'}`);
+      setNotice(state, `Добыто: ${BLOCK_LABELS[dropId] || 'Блок'}`);
       if (Game.audio && Game.audio.playDig) Game.audio.playDig();
     }
   }
@@ -178,20 +225,44 @@
     }
   }
 
+  function attackTargetSheep(state, blockHit) {
+    const hit = raycastSheep(state);
+    if (!hit || !hit.sheep || !Game.entities3d || !Game.entities3d.damageSheep3D) return false;
+    if (blockHit && Number.isFinite(blockHit.distance) && hit.distance > blockHit.distance) return false;
+    const result = Game.entities3d.damageSheep3D(state, hit.sheep.id, 1, state.player.x, state.player.z);
+    if (!result.hit) return false;
+    resetMining(state);
+    setNotice(state, result.dead ? 'Овца погибла' : 'Овца ранена');
+    if (Game.audio && Game.audio.playDig) Game.audio.playDig();
+    return true;
+  }
+
   function placeSelectedBlock(state) {
     const hit = raycastBlock(state);
     if (!hit || !hit.place) return;
-    const blockId = state.player.selectedBlock;
+    const stack = Game.inventory3d && Game.inventory3d.getSelectedHotbarStack
+      ? Game.inventory3d.getSelectedHotbarStack(state)
+      : null;
+    const blockId = stack ? stack.id : BLOCK.AIR;
     if (!Number.isFinite(blockId) || blockId === BLOCK.AIR) return;
     const { x, y, z } = hit.place;
     if (!inBounds3D(state.world, x, y, z)) return;
+    const survival = !state.worldMeta || state.worldMeta.mode !== 'creative';
+    if (blockId === ITEM.SHEEP_SPAWN_EGG) {
+      if (Game.entities3d && Game.entities3d.spawnSheep3D && Game.entities3d.spawnSheep3D(state, x, y, z)) {
+        if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
+        setNotice(state, 'Призвана овца');
+      }
+      return;
+    }
     const targetId = getBlock3D(state, x, y, z);
-    if (targetId !== BLOCK.AIR && targetId !== BLOCK.WATER && targetId !== BLOCK.LAVA) return;
+    if (targetId !== BLOCK.AIR && targetId !== BLOCK.WATER && targetId !== BLOCK.HOT_WATER && targetId !== BLOCK.LAVA) return;
     if (blockOverlapsPlayer(state, x, y, z)) {
       setNotice(state, 'Нельзя поставить блок внутри себя');
       return;
     }
     if (setBlock3D(state, x, y, z, blockId)) {
+      if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
       setNotice(state, `Поставлено: ${BLOCK_LABELS[blockId] || 'Блок'}`);
     }
   }
@@ -209,6 +280,8 @@
   function updateInteraction3D(state, input, actions, dt) {
     updateSelectedBlock(state, input);
     const hit = raycastBlock(state);
+    const attackedSheep = actions.breakPressed && attackTargetSheep(state, hit);
+    if (attackedSheep) input.primaryDown = false;
     state.ui.targetBlock = hit ? { x: hit.x, y: hit.y, z: hit.z, id: hit.id, normal: hit.normal } : null;
     if (hit && (!state.ui.mineTarget || state.ui.mineTarget.key !== targetKey(hit))) {
       state.ui.mineProgress = (state.world.blockDamage && state.world.blockDamage[targetKey(hit)]) || 0;
@@ -219,10 +292,10 @@
       state.ui.noticeTimer = Math.max(0, state.ui.noticeTimer - dt);
       if (state.ui.noticeTimer === 0) state.ui.noticeText = '';
     }
-    updateMining(state, input, hit, dt);
+    if (!attackedSheep) updateMining(state, input, hit, dt);
     if (actions.repairPressed) repairTargetBlock(state, hit);
     if (actions.placePressed) placeSelectedBlock(state);
   }
 
-  Game.interaction3d = { updateInteraction3D, HOTBAR_BLOCKS, BLOCK_LABELS };
+  Game.interaction3d = { updateInteraction3D, HOTBAR_BLOCKS, BLOCK_LABELS, ITEM };
 })();

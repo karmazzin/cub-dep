@@ -122,7 +122,7 @@
     if (y === 0) return blockIds.BEDROCK;
     if (y <= h) {
       if (undergroundLavaAt(seed, x, y, z, h, world)) return blockIds.LAVA;
-      if (y === h) return h <= SEA_LEVEL + 1 ? blockIds.SAND : blockIds.GRASS;
+      if (y === h) return h <= SEA_LEVEL + 1 ? blockIds.SAND : blockIds.DIRT;
       if (y >= h - 3) return blockIds.DIRT;
       return blockIds.STONE;
     }
@@ -133,6 +133,12 @@
     return blockIds.AIR;
   }
 
+  function hasInitialGrass(seed, x, y, z, world, blockIds) {
+    return y === terrainHeight(seed, x, z)
+      && y > SEA_LEVEL + 1
+      && terrainBlockAt(seed, x, y + 1, z, world, blockIds) === blockIds.AIR;
+  }
+
   function localIndex(lx, ly, lz) {
     return lx + CHUNK_SIZE * (lz + CHUNK_SIZE * ly);
   }
@@ -141,6 +147,7 @@
     const { id, seed, world, blockIds, cx, cy, cz } = message;
     const blocks = new Uint16Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
     const fluidLevel = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
+    const grassLevel = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
     fluidLevel.fill(255);
 
     const minX = cx * CHUNK_SIZE;
@@ -157,11 +164,12 @@
           const block = terrainBlockAt(seed, x, y, z, world, blockIds);
           blocks[index] = block;
           if (block === blockIds.WATER || block === blockIds.LAVA) fluidLevel[index] = 0;
+          else if (block === blockIds.DIRT && hasInitialGrass(seed, x, y, z, world, blockIds)) grassLevel[index] = 1;
         }
       }
     }
 
-    self.postMessage({ id, cx, cy, cz, blocks, fluidLevel }, [blocks.buffer, fluidLevel.buffer]);
+    self.postMessage({ id, cx, cy, cz, blocks, fluidLevel, grassLevel }, [blocks.buffer, fluidLevel.buffer, grassLevel.buffer]);
   }
 
   self.onmessage = (event) => {
