@@ -167,7 +167,7 @@
 
     const nextLevel = source ? 1 : level + 1;
     if (nextLevel > maxLevel) return;
-    if (!isSupportForFluid(state, x, y - 1, z) && getBlock3D(state, x, y - 1, z) !== fluidId) return;
+    if (!isSupportForFluid(state, x, y - 1, z)) return;
     const dirs = ((x + y + z) & 1) ? SIDE_DIRS : [SIDE_DIRS[2], SIDE_DIRS[3], SIDE_DIRS[0], SIDE_DIRS[1]];
     for (const [dx, dz] of dirs) {
       const nx = x + dx;

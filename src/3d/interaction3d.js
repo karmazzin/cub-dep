@@ -6,9 +6,23 @@
 
   const ITEM = {
     SHEEP_SPAWN_EGG: -1,
+    BOAR_SPAWN_EGG: -2,
+    TURTLE_SPAWN_EGG: -3,
+    SNAKE_SPAWN_EGG: -4,
+    GOAT_SPAWN_EGG: -5,
+    FISH_SPAWN_EGG: -6,
   };
 
-  const HOTBAR_BLOCKS = [
+  const SPAWN_EGG_TYPES = {
+    [ITEM.SHEEP_SPAWN_EGG]: 'sheep',
+    [ITEM.BOAR_SPAWN_EGG]: 'boar',
+    [ITEM.TURTLE_SPAWN_EGG]: 'turtle',
+    [ITEM.SNAKE_SPAWN_EGG]: 'snake',
+    [ITEM.GOAT_SPAWN_EGG]: 'goat',
+    [ITEM.FISH_SPAWN_EGG]: 'fish',
+  };
+
+  const DEFAULT_HOTBAR_ITEMS = [
     BLOCK.DIRT,
     BLOCK.STONE,
     BLOCK.WOOD,
@@ -19,6 +33,17 @@
     BLOCK.LEAF,
     BLOCK.LAVA,
   ];
+
+  const CREATIVE_ITEMS = [
+    ...DEFAULT_HOTBAR_ITEMS,
+    ITEM.BOAR_SPAWN_EGG,
+    ITEM.TURTLE_SPAWN_EGG,
+    ITEM.SNAKE_SPAWN_EGG,
+    ITEM.GOAT_SPAWN_EGG,
+    ITEM.FISH_SPAWN_EGG,
+  ];
+  const HOTBAR_BLOCKS = DEFAULT_HOTBAR_ITEMS;
+
   const BLOCK_LABELS = {
     [BLOCK.DIRT]: 'Земля',
     [BLOCK.STONE]: 'Камень',
@@ -30,6 +55,11 @@
     [BLOCK.LAVA]: 'Лава',
     [BLOCK.SAND]: 'Песок',
     [ITEM.SHEEP_SPAWN_EGG]: 'Яйцо призыва овцы',
+    [ITEM.BOAR_SPAWN_EGG]: 'Яйцо призыва кабана',
+    [ITEM.TURTLE_SPAWN_EGG]: 'Яйцо призыва черепахи',
+    [ITEM.SNAKE_SPAWN_EGG]: 'Яйцо призыва змеи',
+    [ITEM.GOAT_SPAWN_EGG]: 'Яйцо призыва горного козла',
+    [ITEM.FISH_SPAWN_EGG]: 'Яйцо призыва рыбы',
     [BLOCK.TORCH]: 'Факел',
     [BLOCK.FURNACE]: 'Печь',
   };
@@ -93,12 +123,15 @@
       const py = origin.y + dir.y * distance;
       const pz = origin.z + dir.z * distance;
       for (const item of sheep) {
-        const minX = item.x - 0.42;
-        const maxX = item.x + 0.42;
+        const config = Game.entities3d && Game.entities3d.mobConfig ? Game.entities3d.mobConfig(item) : { radius: 0.42, height: 1.08 };
+        const radius = Math.max(0.22, (config.radius || 0.34) + 0.08);
+        const height = Math.max(0.25, config.height || 1.08);
+        const minX = item.x - radius;
+        const maxX = item.x + radius;
         const minY = item.y;
-        const maxY = item.y + 1.08;
-        const minZ = item.z - 0.34;
-        const maxZ = item.z + 0.34;
+        const maxY = item.y + height + 0.12;
+        const minZ = item.z - radius;
+        const maxZ = item.z + radius;
         if (px < minX || px > maxX || py < minY || py > maxY || pz < minZ || pz > maxZ) continue;
         if (!best || distance < best.distance) best = { sheep: item, distance };
       }
@@ -232,7 +265,8 @@
     const result = Game.entities3d.damageSheep3D(state, hit.sheep.id, 1, state.player.x, state.player.z);
     if (!result.hit) return false;
     resetMining(state);
-    setNotice(state, result.dead ? 'Овца погибла' : 'Овца ранена');
+    const label = MOB_LABELS[hit.sheep.type] || 'Моб';
+    setNotice(state, result.dead ? `${label} погиб` : `${label} ранен`);
     if (Game.audio && Game.audio.playDig) Game.audio.playDig();
     return true;
   }
@@ -248,10 +282,11 @@
     const { x, y, z } = hit.place;
     if (!inBounds3D(state.world, x, y, z)) return;
     const survival = !state.worldMeta || state.worldMeta.mode !== 'creative';
-    if (blockId === ITEM.SHEEP_SPAWN_EGG) {
-      if (Game.entities3d && Game.entities3d.spawnSheep3D && Game.entities3d.spawnSheep3D(state, x, y, z)) {
+    const mobType = SPAWN_EGG_TYPES[blockId];
+    if (mobType) {
+      if (Game.entities3d && Game.entities3d.spawnMob3D && Game.entities3d.spawnMob3D(state, mobType, x, y, z)) {
         if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
-        setNotice(state, 'Призвана овца');
+        setNotice(state, `Призван моб: ${MOB_LABELS[mobType] || 'Моб'}`);
       }
       return;
     }
@@ -297,5 +332,23 @@
     if (actions.placePressed) placeSelectedBlock(state);
   }
 
-  Game.interaction3d = { updateInteraction3D, HOTBAR_BLOCKS, BLOCK_LABELS, ITEM };
+  const MOB_LABELS = {
+    sheep: 'Овца',
+    boar: 'Кабан',
+    turtle: 'Черепаха',
+    snake: 'Змея',
+    goat: 'Горный козел',
+    fish: 'Рыба',
+  };
+
+  Game.interaction3d = {
+    updateInteraction3D,
+    HOTBAR_BLOCKS,
+    DEFAULT_HOTBAR_ITEMS,
+    CREATIVE_ITEMS,
+    BLOCK_LABELS,
+    ITEM,
+    SPAWN_EGG_TYPES,
+    MOB_LABELS,
+  };
 })();

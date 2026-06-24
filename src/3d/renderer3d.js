@@ -45,7 +45,7 @@
   const uvCorners = [[1, 0], [1, 1], [0, 1], [0, 0]];
   const SKY_COLOR = 0x87bfe8;
   const SKY_FOG_COLOR = 0x87bfe8;
-  const CLOUD_HEIGHT = 64;
+  const CLOUD_HEIGHT = 88;
   const CLOUD_CELL_SIZE = 76;
   const CLOUD_GRID_RADIUS = 2;
   const CLOUDS_PER_CELL = 4;
@@ -115,7 +115,7 @@
     if (id === B.WATER || id === B.HOT_WATER || id === B.STEAM_WATER) return 'water';
     if (id === B.LAVA || id === B.FIRE_PORTAL || id === B.AIR_DIMENSION_PORTAL || id === B.AIR_THIEF_PORTAL || id === B.AIR_HOME_PORTAL || id === B.ELEMENTAL_RETURN_PORTAL || id === B.END_GATE || id === B.WATER_DIMENSION_PORTAL) return 'glow';
     if (id === B.COAL_ORE || id === B.GOLD_ORE || id === B.IRON_ORE || id === B.DIAMOND_ORE || id === B.DEEP_ORE || id === B.FRIENDSHIP_ORE || id === B.STEAM_ORE || id === B.INVISIBLE_ORE) return 'ore';
-    if (id === B.TORCH || id === B.GOLDEN_FLOWER || id === B.EMBER_FLOWER || id === B.EMBER_SHRUB || id === B.GLOW_ALGAE || id === B.TALL_GLOW_ALGAE || id === B.SMALL_GLOW_MUSHROOM) return 'plant';
+    if (id === B.TORCH || id === B.GOLDEN_FLOWER || id === B.EMBER_FLOWER || id === B.EMBER_SHRUB || id === B.GLOW_ALGAE || id === B.TALL_GLOW_ALGAE || id === B.ALGAE || id === B.TALL_ALGAE || id === B.SMALL_GLOW_MUSHROOM) return 'plant';
     if (id === B.WHITE_MUSHROOM_STEM || id === B.WHITE_MUSHROOM_CAP || id === B.FLY_AGARIC_STEM || id === B.FLY_AGARIC_CAP || id === B.GLOW_MUSHROOM_STEM || id === B.GLOW_MUSHROOM_CAP || id === B.SMALL_WHITE_MUSHROOM || id === B.SMALL_FLY_AGARIC) return 'mushroom';
     if (id === B.PINK_CORAL || id === B.BLUE_CORAL || id === B.GOLD_CORAL || id === B.CORAL_STONE) return 'coral';
     if (id === B.WATER_CRYSTAL || id === B.AIR_CRYSTAL || id === B.ECHO_CORE || id === B.ROOT_CORE || id === B.FRIENDSHIP_AMULET) return 'crystal';
@@ -1073,7 +1073,94 @@
     return sheepMaterials;
   }
 
-  function createSheepMesh() {
+  function mat(color) {
+    return new THREE.MeshBasicMaterial({ color });
+  }
+
+  function createSimpleMobMesh(type) {
+    const root = new THREE.Group();
+    if (type === 'boar') {
+      const bodyMat = mat(0x5a3928);
+      const dark = mat(0x2f2018);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.42, 0.42), bodyMat);
+      body.position.set(0, 0.45, 0);
+      root.add(body);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.32, 0.34), dark);
+      head.position.set(0.6, 0.48, 0);
+      root.add(head);
+      root.userData.head = head;
+      for (const [x, z] of [[-0.32, -0.15], [-0.32, 0.15], [0.28, -0.15], [0.28, 0.15]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.28, 0.1), dark);
+        leg.position.set(x, 0.18, z);
+        root.add(leg);
+      }
+      return root;
+    }
+    if (type === 'turtle') {
+      const shell = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.22, 0.52), mat(0x42633b));
+      shell.position.set(0, 0.28, 0);
+      root.add(shell);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.18, 0.4), mat(0x6f7d45));
+      body.position.set(0.04, 0.18, 0);
+      root.add(body);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.16, 0.16), mat(0x7f8f50));
+      head.position.set(0.45, 0.2, 0);
+      root.add(head);
+      root.userData.head = head;
+      return root;
+    }
+    if (type === 'snake') {
+      const bodyMat = mat(0x6d7d2e);
+      for (let i = 0; i < 9; i += 1) {
+        const width = i === 8 ? 0.2 : 0.24;
+        const part = new THREE.Mesh(new THREE.BoxGeometry(width, 0.14, 0.18), bodyMat);
+        part.position.set(-0.52 + i * 0.15, 0.14, 0);
+        root.add(part);
+      }
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.22), mat(0x7f9138));
+      head.position.set(0.78, 0.16, 0);
+      root.add(head);
+      root.userData.head = head;
+      return root;
+    }
+    if (type === 'goat') {
+      const bodyMat = mat(0xb8b0a0);
+      const dark = mat(0x554838);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.42, 0.38), bodyMat);
+      body.position.set(0, 0.48, 0);
+      root.add(body);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.26), dark);
+      head.position.set(0.48, 0.62, 0);
+      root.add(head);
+      root.userData.head = head;
+      const hornA = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.05), mat(0xe8dfc6));
+      hornA.position.set(0.48, 0.82, -0.09);
+      root.add(hornA);
+      const hornB = hornA.clone();
+      hornB.position.z = 0.09;
+      root.add(hornB);
+      for (const [x, z] of [[-0.22, -0.13], [-0.22, 0.13], [0.24, -0.13], [0.24, 0.13]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, 0.08), dark);
+        leg.position.set(x, 0.2, z);
+        root.add(leg);
+      }
+      return root;
+    }
+    if (type === 'fish') {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, 0.2), mat(0xd18a3a));
+      body.position.set(0, 0.08, 0);
+      root.add(body);
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.24, 0.05), mat(0xb8662f));
+      tail.position.set(-0.28, 0.08, 0);
+      root.add(tail);
+      return root;
+    }
+    return null;
+  }
+
+  function createSheepMesh(type = 'sheep') {
+    const simple = createSimpleMobMesh(type);
+    if (simple) return simple;
     const mats = getSheepMaterials();
     const root = new THREE.Group();
 
@@ -1138,7 +1225,7 @@
       live.add(item.id);
       let mesh = sheepMeshes.get(item.id);
       if (!mesh) {
-        mesh = createSheepMesh();
+        mesh = createSheepMesh(item.type || 'sheep');
         sheepMeshes.set(item.id, mesh);
         scene.add(mesh);
       }

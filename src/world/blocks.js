@@ -91,6 +91,8 @@
     SEQUOIA_LEAF: 87,
     SEQUOIA_PLANK: 88,
     HOT_WATER: 89,
+    ALGAE: 90,
+    TALL_ALGAE: 91,
   };
 
   const BLOCK_COLORS = {
@@ -182,6 +184,8 @@
     [BLOCK.SEQUOIA_LEAF]: '#24533d',
     [BLOCK.SEQUOIA_PLANK]: '#884836',
     [BLOCK.HOT_WATER]: '#2879c8',
+    [BLOCK.ALGAE]: '#3e8f56',
+    [BLOCK.TALL_ALGAE]: '#2f7d4c',
   };
 
   const BREAK_TIME = {
@@ -273,6 +277,8 @@
     [BLOCK.WATER]: Infinity,
     [BLOCK.LAVA]: Infinity,
     [BLOCK.HOT_WATER]: Infinity,
+    [BLOCK.ALGAE]: 0.15,
+    [BLOCK.TALL_ALGAE]: 0.15,
   };
 
   const PLACEABLE = new Set([
@@ -330,6 +336,8 @@
     BLOCK.AIR_ENTRANCE_FRAME,
     BLOCK.INVISIBLE_ORE,
     BLOCK.TORCH,
+    BLOCK.ALGAE,
+    BLOCK.TALL_ALGAE,
     BLOCK.FURNACE,
   ]);
 

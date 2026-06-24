@@ -3,84 +3,92 @@
   const { BLOCK } = Game.blocks;
   const { getBlock3D, setBlock3D, getGrassLevel3D, setGrassLevel3D, inBounds3D, isSolidBlock3D } = Game.world3d;
 
-  const SHEEP_RADIUS = 0.34;
-  const SHEEP_HEIGHT = 0.86;
-  const SHEEP_SPEED = 0.85;
-  const SHEEP_GRAVITY = 18;
-  const SHEEP_EAT_TIME = 1.15;
-  const SHEEP_MAX_HEALTH = 4;
-  const SHEEP_STEP_JUMP_SPEED = 6.6;
-  const SHEEP_HIT_JUMP_SPEED = 4.2;
-  const SHEEP_PANIC_SPEED = 1.35;
+  const MOB_CONFIG = {
+    sheep: { health: 4, radius: 0.34, height: 0.86, speed: 0.85, panicSpeed: 1.35, gravity: 18, stepJump: 6.6, hitJump: 4.2, eatsGrass: true },
+    boar: { health: 5, radius: 0.4, height: 0.72, speed: 1.0, panicSpeed: 1.75, gravity: 18, stepJump: 6.2, hitJump: 4.0, pauseScale: 0.7 },
+    turtle: { health: 5, radius: 0.38, height: 0.42, speed: 0.34, panicSpeed: 0.62, gravity: 18, stepJump: 3.2, hitJump: 2.2, pauseScale: 1.8 },
+    snake: { health: 3, radius: 0.38, height: 0.25, speed: 0.72, panicSpeed: 1.15, gravity: 18, stepJump: 2.0, hitJump: 1.2, pauseScale: 0.8 },
+    goat: { health: 4, radius: 0.34, height: 0.82, speed: 1.05, panicSpeed: 1.8, gravity: 18, stepJump: 8.2, hitJump: 4.4, maxStepUp: 2 },
+    fish: { health: 2, radius: 0.25, height: 0.25, speed: 0.62, panicSpeed: 1.25, hitJump: 0.8, waterMob: true },
+  };
 
-  function initSheep(sheep) {
-    if (!Number.isFinite(sheep.vx)) sheep.vx = 0;
-    if (!Number.isFinite(sheep.vy)) sheep.vy = 0;
-    if (!Number.isFinite(sheep.vz)) sheep.vz = 0;
-    if (!Number.isFinite(sheep.walkTimer)) sheep.walkTimer = 0.8 + Math.random() * 2.2;
-    if (!Number.isFinite(sheep.pauseTimer)) sheep.pauseTimer = Math.random() * 1.4;
-    if (!Number.isFinite(sheep.eatCooldown)) sheep.eatCooldown = 2 + Math.random() * 5;
-    if (!Number.isFinite(sheep.eatTimer)) sheep.eatTimer = 0;
-    if (!Number.isFinite(sheep.jumpCooldown)) sheep.jumpCooldown = 0;
-    if (!Number.isFinite(sheep.panicTimer)) sheep.panicTimer = 0;
-    if (!Number.isFinite(sheep.health)) sheep.health = SHEEP_MAX_HEALTH;
-    if (typeof sheep.eating !== 'boolean') sheep.eating = false;
-    if (typeof sheep.onGround !== 'boolean') sheep.onGround = false;
+  function mobConfig(mob) {
+    return MOB_CONFIG[mob && mob.type] || MOB_CONFIG.sheep;
+  }
+
+  function initMob(mob) {
+    if (!mob.type) mob.type = 'sheep';
+    const config = mobConfig(mob);
+    if (!Number.isFinite(mob.vx)) mob.vx = 0;
+    if (!Number.isFinite(mob.vy)) mob.vy = 0;
+    if (!Number.isFinite(mob.vz)) mob.vz = 0;
+    if (!Number.isFinite(mob.walkTimer)) mob.walkTimer = 0.8 + Math.random() * 2.2;
+    if (!Number.isFinite(mob.pauseTimer)) mob.pauseTimer = Math.random() * 1.4;
+    if (!Number.isFinite(mob.eatCooldown)) mob.eatCooldown = 2 + Math.random() * 5;
+    if (!Number.isFinite(mob.eatTimer)) mob.eatTimer = 0;
+    if (!Number.isFinite(mob.jumpCooldown)) mob.jumpCooldown = 0;
+    if (!Number.isFinite(mob.panicTimer)) mob.panicTimer = 0;
+    if (!Number.isFinite(mob.health)) mob.health = config.health;
+    if (typeof mob.eating !== 'boolean') mob.eating = false;
+    if (typeof mob.onGround !== 'boolean') mob.onGround = false;
   }
 
   function isFluidBlock(id) {
     return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
   }
 
-  function isBlockingSheep(state, id) {
+  function isBlockingMob(id) {
     return isSolidBlock3D(id) || isFluidBlock(id);
   }
 
-  function overlapsBlocking(state, x, y, z) {
+  function overlapsBlocking(state, mob, x, y, z) {
     const world = state.world;
-    const minX = Math.floor(x - SHEEP_RADIUS);
-    const maxX = Math.floor(x + SHEEP_RADIUS);
+    const config = mobConfig(mob);
+    const radius = config.radius;
+    const height = config.height;
+    const minX = Math.floor(x - radius);
+    const maxX = Math.floor(x + radius);
     const minY = Math.floor(y);
-    const maxY = Math.floor(y + SHEEP_HEIGHT);
-    const minZ = Math.floor(z - SHEEP_RADIUS);
-    const maxZ = Math.floor(z + SHEEP_RADIUS);
+    const maxY = Math.floor(y + height);
+    const minZ = Math.floor(z - radius);
+    const maxZ = Math.floor(z + radius);
     for (let yy = minY; yy <= maxY; yy += 1) {
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           if (!inBounds3D(world, xx, yy, zz)) return true;
-          if (isBlockingSheep(state, getBlock3D(state, xx, yy, zz))) return true;
+          if (isBlockingMob(getBlock3D(state, xx, yy, zz))) return true;
         }
       }
     }
     return false;
   }
 
-  function moveAxis(state, sheep, axis, delta) {
+  function canOccupyAt(state, mob, x, y, z) {
+    return !overlapsBlocking(state, mob, x, y, z);
+  }
+
+  function moveAxis(state, mob, axis, delta) {
     if (delta === 0) return true;
-    const next = { x: sheep.x, y: sheep.y, z: sheep.z };
+    const next = { x: mob.x, y: mob.y, z: mob.z };
     next[axis] += delta;
-    if (!overlapsBlocking(state, next.x, next.y, next.z)) {
-      sheep[axis] = next[axis];
+    if (!overlapsBlocking(state, mob, next.x, next.y, next.z)) {
+      mob[axis] = next[axis];
       return true;
     }
     if (axis === 'y') {
-      if (delta < 0) sheep.onGround = true;
-      sheep.vy = 0;
+      if (delta < 0) mob.onGround = true;
+      mob.vy = 0;
     } else {
-      sheep[axis === 'x' ? 'vx' : 'vz'] = 0;
+      mob[axis === 'x' ? 'vx' : 'vz'] = 0;
     }
     return false;
   }
 
-  function canOccupySheepAt(state, x, y, z) {
-    return !overlapsBlocking(state, x, y, z);
-  }
-
-  function blockBelow(sheep) {
+  function blockBelow(mob) {
     return {
-      x: Math.floor(sheep.x),
-      y: Math.floor(sheep.y - 0.08),
-      z: Math.floor(sheep.z),
+      x: Math.floor(mob.x),
+      y: Math.floor(mob.y - 0.08),
+      z: Math.floor(mob.z),
     };
   }
 
@@ -90,140 +98,172 @@
     return isSolidBlock3D(id) && !isFluidBlock(id);
   }
 
-  function findSafeStepY(state, sheep, x, z) {
-    const baseY = Math.floor(sheep.y);
+  function findSafeStepY(state, mob, x, z) {
+    const config = mobConfig(mob);
+    const baseY = Math.floor(mob.y);
     const blockX = Math.floor(x);
     const blockZ = Math.floor(z);
     if (isFluidBlock(getBlock3D(state, blockX, baseY, blockZ))) return null;
-    if (canOccupySheepAt(state, x, baseY, z) && hasSafeSupport(state, blockX, baseY - 1, blockZ)) return baseY;
-    if (canOccupySheepAt(state, x, baseY - 1, z) && hasSafeSupport(state, blockX, baseY - 2, blockZ)) return baseY - 1;
-    if (canOccupySheepAt(state, x, baseY + 1, z) && hasSafeSupport(state, blockX, baseY, blockZ)) return baseY + 1;
+    if (canOccupyAt(state, mob, x, baseY, z) && hasSafeSupport(state, blockX, baseY - 1, blockZ)) return baseY;
+    if (canOccupyAt(state, mob, x, baseY - 1, z) && hasSafeSupport(state, blockX, baseY - 2, blockZ)) return baseY - 1;
+    if (canOccupyAt(state, mob, x, baseY + 1, z) && hasSafeSupport(state, blockX, baseY, blockZ)) return baseY + 1;
+    if ((config.maxStepUp || 1) >= 2 && canOccupyAt(state, mob, x, baseY + 2, z) && hasSafeSupport(state, blockX, baseY + 1, blockZ)) return baseY + 2;
     return null;
   }
 
-  function getSafeSheepStep(state, sheep, yaw) {
+  function getSafeStep(state, mob, yaw) {
     const ahead = 1.0;
-    const x = sheep.x + Math.cos(yaw) * ahead;
-    const z = sheep.z + Math.sin(yaw) * ahead;
-    const y = findSafeStepY(state, sheep, x, z);
+    const x = mob.x + Math.cos(yaw) * ahead;
+    const z = mob.z + Math.sin(yaw) * ahead;
+    const y = findSafeStepY(state, mob, x, z);
     return y === null ? null : { x, y, z };
   }
 
-  function isSafeSheepDirection(state, sheep, yaw) {
-    return getSafeSheepStep(state, sheep, yaw) !== null;
-  }
-
-  function tryStepJumpSheep(sheep) {
-    if (!sheep.onGround || sheep.eating || sheep.jumpCooldown > 0) return false;
-    sheep.vy = Math.max(sheep.vy, SHEEP_STEP_JUMP_SPEED);
-    sheep.onGround = false;
-    sheep.jumpCooldown = 0.5;
+  function tryStepJump(mob) {
+    const config = mobConfig(mob);
+    if (!mob.onGround || mob.eating || mob.jumpCooldown > 0) return false;
+    mob.vy = Math.max(mob.vy, config.stepJump);
+    mob.onGround = false;
+    mob.jumpCooldown = 0.5;
     return true;
   }
 
-  function hopFromHit(sheep) {
-    sheep.vy = Math.max(sheep.vy, SHEEP_HIT_JUMP_SPEED);
-    sheep.onGround = false;
-    sheep.jumpCooldown = Math.max(sheep.jumpCooldown || 0, 0.35);
+  function hopFromHit(mob) {
+    const config = mobConfig(mob);
+    mob.vy = Math.max(mob.vy, config.hitJump);
+    mob.onGround = false;
+    mob.jumpCooldown = Math.max(mob.jumpCooldown || 0, 0.35);
   }
 
-  function startEating(sheep) {
-    sheep.eating = true;
-    sheep.eatTimer = SHEEP_EAT_TIME;
-    sheep.pauseTimer = Math.max(sheep.pauseTimer || 0, SHEEP_EAT_TIME);
-    sheep.vx = 0;
-    sheep.vz = 0;
+  function startEating(mob) {
+    mob.eating = true;
+    mob.eatTimer = 1.15;
+    mob.pauseTimer = Math.max(mob.pauseTimer || 0, 1.15);
+    mob.vx = 0;
+    mob.vz = 0;
   }
 
-  function finishEating(state, sheep) {
-    const below = blockBelow(sheep);
+  function finishEating(state, mob) {
+    const below = blockBelow(mob);
     if (getBlock3D(state, below.x, below.y, below.z) === BLOCK.DIRT && getGrassLevel3D(state, below.x, below.y, below.z) > 0) {
       setGrassLevel3D(state, below.x, below.y, below.z, 0);
     }
-    sheep.eating = false;
-    sheep.eatTimer = 0;
-    sheep.eatCooldown = 6 + Math.random() * 10;
+    mob.eating = false;
+    mob.eatTimer = 0;
+    mob.eatCooldown = 6 + Math.random() * 10;
   }
 
-  function chooseDirection(state, sheep) {
-    const startYaw = sheep.yaw;
+  function chooseDirection(state, mob) {
+    const config = mobConfig(mob);
+    const startYaw = mob.yaw;
     let found = false;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const yaw = startYaw + (Math.random() - 0.5) * Math.PI * 1.8;
-      if (!isSafeSheepDirection(state, sheep, yaw)) continue;
-      sheep.yaw = yaw;
+      if (!getSafeStep(state, mob, yaw)) continue;
+      mob.yaw = yaw;
       found = true;
       break;
     }
     if (!found) {
-      sheep.yaw = startYaw + Math.PI * (0.65 + Math.random() * 0.7);
-      sheep.pauseTimer = 0.45 + Math.random() * 1.0;
+      mob.yaw = startYaw + Math.PI * (0.65 + Math.random() * 0.7);
+      mob.pauseTimer = 0.45 + Math.random();
     }
-    sheep.walkTimer = 1.2 + Math.random() * 3.2;
-    if (found) sheep.pauseTimer = Math.random() < 0.34 ? 0.6 + Math.random() * 1.8 : sheep.pauseTimer;
+    mob.walkTimer = (1.2 + Math.random() * 3.2) * (config.pauseScale || 1);
+    if (found) mob.pauseTimer = Math.random() < 0.34 ? (0.6 + Math.random() * 1.8) * (config.pauseScale || 1) : mob.pauseTimer;
   }
 
-  function updateSheep(state, sheep, dt) {
-    initSheep(sheep);
-    sheep.eatCooldown = Math.max(0, sheep.eatCooldown - dt);
-    sheep.jumpCooldown = Math.max(0, sheep.jumpCooldown - dt);
-    sheep.panicTimer = Math.max(0, sheep.panicTimer - dt);
+  function updateFish(state, fish, dt) {
+    initMob(fish);
+    const config = mobConfig(fish);
+    fish.panicTimer = Math.max(0, fish.panicTimer - dt);
+    fish.walkTimer -= dt;
+    const block = getBlock3D(state, Math.floor(fish.x), Math.floor(fish.y), Math.floor(fish.z));
+    if (block !== BLOCK.WATER) {
+      fish.y -= dt;
+      return;
+    }
+    if (fish.walkTimer <= 0) {
+      fish.yaw += (Math.random() - 0.5) * Math.PI * 1.6;
+      fish.vy = (Math.random() - 0.5) * 0.25;
+      fish.walkTimer = 1.0 + Math.random() * 2.4;
+    }
+    const speed = fish.panicTimer > 0 ? config.panicSpeed : config.speed;
+    const nx = fish.x + Math.cos(fish.yaw) * speed * dt;
+    const ny = fish.y + fish.vy * dt;
+    const nz = fish.z + Math.sin(fish.yaw) * speed * dt;
+    if (getBlock3D(state, Math.floor(nx), Math.floor(ny), Math.floor(nz)) === BLOCK.WATER) {
+      fish.x = nx;
+      fish.y = ny;
+      fish.z = nz;
+    } else {
+      fish.yaw += Math.PI * (0.5 + Math.random() * 0.5);
+      fish.vy *= -0.4;
+      fish.walkTimer = 0.4 + Math.random() * 0.6;
+    }
+  }
 
-    if (sheep.eating) {
-      sheep.eatTimer -= dt;
-      if (sheep.eatTimer <= 0) finishEating(state, sheep);
-    } else if (sheep.onGround && sheep.eatCooldown <= 0) {
-      const below = blockBelow(sheep);
-      if (getBlock3D(state, below.x, below.y, below.z) === BLOCK.DIRT && getGrassLevel3D(state, below.x, below.y, below.z) > 0) startEating(sheep);
-      else sheep.eatCooldown = 2 + Math.random() * 4;
+  function updateGroundMob(state, mob, dt) {
+    initMob(mob);
+    const config = mobConfig(mob);
+    mob.eatCooldown = Math.max(0, mob.eatCooldown - dt);
+    mob.jumpCooldown = Math.max(0, mob.jumpCooldown - dt);
+    mob.panicTimer = Math.max(0, mob.panicTimer - dt);
+
+    if (mob.eating) {
+      mob.eatTimer -= dt;
+      if (mob.eatTimer <= 0) finishEating(state, mob);
+    } else if (config.eatsGrass && mob.onGround && mob.eatCooldown <= 0) {
+      const below = blockBelow(mob);
+      if (getBlock3D(state, below.x, below.y, below.z) === BLOCK.DIRT && getGrassLevel3D(state, below.x, below.y, below.z) > 0) startEating(mob);
+      else mob.eatCooldown = 2 + Math.random() * 4;
     }
 
-    sheep.walkTimer -= dt;
-    sheep.pauseTimer = Math.max(0, sheep.pauseTimer - dt);
-    if (sheep.walkTimer <= 0) chooseDirection(state, sheep);
+    mob.walkTimer -= dt;
+    mob.pauseTimer = Math.max(0, mob.pauseTimer - dt);
+    if (mob.walkTimer <= 0) chooseDirection(state, mob);
 
-    const canWalk = !sheep.eating && (sheep.pauseTimer <= 0 || sheep.panicTimer > 0);
-    let step = canWalk ? getSafeSheepStep(state, sheep, sheep.yaw) : null;
-    let safeAhead = !!step;
-    if (canWalk && !safeAhead) {
-      chooseDirection(state, sheep);
-      step = sheep.pauseTimer <= 0 ? getSafeSheepStep(state, sheep, sheep.yaw) : null;
-      safeAhead = !!step;
+    const canWalk = !mob.eating && (mob.pauseTimer <= 0 || mob.panicTimer > 0);
+    let step = canWalk ? getSafeStep(state, mob, mob.yaw) : null;
+    if (canWalk && !step) {
+      chooseDirection(state, mob);
+      step = mob.pauseTimer <= 0 ? getSafeStep(state, mob, mob.yaw) : null;
     }
-    if (safeAhead && step.y > Math.floor(sheep.y)) tryStepJumpSheep(sheep);
-    const speed = canWalk && safeAhead ? (sheep.panicTimer > 0 ? SHEEP_PANIC_SPEED : SHEEP_SPEED) : 0;
-    sheep.vx = Math.cos(sheep.yaw) * speed;
-    sheep.vz = Math.sin(sheep.yaw) * speed;
+    if (step && step.y > Math.floor(mob.y)) tryStepJump(mob);
+    const speed = canWalk && step ? (mob.panicTimer > 0 ? config.panicSpeed : config.speed) : 0;
+    mob.vx = Math.cos(mob.yaw) * speed;
+    mob.vz = Math.sin(mob.yaw) * speed;
 
-    sheep.vy -= SHEEP_GRAVITY * dt;
-    sheep.onGround = false;
-    if (sheep.vy > 0) moveAxis(state, sheep, 'y', sheep.vy * dt);
-    const movedX = moveAxis(state, sheep, 'x', sheep.vx * dt);
-    const movedZ = moveAxis(state, sheep, 'z', sheep.vz * dt);
-    if (sheep.vy <= 0) moveAxis(state, sheep, 'y', sheep.vy * dt);
+    mob.vy -= config.gravity * dt;
+    mob.onGround = false;
+    if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    const movedX = moveAxis(state, mob, 'x', mob.vx * dt);
+    const movedZ = moveAxis(state, mob, 'z', mob.vz * dt);
+    if (mob.vy <= 0) moveAxis(state, mob, 'y', mob.vy * dt);
     if (canWalk && (!movedX || !movedZ)) {
-      sheep.yaw += Math.PI * (0.55 + Math.random() * 0.35);
-      sheep.walkTimer = 0.5 + Math.random();
+      mob.yaw += Math.PI * (0.55 + Math.random() * 0.35);
+      mob.walkTimer = 0.5 + Math.random();
     }
   }
 
-  function damageSheep3D(state, sheepId, amount = 1, sourceX = null, sourceZ = null) {
-    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : null;
-    if (!sheep) return { hit: false, dead: false };
-    const index = sheep.findIndex((item) => item.id === sheepId);
+  function updateMob(state, mob, dt) {
+    if (mobConfig(mob).waterMob) updateFish(state, mob, dt);
+    else updateGroundMob(state, mob, dt);
+  }
+
+  function damageSheep3D(state, mobId, amount = 1, sourceX = null, sourceZ = null) {
+    const mobs = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : null;
+    if (!mobs) return { hit: false, dead: false };
+    const index = mobs.findIndex((item) => item.id === mobId);
     if (index < 0) return { hit: false, dead: false };
-    const target = sheep[index];
-    initSheep(target);
+    const target = mobs[index];
+    initMob(target);
     target.health -= amount;
     if (target.health <= 0) {
-      sheep.splice(index, 1);
+      mobs.splice(index, 1);
       return { hit: true, dead: true };
     }
-    if (Number.isFinite(sourceX) && Number.isFinite(sourceZ)) {
-      target.yaw = Math.atan2(target.z - sourceZ, target.x - sourceX);
-    } else {
-      target.yaw += Math.PI;
-    }
+    if (Number.isFinite(sourceX) && Number.isFinite(sourceZ)) target.yaw = Math.atan2(target.z - sourceZ, target.x - sourceX);
+    else target.yaw += Math.PI;
     target.eating = false;
     target.eatTimer = 0;
     target.pauseTimer = 0;
@@ -233,36 +273,44 @@
     return { hit: true, dead: false };
   }
 
-  function spawnSheep3D(state, x, y, z) {
+  function spawnMob3D(state, type, x, y, z, id = null) {
     if (!state || !state.world || !state.entities) return false;
-    if (!inBounds3D(state.world, x, y, z)) return false;
-    if (getBlock3D(state, x, y, z) !== BLOCK.AIR) return false;
-    if (!hasSafeSupport(state, x, y - 1, z)) return false;
-    const sheep = {
-      id: `sheep-spawn-${Date.now().toString(36)}-${Math.floor(Math.random() * 100000).toString(36)}`,
-      type: 'sheep',
+    const mob = {
+      id: id || `${type}-spawn-${Date.now().toString(36)}-${Math.floor(Math.random() * 100000).toString(36)}`,
+      type,
       x: x + 0.5,
       y,
       z: z + 0.5,
       yaw: Math.random() * Math.PI * 2,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      walkTimer: 0.4 + Math.random() * 1.2,
-      pauseTimer: 0,
-      eatCooldown: 2 + Math.random() * 4,
-      onGround: false,
     };
-    if (!canOccupySheepAt(state, sheep.x, sheep.y, sheep.z)) return false;
+    initMob(mob);
+    if (mobConfig(mob).waterMob) {
+      if (getBlock3D(state, x, y, z) !== BLOCK.WATER) return false;
+    } else {
+      if (!inBounds3D(state.world, x, y, z)) return false;
+      if (getBlock3D(state, x, y, z) !== BLOCK.AIR) return false;
+      if (!hasSafeSupport(state, x, y - 1, z)) return false;
+      if (!canOccupyAt(state, mob, mob.x, mob.y, mob.z)) return false;
+    }
     if (!Array.isArray(state.entities.sheep)) state.entities.sheep = [];
-    state.entities.sheep.push(sheep);
+    state.entities.sheep.push(mob);
     return true;
   }
 
-  function updateEntities3D(state, dt) {
-    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
-    for (const item of sheep) updateSheep(state, item, dt);
+  function spawnSheep3D(state, x, y, z) {
+    return spawnMob3D(state, 'sheep', x, y, z);
   }
 
-  Game.entities3d = { updateEntities3D, spawnSheep3D, isSafeSheepDirection, damageSheep3D };
+  function updateEntities3D(state, dt) {
+    const mobs = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
+    for (const mob of mobs) updateMob(state, mob, dt);
+  }
+
+  Game.entities3d = {
+    updateEntities3D,
+    spawnSheep3D,
+    spawnMob3D,
+    damageSheep3D,
+    mobConfig,
+  };
 })();

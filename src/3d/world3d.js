@@ -291,7 +291,14 @@
   }
 
   function isSolidBlock3D(id) {
-    return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA && id !== BLOCK.TORCH;
+    return id !== BLOCK.AIR
+      && id !== BLOCK.WATER
+      && id !== BLOCK.HOT_WATER
+      && id !== BLOCK.LAVA
+      && id !== BLOCK.TORCH
+      && id !== BLOCK.DRY_BUSH
+      && id !== BLOCK.ALGAE
+      && id !== BLOCK.TALL_ALGAE;
   }
 
   function pruneKeySetInChunk(set, bounds) {
@@ -367,8 +374,9 @@
           const index = chunkLocalIndex3D(lx, ly, lz);
           const id = chunk.blocks[index];
           const sourceKey = `${x},${y},${z}`;
-          if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) world.waterSources.add(sourceKey);
-          else if (id === BLOCK.LAVA) world.lavaSources.add(sourceKey);
+          const level = chunk.fluidLevel[index];
+          if ((id === BLOCK.WATER || id === BLOCK.HOT_WATER) && level === 0) world.waterSources.add(sourceKey);
+          else if (id === BLOCK.LAVA && level === 0) world.lavaSources.add(sourceKey);
         }
       }
     }

@@ -28,7 +28,7 @@
   }
 
   function defaultHotbarItems() {
-    const hotbar = Game.interaction3d && Game.interaction3d.HOTBAR_BLOCKS;
+    const hotbar = Game.interaction3d && (Game.interaction3d.DEFAULT_HOTBAR_ITEMS || Game.interaction3d.HOTBAR_BLOCKS);
     return Array.isArray(hotbar) ? hotbar.filter((id) => Number.isFinite(id)).slice(0, HOTBAR_SIZE) : [];
   }
 
@@ -222,7 +222,8 @@
   }
 
   function creativeItems() {
-    return defaultHotbarItems();
+    const items = Game.interaction3d && Game.interaction3d.CREATIVE_ITEMS;
+    return Array.isArray(items) ? items.filter((id) => Number.isFinite(id)) : defaultHotbarItems();
   }
 
   function renderStack(stack) {

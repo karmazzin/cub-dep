@@ -14,7 +14,11 @@
     CHUNK_SAVE_BUDGET,
   } = Game.constants3d;
 
-  const SEA_LEVEL = 11;
+  const WATER_LEVEL = 14;
+  const SNOW_LEVEL = 48;
+  const DRY_MOUNTAIN_LEVEL = 36;
+  const BIOME_TRANSITION_RADIUS = 18;
+  const BIOME_TRANSITION_OFFSETS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
   let chunkWorker = null;
   let chunkWorkerAvailable = true;
   let nextWorkerJobId = 1;
@@ -51,10 +55,157 @@
     return (a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sz;
   }
 
+  function smoothstep(edge0, edge1, value) {
+    const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  function mountainNoise(seed, x, z) {
+    return smoothNoise(seed + 710, x / 170, z / 170);
+  }
+
+  function mountainStrength(seed, x, z) {
+    return smoothstep(0.56, 0.76, mountainNoise(seed, x, z));
+  }
+
+  function lowlandBiome(seed, x, z) {
+    const moisture = smoothNoise(seed + 721, x / 210, z / 210);
+    const heat = smoothNoise(seed + 733, x / 230, z / 230);
+    if (heat > 0.58 && moisture < 0.43) return 'desert';
+    if (moisture > 0.58) return 'forest';
+    return 'plains';
+  }
+
+  function baseLandBiome(seed, x, z) {
+    if (mountainStrength(seed, x, z) > 0.62) return 'mountains';
+    return lowlandBiome(seed, x, z);
+  }
+
+  function baseBiomeInfluence(seed, x, z, target, radius = BIOME_TRANSITION_RADIUS) {
+    let count = 0;
+    for (const [dx, dz] of BIOME_TRANSITION_OFFSETS) {
+      if (baseLandBiome(seed, x + dx * radius, z + dz * radius) === target) count += 1;
+    }
+    return count / BIOME_TRANSITION_OFFSETS.length;
+  }
+
+  function geyserValleyInfo(seed, x, z) {
+    if (mountainStrength(seed, x, z) < 0.58) return { inValley: false, edge: 99 };
+    const cellSize = 320;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    let best = null;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        if (noise2(seed + 2601, cx, cz) > 0.12) continue;
+        const centerX = cx * cellSize + Math.floor(cellSize * (0.28 + noise2(seed + 2603, cx, cz) * 0.44));
+        const centerZ = cz * cellSize + Math.floor(cellSize * (0.28 + noise2(seed + 2605, cx, cz) * 0.44));
+        if (mountainStrength(seed, centerX, centerZ) < 0.62) continue;
+        const radius = 22 + noise2(seed + 2607, cx, cz) * 34;
+        const edgeNoise = (smoothNoise(seed + 2609, x / 20, z / 20) - 0.5) * 8;
+        const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
+        if (dist > radius) continue;
+        const edge = radius - dist;
+        if (!best || edge > best.edge) best = { inValley: true, edge };
+      }
+    }
+    return best || { inValley: false, edge: 99 };
+  }
+
+  function dryTransitionSurface(seed, x, z, biome) {
+    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers') return BLOCK.AIR;
+    const desert = baseBiomeInfluence(seed, x, z, 'desert');
+    const green = baseBiomeInfluence(seed, x, z, 'plains') + baseBiomeInfluence(seed, x, z, 'forest');
+    const noise = smoothNoise(seed + 913, x / 5, z / 5);
+    if (biome === 'desert' && green > 0.12) {
+      if (noise < green * 0.18) return BLOCK.RED_EARTH;
+      return BLOCK.SAND;
+    }
+    if (biome !== 'desert' && desert > 0.12 && mountainStrength(seed, x, z) < 0.38) {
+      if (noise < desert * 0.34) return BLOCK.SAND;
+      if (noise < desert * 0.58) return BLOCK.RED_EARTH;
+    }
+    return BLOCK.AIR;
+  }
+
+  function lakeInfo(seed, x, z) {
+    if (mountainStrength(seed, x, z) > 0.5) return { inLake: false, shore: false, depth: 0, edge: 99 };
+    const cellSize = 256;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    let best = null;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        const roll = noise2(seed + 811, cx, cz);
+        if (roll > 0.46) continue;
+        const large = noise2(seed + 812, cx, cz);
+        const radius = large > 0.9
+          ? 80 + noise2(seed + 813, cx, cz) * 80
+          : (large > 0.55 ? 44 + noise2(seed + 814, cx, cz) * 42 : 24 + noise2(seed + 815, cx, cz) * 18);
+        const centerX = cx * cellSize + Math.floor(cellSize * (0.25 + noise2(seed + 816, cx, cz) * 0.5));
+        const centerZ = cz * cellSize + Math.floor(cellSize * (0.25 + noise2(seed + 817, cx, cz) * 0.5));
+        const edgeNoise = (smoothNoise(seed + 818, x / 28, z / 28) - 0.5) * 10;
+        const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
+        if (dist > radius + 10) continue;
+        const score = dist - radius;
+        if (!best || score < best.score) best = { score, dist, radius, centerX, centerZ };
+      }
+    }
+    if (!best) return { inLake: false, shore: false, depth: 0, edge: 99 };
+    const rimRadius = Math.ceil(best.radius + 11);
+    const rimOffsets = [[rimRadius, 0], [-rimRadius, 0], [0, rimRadius], [0, -rimRadius], [rimRadius, rimRadius], [rimRadius, -rimRadius], [-rimRadius, rimRadius], [-rimRadius, -rimRadius]];
+    let lowRimCount = 0;
+    for (const [rx, rz] of rimOffsets) {
+      if (terrainHeight(seed, best.centerX + rx, best.centerZ + rz) <= WATER_LEVEL) lowRimCount += 1;
+    }
+    if (lowRimCount > 1) return { inLake: false, shore: false, depth: 0, edge: 99 };
+    const edge = best.radius - best.dist;
+    if (edge >= 0) {
+      const depth = Math.max(1, Math.min(7, Math.floor(1 + 6 * Math.min(1, edge / Math.max(1, best.radius * 0.38)))));
+      return { inLake: true, shore: false, depth, edge };
+    }
+    return { inLake: false, shore: best.dist <= best.radius + 10, depth: 0, edge };
+  }
+
   function terrainHeight(seed, x, z) {
-    const broad = smoothNoise(seed, x / 18, z / 18);
-    const detail = smoothNoise(seed + 91, x / 6, z / 6);
-    return Math.max(4, Math.min(24, Math.floor(10 + broad * 9 + detail * 3)));
+    const biome = lowlandBiome(seed, x, z);
+    const broad = smoothNoise(seed, x / 22, z / 22);
+    const detail = smoothNoise(seed + 91, x / 7, z / 7);
+    const lowland = biome === 'forest'
+      ? 11 + broad * 8 + detail * 3
+      : 10 + broad * 7 + detail * 2;
+    const ridge = smoothNoise(seed + 97, x / 36, z / 36);
+    const mountain = 18 + broad * 22 + ridge * 18 + detail * 4;
+    const cliffBoost = smoothNoise(seed + 739, x / 55, z / 55) > 0.82 ? 0.16 : 0;
+    const strength = Math.min(1, mountainStrength(seed, x, z) + cliffBoost * mountainStrength(seed, x, z));
+    return Math.max(5, Math.min(58, Math.floor(lowland * (1 - strength) + mountain * strength)));
+  }
+
+  function biomeAt(seed, x, z) {
+    const lake = lakeInfo(seed, x, z);
+    if (lake.inLake) return 'lake';
+    if (lake.shore) return 'beach';
+    if (geyserValleyInfo(seed, x, z).inValley) return 'geysers';
+    return baseLandBiome(seed, x, z);
+  }
+
+  const BIOME_LABELS = {
+    plains: 'Равнина',
+    forest: 'Лес',
+    desert: 'Пустыня',
+    mountains: 'Горы',
+    lake: 'Озеро',
+    beach: 'Пляж',
+    geysers: 'Долина гейзеров',
+  };
+
+  function getBiomeAt3D(state, x, z) {
+    if (!state || !state.worldMeta) return 'plains';
+    return biomeAt(worldSeed(state), Math.floor(x), Math.floor(z));
   }
 
   function featureCenter(seed, x, z, cellSize, salt) {
@@ -114,10 +265,12 @@
       chance: 0.018,
       minRadius: 1.35,
       radiusRange: 1.1,
-      minHeight: SEA_LEVEL + 3,
+      minHeight: WATER_LEVEL + 3,
       spawnDistance: 18,
     });
     if (lava !== BLOCK.AIR) return lava;
+
+    if (mountainStrength(seed, x, z) > 0.38) return BLOCK.AIR;
 
     return basinLiquidAt(seed, x, y, z, h, world, {
       block: BLOCK.WATER,
@@ -128,7 +281,7 @@
       chance: 0.04,
       minRadius: 1.8,
       radiusRange: 1.7,
-      minHeight: SEA_LEVEL + 2,
+      minHeight: WATER_LEVEL + 2,
       spawnDistance: 18,
     });
   }
@@ -152,23 +305,50 @@
 
   function terrainBlockAt(seed, x, y, z, world = null) {
     const h = terrainHeight(seed, x, z);
+    const lake = lakeInfo(seed, x, z);
+    const biome = lake.inLake ? 'lake' : (lake.shore ? 'beach' : (geyserValleyInfo(seed, x, z).inValley ? 'geysers' : baseLandBiome(seed, x, z)));
+    const groundH = lake.inLake ? WATER_LEVEL - lake.depth : h;
     if (y === 0) return BLOCK.BEDROCK;
-    if (y <= h) {
-      if (undergroundLavaAt(seed, x, y, z, h, world)) return BLOCK.LAVA;
-      if (y === h) return h <= SEA_LEVEL + 1 ? BLOCK.SAND : BLOCK.DIRT;
-      if (y >= h - 3) return BLOCK.DIRT;
+    if (y <= groundH) {
+      if (undergroundLavaAt(seed, x, y, z, groundH, world)) return BLOCK.LAVA;
+      if (lake.inLake) {
+        if (y >= groundH - 1) return BLOCK.SAND;
+        return BLOCK.STONE;
+      }
+      if (biome === 'beach') return y >= groundH - 2 ? BLOCK.SAND : BLOCK.STONE;
+      if (biome === 'desert') {
+        if (y === groundH) {
+          const transition = dryTransitionSurface(seed, x, z, biome);
+          return transition !== BLOCK.AIR ? transition : BLOCK.SAND;
+        }
+        return y >= groundH - 4 ? BLOCK.SAND : BLOCK.STONE;
+      }
+      if (biome === 'mountains' || biome === 'geysers') {
+        if (y === groundH && y >= SNOW_LEVEL) return BLOCK.SNOW;
+        if (y >= groundH - 1 && y >= DRY_MOUNTAIN_LEVEL) return BLOCK.RED_EARTH;
+        if (y >= groundH - 2 && y < DRY_MOUNTAIN_LEVEL) return BLOCK.DIRT;
+        return BLOCK.STONE;
+      }
+      if (y === groundH) {
+        const transition = dryTransitionSurface(seed, x, z, biome);
+        if (transition !== BLOCK.AIR) return transition;
+        return BLOCK.DIRT;
+      }
+      if (y >= groundH - 3) return BLOCK.DIRT;
       return BLOCK.STONE;
     }
     if (world && (x <= 0 || x >= world.w - 1 || z <= 0 || z >= world.d - 1)) return BLOCK.AIR;
+    if (lake.inLake && y <= WATER_LEVEL) return BLOCK.WATER;
     const surfaceLiquid = surfaceLiquidAt(seed, x, y, z, h, world);
     if (surfaceLiquid !== BLOCK.AIR) return surfaceLiquid;
-    if (h < SEA_LEVEL && y <= SEA_LEVEL) return BLOCK.WATER;
     return BLOCK.AIR;
   }
 
   function hasInitialGrass(seed, x, y, z, world) {
+    const biome = biomeAt(seed, x, z);
     return y === terrainHeight(seed, x, z)
-      && y > SEA_LEVEL + 1
+      && (biome === 'plains' || biome === 'forest')
+      && dryTransitionSurface(seed, x, z, biome) === BLOCK.AIR
       && terrainBlockAt(seed, x, y + 1, z, world) === BLOCK.AIR;
   }
 
@@ -444,7 +624,7 @@
         for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
           for (let x = bounds.minX; x < bounds.maxX; x += 1) {
             const block = terrainBlockAt(seed, x, y, z, state.world);
-            if (block === BLOCK.WATER) setWater3D(state, x, y, z, 0, true);
+            if (block === BLOCK.WATER) setWater3D(state, x, y, z, 1, false);
             else if (block === BLOCK.LAVA) setLava3D(state, x, y, z, 0, true);
             else {
               setBlock3D(state, x, y, z, block);
@@ -525,15 +705,74 @@
     return true;
   }
 
-  function canPlaceSheep(state, x, groundY, z) {
+  function placeCactus(state, seed, x, groundY, z) {
+    if (getBlock3D(state, x, groundY, z) !== BLOCK.SAND) return false;
+    const height = 2 + Math.floor(noise2(seed + 1801, x, z) * 3);
+    if (groundY + height >= state.world.h) return false;
+    for (let y = groundY + 1; y <= groundY + height; y += 1) {
+      if (getBlock3D(state, x, y, z) !== BLOCK.AIR) return false;
+    }
+    for (let y = groundY + 1; y <= groundY + height; y += 1) setBlock3D(state, x, y, z, BLOCK.CACTUS);
+    return true;
+  }
+
+  function placeDryBush(state, x, groundY, z) {
+    if (getBlock3D(state, x, groundY, z) !== BLOCK.SAND) return false;
+    if (getBlock3D(state, x, groundY + 1, z) !== BLOCK.AIR) return false;
+    return setBlock3D(state, x, groundY + 1, z, BLOCK.DRY_BUSH);
+  }
+
+  function placeAlgae(state, seed, x, groundY, z) {
+    if (getBlock3D(state, x, groundY, z) !== BLOCK.SAND) return false;
+    if (getBlock3D(state, x, groundY + 1, z) !== BLOCK.WATER) return false;
+    if (getBlock3D(state, x, groundY + 2, z) !== BLOCK.WATER) return false;
+    const tall = noise2(seed + 1901, x, z) > 0.68 && getBlock3D(state, x, groundY + 3, z) === BLOCK.WATER;
+    setBlock3D(state, x, groundY + 1, z, tall ? BLOCK.TALL_ALGAE : BLOCK.ALGAE);
+    if (tall) setBlock3D(state, x, groundY + 2, z, BLOCK.TALL_ALGAE);
+    return true;
+  }
+
+  function placeGeyser(state, x, groundY, z) {
+    if (groundY < 4 || groundY + 2 >= state.world.h) return false;
+    const ground = getBlock3D(state, x, groundY, z);
+    if (ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW) return false;
+    if (getBlock3D(state, x, groundY + 1, z) !== BLOCK.AIR) return false;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dz === 0) continue;
+        if (getBlock3D(state, x + dx, groundY + 1, z + dz) !== BLOCK.AIR) return false;
+      }
+    }
+    const wallBlock = ground === BLOCK.SNOW ? BLOCK.STONE : ground;
+    setBlock3D(state, x, groundY - 3, z, BLOCK.LAVA);
+    setBlock3D(state, x, groundY - 2, z, BLOCK.STONE);
+    setBlock3D(state, x, groundY - 1, z, BLOCK.HOT_WATER);
+    setBlock3D(state, x, groundY, z, BLOCK.AIR);
+    setBlock3D(state, x, groundY + 1, z, BLOCK.AIR);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dz === 0) continue;
+        setBlock3D(state, x + dx, groundY - 1, z + dz, wallBlock);
+        setBlock3D(state, x + dx, groundY, z + dz, wallBlock);
+      }
+    }
+    return true;
+  }
+
+  function canPlaceGroundMob(state, type, x, groundY, z) {
     const world = state.world;
     if (x < 2 || x >= world.w - 2 || z < 2 || z >= world.d - 2) return false;
     if (!farFromSpawn(world, x, z, 18)) return false;
-    if (getBlock3D(state, x, groundY, z) !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) return false;
+    const ground = getBlock3D(state, x, groundY, z);
+    if (type === 'sheep' && (ground !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0)) return false;
+    if (type === 'boar' && ground !== BLOCK.DIRT && ground !== BLOCK.RED_EARTH) return false;
+    if (type === 'turtle' && ground !== BLOCK.SAND) return false;
+    if (type === 'snake' && ground !== BLOCK.SAND && ground !== BLOCK.RED_EARTH) return false;
+    if (type === 'goat' && ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW && ground !== BLOCK.DIRT) return false;
     return getBlock3D(state, x, groundY + 1, z) === BLOCK.AIR && getBlock3D(state, x, groundY + 2, z) === BLOCK.AIR;
   }
 
-  function findSheepGround(state, centerX, centerZ) {
+  function findGroundMobPlace(state, type, centerX, centerZ) {
     const world = state.world;
     for (let radius = 0; radius <= 3; radius += 1) {
       for (let dz = -radius; dz <= radius; dz += 1) {
@@ -543,7 +782,7 @@
           const z = centerZ + dz;
           if (x < 2 || x >= world.w - 2 || z < 2 || z >= world.d - 2) continue;
           for (let y = world.h - 2; y >= 1; y -= 1) {
-            if (canPlaceSheep(state, x, y, z)) return { x, y, z };
+            if (canPlaceGroundMob(state, type, x, y, z)) return { x, y, z };
             if (getBlock3D(state, x, y, z) !== BLOCK.AIR) break;
           }
         }
@@ -552,16 +791,56 @@
     return null;
   }
 
-  function hasSheep(state, id) {
+  function hasMob(state, id) {
     const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
     return sheep.some((item) => item.id === id);
   }
 
-  function generateSheepForColumn(state, seed, cx, cz, bounds) {
+  function mobForBiome(biome) {
+    if (biome === 'plains') return { type: 'sheep', chance: 0.12, cellSize: 18 };
+    if (biome === 'forest') return { type: 'boar', chance: 0.08, cellSize: 20 };
+    if (biome === 'beach') return { type: 'turtle', chance: 0.075, cellSize: 18 };
+    if (biome === 'desert') return { type: 'snake', chance: 0.07, cellSize: 20 };
+    if (biome === 'mountains') return { type: 'goat', chance: 0.075, cellSize: 22 };
+    if (biome === 'lake') return { type: 'fish', chance: 0.2, cellSize: 16 };
+    return null;
+  }
+
+  function mobForPosition(seed, x, z) {
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'geysers') return null;
+    const forest = baseBiomeInfluence(seed, x, z, 'forest');
+    const plains = baseBiomeInfluence(seed, x, z, 'plains');
+    const desert = baseBiomeInfluence(seed, x, z, 'desert');
+    const roll = noise2(seed + 2311, Math.floor(x / 16), Math.floor(z / 16));
+    if (biome === 'plains' && forest > 0.18 && roll < forest * 0.4) return { type: 'boar', chance: 0.05, cellSize: 20 };
+    if (biome === 'forest' && plains > 0.18 && roll < plains * 0.45) return { type: 'sheep', chance: 0.075, cellSize: 18 };
+    if (biome === 'beach' && desert > 0.22 && roll < desert * 0.32) return { type: 'snake', chance: 0.05, cellSize: 20 };
+    if (biome === 'desert' && plains + forest > 0.22 && roll < (plains + forest) * 0.18) return { type: 'sheep', chance: 0.045, cellSize: 18 };
+    return mobForBiome(biome);
+  }
+
+  function findFishPlace(state, centerX, centerZ) {
+    for (let radius = 0; radius <= 4; radius += 1) {
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          const x = centerX + dx;
+          const z = centerZ + dz;
+          for (let y = WATER_LEVEL - 1; y >= Math.max(1, WATER_LEVEL - 6); y -= 1) {
+            if (getBlock3D(state, x, y, z) === BLOCK.WATER && getBlock3D(state, x, y - 1, z) === BLOCK.WATER) return { x, y, z };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function generateMobsForColumn(state, seed, cx, cz, bounds) {
     if (!state.entities) state.entities = {};
     if (!Array.isArray(state.entities.sheep)) state.entities.sheep = [];
 
-    const cellSize = 18;
+    const cellSize = 16;
     const minCellX = Math.floor(bounds.minX / cellSize);
     const maxCellX = Math.floor((bounds.maxX - 1) / cellSize);
     const minCellZ = Math.floor(bounds.minZ / cellSize);
@@ -569,24 +848,44 @@
 
     for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
       for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
-        if (noise2(seed + 2301, cellX, cellZ) > 0.08) continue;
+        const sampleX = cellX * cellSize + Math.floor(cellSize * 0.5);
+        const sampleZ = cellZ * cellSize + Math.floor(cellSize * 0.5);
+        const info = mobForPosition(seed, sampleX, sampleZ);
+        if (!info) continue;
+        if (noise2(seed + 2301, cellX, cellZ) > info.chance) continue;
         const x = cellX * cellSize + Math.floor(4 + noise2(seed + 2303, cellX, cellZ) * (cellSize - 8));
         const z = cellZ * cellSize + Math.floor(4 + noise2(seed + 2305, cellX, cellZ) * (cellSize - 8));
         if (x < bounds.minX || x >= bounds.maxX || z < bounds.minZ || z >= bounds.maxZ) continue;
-        const id = `sheep-${cellX}-${cellZ}`;
-        if (hasSheep(state, id)) continue;
-        const ground = findSheepGround(state, x, z);
-        if (!ground) continue;
-        state.entities.sheep.push({
-          id,
-          type: 'sheep',
-          x: ground.x + 0.5,
-          y: ground.y + 1,
-          z: ground.z + 0.5,
-          yaw: noise2(seed + 2307, cellX, cellZ) * Math.PI * 2,
-        });
+        const id = `${info.type}-${cellX}-${cellZ}`;
+        if (hasMob(state, id)) continue;
+        const herdSize = 1 + (noise2(seed + 2313, cellX, cellZ) < 0.34 ? 1 : 0) + (noise2(seed + 2315, cellX, cellZ) < 0.12 ? 1 : 0);
+        for (let i = 0; i < herdSize; i += 1) {
+          const ox = i === 0 ? 0 : Math.floor(noise2(seed + 2321 + i, cellX, cellZ) * 5) - 2;
+          const oz = i === 0 ? 0 : Math.floor(noise2(seed + 2331 + i, cellX, cellZ) * 5) - 2;
+          const place = info.type === 'fish' ? findFishPlace(state, x + ox, z + oz) : findGroundMobPlace(state, info.type, x + ox, z + oz);
+          if (!place) continue;
+          const mobId = i === 0 ? id : `${id}-${i}`;
+          if (hasMob(state, mobId)) continue;
+          if (Game.entities3d && Game.entities3d.spawnMob3D) {
+            Game.entities3d.spawnMob3D(state, info.type, place.x, info.type === 'fish' ? place.y : place.y + 1, place.z, mobId);
+          }
+        }
       }
     }
+  }
+
+  function treeChanceAt(seed, x, z, biome) {
+    if (biome === 'lake' || biome === 'beach' || biome === 'desert' || biome === 'mountains' || biome === 'geysers') return 0;
+    const forest = baseBiomeInfluence(seed, x, z, 'forest', 22);
+    const desert = baseBiomeInfluence(seed, x, z, 'desert', 20);
+    if (desert > 0.18) return 0;
+    return 0.003 + forest * 0.082;
+  }
+
+  function desertDecorationStrength(seed, x, z, biome) {
+    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers') return 0;
+    if (biome === 'desert') return Math.max(0.55, baseBiomeInfluence(seed, x, z, 'desert'));
+    return Math.max(0, baseBiomeInfluence(seed, x, z, 'desert') - 0.16);
   }
 
   function decorateColumn3D(state, seed, cx, cz) {
@@ -608,7 +907,7 @@
     try {
       for (let x = Math.max(4, bounds.minX); x < Math.min(world.w - 4, bounds.maxX); x += 1) {
         for (let z = Math.max(4, bounds.minZ); z < Math.min(world.d - 4, bounds.maxZ); z += 1) {
-          if (noise2(seed + 303, x, z) > 0.028) continue;
+          const biome = biomeAt(seed, x, z);
           let groundY = 0;
           for (let y = world.h - 2; y >= 1; y -= 1) {
             if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
@@ -616,14 +915,27 @@
               break;
             }
           }
-          placeTree(state, seed, x, groundY, z);
+          const treeChance = treeChanceAt(seed, x, z, biome);
+          const desertDecor = desertDecorationStrength(seed, x, z, biome);
+          if (treeChance > 0 && noise2(seed + 303, x, z) <= treeChance) {
+            placeTree(state, seed, x, groundY, z);
+          } else if (desertDecor > 0) {
+            if (noise2(seed + 305, x, z) <= 0.0014 * desertDecor) placeCactus(state, seed, x, groundY, z);
+            else if (noise2(seed + 306, x, z) <= 0.013 * desertDecor) placeDryBush(state, x, groundY, z);
+          } else if (biome === 'lake') {
+            if (noise2(seed + 307, x, z) <= 0.008) placeAlgae(state, seed, x, groundY, z);
+          } else if (biome === 'geysers') {
+            if (noise2(seed + 309, x, z) <= 0.012) placeGeyser(state, x, groundY, z);
+          } else if (biome === 'mountains') {
+            if (noise2(seed + 308, x, z) <= 0.0018) placeGeyser(state, x, groundY, z);
+          }
         }
       }
     } finally {
       world.suppressChunkModification -= 1;
     }
 
-    generateSheepForColumn(state, seed, cx, cz, bounds);
+    generateMobsForColumn(state, seed, cx, cz, bounds);
     world.decoratedColumns.add(key);
     return true;
   }
@@ -803,5 +1115,12 @@
     state.world.dirtyAll = false;
   }
 
-  Game.generation3d = { generateWorld3D, generateChunk3D, ensureChunksAroundPlayer3D, unloadDistantChunks3D };
+  Game.generation3d = {
+    generateWorld3D,
+    generateChunk3D,
+    ensureChunksAroundPlayer3D,
+    unloadDistantChunks3D,
+    getBiomeAt3D,
+    BIOME_LABELS,
+  };
 })();

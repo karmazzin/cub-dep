@@ -72,11 +72,11 @@
   }
 
   function drawItemIcon(ctx, id, x, y, slot) {
-    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    const eggTypes = Game.interaction3d && Game.interaction3d.SPAWN_EGG_TYPES;
     const colors = Game.blocks && Game.blocks.BLOCK_COLORS;
     const block = Game.blocks && Game.blocks.BLOCK;
-    if (item && id === item.SHEEP_SPAWN_EGG) {
-      drawSheepEggIcon(ctx, x, y, slot);
+    if (eggTypes && eggTypes[id]) {
+      drawSpawnEggIcon(ctx, x, y, slot, eggTypes[id]);
       return;
     }
     if (!Number.isFinite(id) || !block || id === block.AIR) return;
@@ -91,27 +91,50 @@
     }
   }
 
-  function drawSheepEggIcon(ctx, x, y, slot) {
+  function spawnEggColors(type) {
+    const palette = {
+      sheep: ['#d8d0b8', '#f3ead3', '#8b6a42'],
+      boar: ['#7b4b31', '#b0734e', '#2b1b14'],
+      turtle: ['#5e8d4f', '#9dc36a', '#30442d'],
+      snake: ['#c4a23f', '#6d7f2f', '#2f2a19'],
+      goat: ['#b4afa0', '#ece5d4', '#5f594f'],
+      fish: ['#4fa0b8', '#a7e1e4', '#23516a'],
+    };
+    return palette[type] || palette.sheep;
+  }
+
+  function drawSpawnEggIcon(ctx, x, y, slot, type) {
+    const [base, spot, dark] = spawnEggColors(type);
     const cx = x + slot * 0.5;
     const cy = y + slot * 0.55;
     const w = slot * 0.38;
     const h = slot * 0.52;
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = '#d8d0b8';
+    ctx.fillStyle = base;
     ctx.fillRect(Math.round(cx - w * 0.35), Math.round(cy - h * 0.5), Math.round(w * 0.7), Math.round(h * 0.18));
     ctx.fillRect(Math.round(cx - w * 0.5), Math.round(cy - h * 0.32), Math.round(w), Math.round(h * 0.64));
     ctx.fillRect(Math.round(cx - w * 0.34), Math.round(cy + h * 0.32), Math.round(w * 0.68), Math.round(h * 0.2));
-    ctx.fillStyle = '#f3ead3';
+    ctx.fillStyle = spot;
     ctx.fillRect(Math.round(cx - w * 0.22), Math.round(cy - h * 0.34), Math.round(w * 0.32), Math.round(h * 0.18));
-    ctx.fillStyle = '#3a3128';
+    ctx.fillRect(Math.round(cx + w * 0.08), Math.round(cy + h * 0.12), Math.round(w * 0.28), Math.round(h * 0.16));
+    ctx.fillStyle = dark;
     ctx.fillRect(Math.round(cx - w * 0.18), Math.round(cy - h * 0.02), 2, 2);
     ctx.fillRect(Math.round(cx + w * 0.12), Math.round(cy - h * 0.02), 2, 2);
-    ctx.fillStyle = '#8b6a42';
+    ctx.fillStyle = dark;
     ctx.fillRect(Math.round(cx - w * 0.42), Math.round(cy + h * 0.12), Math.round(w * 0.84), 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.32)';
     ctx.strokeRect(Math.round(cx - w * 0.5) + 0.5, Math.round(cy - h * 0.32) + 0.5, Math.round(w) - 1, Math.round(h * 0.64) - 1);
     ctx.restore();
+  }
+
+  function getCurrentBiomeLabel(state) {
+    const player = state.player || {};
+    const generation = Game.generation3d;
+    if (!generation || !generation.getBiomeAt3D) return '...';
+    const biome = generation.getBiomeAt3D(state, player.x || 0, player.z || 0);
+    const labels = generation.BIOME_LABELS || {};
+    return labels[biome] || biome || '...';
   }
 
   function drawCompass(ctx, canvas, state) {
@@ -176,7 +199,7 @@
     const x = Math.floor(player.x || 0) - spawnX;
     const y = Math.floor(player.y || 0) - spawnY;
     const z = Math.floor(player.z || 0) - spawnZ;
-    const hudText = `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z}`;
+    const hudText = `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}`;
     ctx.font = '13px Arial';
     const panelWidth = Math.ceil(ctx.measureText(hudText).width + 24);
     ctx.fillStyle = 'rgba(8,12,16,0.58)';
