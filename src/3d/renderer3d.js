@@ -279,7 +279,7 @@
     const base = hexToRgb(BLOCK_COLORS[id] || '#b43a2f');
     ctx.fillStyle = rgbToCss(base);
     ctx.fillRect(x, y, size, size);
-    const stickCount = id === BLOCK.DYNAMITE_NUCLEAR ? 7 : (id === BLOCK.DYNAMITE_MEGA_HUGE ? 6 : (id === BLOCK.DYNAMITE_HUGE ? 5 : (id === BLOCK.DYNAMITE_LARGE ? 4 : 3)));
+    const stickCount = id === BLOCK.DYNAMITE_MEGA_HUGE ? 6 : (id === BLOCK.DYNAMITE_HUGE ? 5 : (id === BLOCK.DYNAMITE_LARGE ? 4 : 3));
     const stickW = Math.max(4, Math.floor(size / (stickCount + 2)));
     const startX = x + Math.floor((size - stickW * stickCount) / 2);
     for (let i = 0; i < stickCount; i += 1) {
@@ -297,16 +297,6 @@
     ctx.moveTo(x + size * 0.52, y + size * 0.14);
     ctx.quadraticCurveTo(x + size * 0.68, y + size * 0.04, x + size * 0.82, y + size * 0.16);
     ctx.stroke();
-    if (id === BLOCK.DYNAMITE_NUCLEAR) {
-      ctx.fillStyle = '#1d1b14';
-      ctx.fillRect(x + Math.floor(size * 0.34), y + Math.floor(size * 0.61), Math.floor(size * 0.32), Math.max(2, Math.floor(size * 0.08)));
-      ctx.fillRect(x + Math.floor(size * 0.46), y + Math.floor(size * 0.49), Math.max(2, Math.floor(size * 0.08)), Math.floor(size * 0.32));
-      ctx.strokeStyle = '#ffe36a';
-      ctx.lineWidth = Math.max(1, Math.floor(size / 18));
-      ctx.beginPath();
-      ctx.arc(x + size * 0.5, y + size * 0.65, size * 0.22, 0, Math.PI * 2);
-      ctx.stroke();
-    }
     ctx.strokeStyle = 'rgba(0,0,0,0.3)';
     ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
     for (let i = 0; i < 8; i += 1) {
@@ -320,7 +310,7 @@
     const base = hexToRgb(BLOCK_COLORS[id] || '#ffffff');
     const kind = blockKind(id);
 
-    if (id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE || id === BLOCK.DYNAMITE_NUCLEAR) {
+    if (id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE) {
       drawDynamiteTile(ctx, rng, id, x, y, size);
     } else if (id === BLOCK.GRASS) {
       if (faceType === 'top') drawGrassTop(ctx, rng, x, y, size, variant);

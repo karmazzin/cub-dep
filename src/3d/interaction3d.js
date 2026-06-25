@@ -41,7 +41,6 @@
     BLOCK.DYNAMITE_LARGE,
     BLOCK.DYNAMITE_HUGE,
     BLOCK.DYNAMITE_MEGA_HUGE,
-    BLOCK.DYNAMITE_NUCLEAR,
     ITEM.BOAR_SPAWN_EGG,
     ITEM.TURTLE_SPAWN_EGG,
     ITEM.SNAKE_SPAWN_EGG,
@@ -73,7 +72,6 @@
     [BLOCK.DYNAMITE_LARGE]: 'Большой динамит',
     [BLOCK.DYNAMITE_HUGE]: 'Огромный динамит',
     [BLOCK.DYNAMITE_MEGA_HUGE]: 'Мега-огромный динамит',
-    [BLOCK.DYNAMITE_NUCLEAR]: 'Динамит ядерной мощности',
   };
 
   const DYNAMITE_CONFIG = {
@@ -82,9 +80,7 @@
     [BLOCK.DYNAMITE_LARGE]: { radius: 7, fuse: 4 },
     [BLOCK.DYNAMITE_HUGE]: { radius: 10, fuse: 5 },
     [BLOCK.DYNAMITE_MEGA_HUGE]: { radius: 100, fuse: 6 },
-    [BLOCK.DYNAMITE_NUCLEAR]: { radius: 1000, fuse: 8, chunked: true },
   };
-  const CHUNKED_EXPLOSION_CHECK_BUDGET = 18000;
 
   function getLookDirection(player) {
     const cosPitch = Math.cos(player.pitch);
@@ -202,11 +198,6 @@
     return state.world.activeDynamite;
   }
 
-  function ensureActiveExplosions(state) {
-    if (!state.world.activeExplosions) state.world.activeExplosions = [];
-    return state.world.activeExplosions;
-  }
-
   function activateDynamite(state, x, y, z, id) {
     const config = DYNAMITE_CONFIG[id];
     if (!config) return false;
@@ -229,59 +220,7 @@
       && id !== BLOCK.LAVA;
   }
 
-  function chunkBounds(world, chunk) {
-    const size = Game.constants3d && Game.constants3d.CHUNK_SIZE ? Game.constants3d.CHUNK_SIZE : 16;
-    return {
-      minX: chunk.cx * size,
-      minY: chunk.cy * size,
-      minZ: chunk.cz * size,
-      maxX: Math.min(world.w, chunk.cx * size + size),
-      maxY: Math.min(world.h, chunk.cy * size + size),
-      maxZ: Math.min(world.d, chunk.cz * size + size),
-      size,
-    };
-  }
-
-  function chunkIntersectsSphere(world, chunk, item) {
-    const bounds = chunkBounds(world, chunk);
-    const cx = Math.max(bounds.minX, Math.min(item.x, bounds.maxX - 1));
-    const cy = Math.max(bounds.minY, Math.min(item.y, bounds.maxY - 1));
-    const cz = Math.max(bounds.minZ, Math.min(item.z, bounds.maxZ - 1));
-    const dx = cx - item.x;
-    const dy = cy - item.y;
-    const dz = cz - item.z;
-    return dx * dx + dy * dy + dz * dz <= item.radius * item.radius;
-  }
-
-  function beginChunkedExplosion(state, item) {
-    const world = state.world;
-    const chunks = [];
-    for (const [key, chunk] of world.chunks || []) {
-      if (!chunk || !chunk.blocks || !chunkIntersectsSphere(world, chunk, item)) continue;
-      chunks.push(key);
-    }
-    if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, item.id, 1);
-    setBlock3D(state, item.x, item.y, item.z, BLOCK.AIR);
-    ensureActiveExplosions(state).push({
-      x: item.x,
-      y: item.y,
-      z: item.z,
-      radius: item.radius,
-      radiusSq: item.radius * item.radius,
-      chunks,
-      chunkIndex: 0,
-      blockIndex: 0,
-      broken: 0,
-    });
-    setNotice(state, `Ядерный взрыв начался: чанков ${chunks.length}`);
-    if (Game.audio && Game.audio.playHit) Game.audio.playHit();
-  }
-
   function explodeDynamite(state, item) {
-    if (item.chunked) {
-      beginChunkedExplosion(state, item);
-      return;
-    }
     const world = state.world;
     const radius = Math.max(1, item.radius | 0);
     const radiusSq = radius * radius;
@@ -312,7 +251,6 @@
   }
 
   function updateDynamite3D(state, dt) {
-    processChunkedExplosions(state);
     const list = state && state.world ? ensureActiveDynamite(state) : [];
     if (!list.length) return;
     const remaining = [];
@@ -327,54 +265,6 @@
       const pos = parseCoordKey(item.key);
       return pos && getBlock3D(state, pos.x, pos.y, pos.z) === item.id;
     });
-  }
-
-  function processChunkedExplosions(state) {
-    const world = state && state.world;
-    const active = world && world.activeExplosions;
-    if (!active || !active.length) return;
-    const next = [];
-    for (const explosion of active) {
-      let checks = 0;
-      while (explosion.chunkIndex < explosion.chunks.length && checks < CHUNKED_EXPLOSION_CHECK_BUDGET) {
-        const key = explosion.chunks[explosion.chunkIndex];
-        const chunk = world.chunks && world.chunks.get(key);
-        if (!chunk || !chunk.blocks) {
-          explosion.chunkIndex += 1;
-          explosion.blockIndex = 0;
-          continue;
-        }
-        const bounds = chunkBounds(world, chunk);
-        const maxIndex = chunk.blocks.length;
-        while (explosion.blockIndex < maxIndex && checks < CHUNKED_EXPLOSION_CHECK_BUDGET) {
-          const index = explosion.blockIndex;
-          explosion.blockIndex += 1;
-          checks += 1;
-          const lx = index % bounds.size;
-          const ly = Math.floor(index / (bounds.size * bounds.size));
-          const lz = Math.floor(index / bounds.size) % bounds.size;
-          const x = bounds.minX + lx;
-          const y = bounds.minY + ly;
-          const z = bounds.minZ + lz;
-          if (x >= bounds.maxX || y >= bounds.maxY || z >= bounds.maxZ) continue;
-          const dx = x - explosion.x;
-          const dy = y - explosion.y;
-          const dz = z - explosion.z;
-          if (dx * dx + dy * dy + dz * dz > explosion.radiusSq) continue;
-          const id = getBlock3D(state, x, y, z);
-          if (!canExplodeBlock(id)) continue;
-          if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
-          if (setBlock3D(state, x, y, z, BLOCK.AIR)) explosion.broken += 1;
-        }
-        if (explosion.blockIndex >= maxIndex) {
-          explosion.chunkIndex += 1;
-          explosion.blockIndex = 0;
-        }
-      }
-      if (explosion.chunkIndex < explosion.chunks.length) next.push(explosion);
-      else setNotice(state, `Ядерный взрыв: разрушено ${explosion.broken}`);
-    }
-    world.activeExplosions = next;
   }
 
   function getBreakDuration(blockId) {
