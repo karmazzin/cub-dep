@@ -437,6 +437,115 @@
     };
   }
 
+  function drawMineEntranceIcon(ctx, x, y, size, entrance) {
+    const type = entrance && entrance.type ? entrance.type : 'deadend';
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.beginPath();
+    ctx.ellipse(size * 0.08, size * 0.18, size * 0.72, size * 0.34, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#2b2119';
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.42, size * 0.42);
+    ctx.lineTo(-size * 0.42, -size * 0.06);
+    ctx.quadraticCurveTo(0, -size * 0.56, size * 0.42, -size * 0.06);
+    ctx.lineTo(size * 0.42, size * 0.42);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = '#7a5130';
+    ctx.lineWidth = Math.max(2, size * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.5, size * 0.42);
+    ctx.lineTo(-size * 0.5, -size * 0.06);
+    ctx.quadraticCurveTo(0, -size * 0.66, size * 0.5, -size * 0.06);
+    ctx.lineTo(size * 0.5, size * 0.42);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#b8874a';
+    ctx.lineWidth = Math.max(1, size * 0.07);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.56, size * 0.42);
+    ctx.lineTo(size * 0.56, size * 0.42);
+    ctx.moveTo(-size * 0.28, size * 0.42);
+    ctx.lineTo(-size * 0.28, -size * 0.2);
+    ctx.moveTo(size * 0.28, size * 0.42);
+    ctx.lineTo(size * 0.28, -size * 0.2);
+    ctx.stroke();
+
+    const markY = -size * 0.9;
+    ctx.strokeStyle = 'rgba(0,0,0,0.76)';
+    ctx.lineWidth = Math.max(3, size * 0.18);
+    ctx.beginPath();
+    if (type === 'through') {
+      ctx.moveTo(-size * 0.22, markY + size * 0.12);
+      ctx.lineTo(size * 0.22, markY - size * 0.12);
+      ctx.lineTo(size * 0.02, markY - size * 0.18);
+      ctx.moveTo(size * 0.22, markY - size * 0.12);
+      ctx.lineTo(size * 0.14, markY + size * 0.08);
+    } else {
+      ctx.moveTo(-size * 0.18, markY - size * 0.16);
+      ctx.lineTo(size * 0.18, markY + size * 0.16);
+      ctx.moveTo(size * 0.18, markY - size * 0.16);
+      ctx.lineTo(-size * 0.18, markY + size * 0.16);
+    }
+    ctx.stroke();
+
+    ctx.strokeStyle = type === 'through' ? '#ffd36d' : '#f2f0e6';
+    ctx.lineWidth = Math.max(1.5, size * 0.09);
+    ctx.beginPath();
+    if (type === 'through') {
+      ctx.moveTo(-size * 0.22, markY + size * 0.12);
+      ctx.lineTo(size * 0.22, markY - size * 0.12);
+      ctx.lineTo(size * 0.02, markY - size * 0.18);
+      ctx.moveTo(size * 0.22, markY - size * 0.12);
+      ctx.lineTo(size * 0.14, markY + size * 0.08);
+    } else {
+      ctx.moveTo(-size * 0.18, markY - size * 0.16);
+      ctx.lineTo(size * 0.18, markY + size * 0.16);
+      ctx.moveTo(size * 0.18, markY - size * 0.16);
+      ctx.lineTo(-size * 0.18, markY + size * 0.16);
+    }
+    ctx.stroke();
+
+    if (entrance && entrance.hasEndPool) {
+      const dropX = size * 0.38;
+      const dropY = markY + size * 0.02;
+      ctx.fillStyle = '#101820';
+      ctx.beginPath();
+      ctx.moveTo(dropX, dropY - size * 0.22);
+      ctx.quadraticCurveTo(dropX + size * 0.24, dropY + size * 0.04, dropX, dropY + size * 0.24);
+      ctx.quadraticCurveTo(dropX - size * 0.24, dropY + size * 0.04, dropX, dropY - size * 0.22);
+      ctx.fill();
+      ctx.fillStyle = '#61bdf2';
+      ctx.beginPath();
+      ctx.moveTo(dropX, dropY - size * 0.16);
+      ctx.quadraticCurveTo(dropX + size * 0.16, dropY + size * 0.04, dropX, dropY + size * 0.16);
+      ctx.quadraticCurveTo(dropX - size * 0.16, dropY + size * 0.04, dropX, dropY - size * 0.16);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawCreativeCaveEntrances(ctx, mapX, mapY, scale, width, height, world) {
+    if (!state || !state.worldMeta || state.worldMeta.mode !== 'creative') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getCaveEntrancesInArea3D) return;
+    const minX = clamp((-mapX) / scale, 0, world.w);
+    const minZ = clamp((-mapY) / scale, 0, world.d);
+    const maxX = clamp((width - mapX) / scale, 0, world.w);
+    const maxZ = clamp((height - mapY) / scale, 0, world.d);
+    const entrances = generation.getCaveEntrancesInArea3D(state, minX, minZ, maxX, maxZ);
+    const iconSize = Math.max(9 * window.devicePixelRatio, Math.min(22 * window.devicePixelRatio, 7 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const entrance of entrances) {
+      drawMineEntranceIcon(ctx, mapX + entrance.x * scale, mapY + entrance.z * scale, iconSize, entrance);
+    }
+  }
+
   function resizeMapCanvas() {
     const canvas = ensureMapCanvas();
     if (!canvas) return;
@@ -479,6 +588,7 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.42)';
     ctx.lineWidth = Math.max(1, window.devicePixelRatio);
     ctx.strokeRect(x + 0.5, y + 0.5, viewW - 1, viewH - 1);
+    drawCreativeCaveEntrances(ctx, x, y, scale, width, height, world);
 
     const playerX = x + state.player.x * scale;
     const playerY = y + state.player.z * scale;
@@ -633,6 +743,7 @@
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt);
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
     Game.interaction3d.updateInteraction3D(state, input.input, input.consumeActions(), dt);
+    if (Game.interaction3d.updateDynamite3D) Game.interaction3d.updateDynamite3D(state, dt);
     if (Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
     Game.fluids3d.updateFluids3D(state, dt);
   }

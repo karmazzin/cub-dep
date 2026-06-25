@@ -27,6 +27,10 @@
   let cloudLastUpdateTime = 0;
   let targetBox = null;
   let crackLines = null;
+  let dynamiteOverlayGroup = null;
+  let dynamiteOverlayGeometry = null;
+  let dynamiteOverlayMaterials = null;
+  let dynamiteOverlayMeshes = [];
   let sheepMeshes = new Map();
   let sheepMaterials = null;
   let textureAtlas = null;
@@ -271,12 +275,54 @@
     }
   }
 
+  function drawDynamiteTile(ctx, rng, id, x, y, size) {
+    const base = hexToRgb(BLOCK_COLORS[id] || '#b43a2f');
+    ctx.fillStyle = rgbToCss(base);
+    ctx.fillRect(x, y, size, size);
+    const stickCount = id === BLOCK.DYNAMITE_NUCLEAR ? 7 : (id === BLOCK.DYNAMITE_MEGA_HUGE ? 6 : (id === BLOCK.DYNAMITE_HUGE ? 5 : (id === BLOCK.DYNAMITE_LARGE ? 4 : 3)));
+    const stickW = Math.max(4, Math.floor(size / (stickCount + 2)));
+    const startX = x + Math.floor((size - stickW * stickCount) / 2);
+    for (let i = 0; i < stickCount; i += 1) {
+      const sx = startX + i * stickW;
+      ctx.fillStyle = rgbToCss(adjustColor(base, i % 2 === 0 ? 16 : -12));
+      ctx.fillRect(sx, y + 3, stickW - 1, size - 6);
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.fillRect(sx + 1, y + 5, 1, size - 10);
+    }
+    ctx.fillStyle = '#2c2017';
+    ctx.fillRect(x + 3, y + Math.floor(size * 0.42), size - 6, Math.max(3, Math.floor(size * 0.16)));
+    ctx.strokeStyle = '#f2d38a';
+    ctx.lineWidth = Math.max(1, Math.floor(size / 18));
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.52, y + size * 0.14);
+    ctx.quadraticCurveTo(x + size * 0.68, y + size * 0.04, x + size * 0.82, y + size * 0.16);
+    ctx.stroke();
+    if (id === BLOCK.DYNAMITE_NUCLEAR) {
+      ctx.fillStyle = '#1d1b14';
+      ctx.fillRect(x + Math.floor(size * 0.34), y + Math.floor(size * 0.61), Math.floor(size * 0.32), Math.max(2, Math.floor(size * 0.08)));
+      ctx.fillRect(x + Math.floor(size * 0.46), y + Math.floor(size * 0.49), Math.max(2, Math.floor(size * 0.08)), Math.floor(size * 0.32));
+      ctx.strokeStyle = '#ffe36a';
+      ctx.lineWidth = Math.max(1, Math.floor(size / 18));
+      ctx.beginPath();
+      ctx.arc(x + size * 0.5, y + size * 0.65, size * 0.22, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    for (let i = 0; i < 8; i += 1) {
+      ctx.fillStyle = `rgba(0,0,0,${0.05 + rng() * 0.08})`;
+      ctx.fillRect(x + Math.floor(rng() * size), y + Math.floor(rng() * size), 1, 1);
+    }
+  }
+
   function drawBlockTile(ctx, id, faceType, variant, x, y, size) {
     const rng = mulberry32(id * 9973 + variant * 131 + faceType.charCodeAt(0) * 17);
     const base = hexToRgb(BLOCK_COLORS[id] || '#ffffff');
     const kind = blockKind(id);
 
-    if (id === BLOCK.GRASS) {
+    if (id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE || id === BLOCK.DYNAMITE_NUCLEAR) {
+      drawDynamiteTile(ctx, rng, id, x, y, size);
+    } else if (id === BLOCK.GRASS) {
       if (faceType === 'top') drawGrassTop(ctx, rng, x, y, size, variant);
       else if (faceType === 'bottom') drawDirt(ctx, rng, x, y, size, { r: 126, g: 84, b: 48 });
       else drawGrassSide(ctx, rng, x, y, size, variant);
@@ -814,8 +860,41 @@
       );
       crackLines.visible = false;
       scene.add(crackLines);
+      dynamiteOverlayGroup = new THREE.Group();
+      dynamiteOverlayGeometry = new THREE.BoxGeometry(1.04, 1.04, 1.04);
+      dynamiteOverlayMaterials = [
+        new THREE.MeshBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.34, depthWrite: false }),
+        new THREE.MeshBasicMaterial({ color: 0xff3b28, transparent: true, opacity: 0.46, depthWrite: false }),
+      ];
+      scene.add(dynamiteOverlayGroup);
     }
     return true;
+  }
+
+  function updateDynamiteOverlays(state) {
+    if (!dynamiteOverlayGroup || !dynamiteOverlayGeometry || !dynamiteOverlayMaterials) return;
+    const active = state && state.world && Array.isArray(state.world.activeDynamite) ? state.world.activeDynamite : [];
+    while (dynamiteOverlayMeshes.length < active.length) {
+      const mesh = new THREE.Mesh(dynamiteOverlayGeometry, dynamiteOverlayMaterials[0]);
+      mesh.renderOrder = 4;
+      dynamiteOverlayGroup.add(mesh);
+      dynamiteOverlayMeshes.push(mesh);
+    }
+    const now = performance.now() * 0.001;
+    for (let i = 0; i < dynamiteOverlayMeshes.length; i += 1) {
+      const mesh = dynamiteOverlayMeshes[i];
+      const item = active[i];
+      if (!item) {
+        mesh.visible = false;
+        continue;
+      }
+      const urgent = item.fuse > 0 ? 1 - Math.max(0, Math.min(1, item.timer / item.fuse)) : 1;
+      const flash = Math.floor(now * (4 + urgent * 10)) % 2;
+      mesh.material = dynamiteOverlayMaterials[flash];
+      mesh.material.opacity = flash ? 0.35 + urgent * 0.28 : 0.18 + urgent * 0.18;
+      mesh.position.set(item.x + 0.5, item.y + 0.5, item.z + 0.5);
+      mesh.visible = true;
+    }
   }
 
   function ensureMaterials() {
@@ -1507,6 +1586,7 @@
     updateFluidTextureAnimation();
     updateSkyLayer(player);
     updateSteamParticles(state);
+    updateDynamiteOverlays(state);
     syncSheepMeshes(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];

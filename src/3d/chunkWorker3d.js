@@ -382,6 +382,191 @@
     return dx * dx + dy * dy + dz * dz <= radius * radius;
   }
 
+  function caveFeatureForCell(seed, world, cellX, cellZ) {
+    const cellSize = 96;
+    const centerX = cellX * cellSize + Math.floor(cellSize * (0.24 + noise2(seed + 2111, cellX, cellZ) * 0.52));
+    const centerZ = cellZ * cellSize + Math.floor(cellSize * (0.24 + noise2(seed + 2113, cellX, cellZ) * 0.52));
+    if (centerX <= 2 || centerZ <= 2 || centerX >= world.w - 3 || centerZ >= world.d - 3) return null;
+    if (!farFromSpawn(world, centerX, centerZ, 28)) return null;
+    const centerBiome = baseLandBiome(seed, centerX, centerZ);
+    const featureChance = centerBiome === 'mountains' ? 0.7 : 0.18;
+    if (noise2(seed + 2115, cellX, cellZ) > featureChance) return null;
+    const isThrough = centerBiome === 'mountains' || noise2(seed + 2117, cellX, cellZ) < 0.1;
+    const startY = terrainHeight(seed, centerX, centerZ) + 1;
+    const length = isThrough
+      ? 58 + Math.floor(noise2(seed + 2119, cellX, cellZ) * 26)
+      : 22 + Math.floor(noise2(seed + 2121, cellX, cellZ) * 18);
+    const angle = noise2(seed + 2123, cellX, cellZ) * Math.PI * 2;
+    const endX = Math.max(3, Math.min(world.w - 4, centerX + Math.round(Math.cos(angle) * length)));
+    const endZ = Math.max(3, Math.min(world.d - 4, centerZ + Math.round(Math.sin(angle) * length)));
+    const throughTargetY = 18 + Math.floor(noise2(seed + 2125, cellX, cellZ) * 7);
+    const endY = isThrough
+      ? Math.max(4, Math.min(throughTargetY, startY - 12 - Math.floor(noise2(seed + 2127, cellX, cellZ) * 10)))
+      : Math.max(5, startY - 16 - Math.floor(noise2(seed + 2127, cellX, cellZ) * 16));
+    const hasStream = isThrough
+      ? noise2(seed + 2133, cellX, cellZ) < 0.28
+      : noise2(seed + 2135, cellX, cellZ) < 0.34;
+    const hasEndPool = !isThrough && noise2(seed + 2137, cellX, cellZ) < (hasStream ? 1 : 0.45);
+    return {
+      x: centerX,
+      z: centerZ,
+      startY,
+      endX,
+      endY,
+      endZ,
+      radius: 2.2 + noise2(seed + 2129, cellX, cellZ) * 1.4,
+      type: isThrough ? 'through' : 'deadend',
+      hasStream,
+      hasEndPool,
+    };
+  }
+
+  function pointSegmentInfo(x, y, z, ax, ay, az, bx, by, bz) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const abz = bz - az;
+    const lengthSq = abx * abx + aby * aby + abz * abz;
+    const rawT = lengthSq > 0 ? ((x - ax) * abx + (y - ay) * aby + (z - az) * abz) / lengthSq : 0;
+    const t = Math.max(0, Math.min(1, rawT));
+    const px = ax + abx * t;
+    const py = ay + aby * t;
+    const pz = az + abz * t;
+    const dx = x - px;
+    const dy = y - py;
+    const dz = z - pz;
+    return { t, px, py, pz, distanceSq: dx * dx + dy * dy + dz * dz };
+  }
+
+  function passageCaveBlockAt(seed, x, y, z, groundH, world, blockIds) {
+    if (y <= 1 || y > groundH + 1 || !farFromSpawn(world, x, z, 28)) return null;
+    const cellSize = 96;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        const entrance = caveFeatureForCell(seed, world, cx, cz);
+        if (!entrance) continue;
+        const isThrough = entrance.type === 'through';
+        const wobble = (smoothNoise(seed + 2131, x / 13, z / 13) - 0.5) * 0.9;
+        const info = pointSegmentInfo(x, y, z, entrance.x, entrance.startY, entrance.z, entrance.endX, entrance.endY, entrance.endZ);
+        const localRadius = entrance.radius + Math.sin(info.t * Math.PI) * 0.9 + wobble;
+        if (info.distanceSq > localRadius * localRadius) continue;
+
+        const bottomBand = y <= info.py - localRadius * 0.42;
+        const centerBand = Math.abs(x - info.px) + Math.abs(z - info.pz) <= 1.25;
+        if (entrance.hasStream && bottomBand && centerBand && info.t > 0.12 && info.t < 0.88) return blockIds.WATER;
+
+        if (!isThrough && entrance.hasEndPool && info.t > 0.82 && y <= entrance.endY + 1 && Math.hypot(x - entrance.endX, z - entrance.endZ) <= entrance.radius * 1.8) {
+          return blockIds.WATER;
+        }
+
+        return blockIds.AIR;
+      }
+    }
+    return null;
+  }
+
+  function caveRoomBlock(seed, x, y, z, centerX, centerY, centerZ, radiusX, radiusY, radiusZ, salt, blockIds) {
+    const nx = (x - centerX) / radiusX;
+    const nz = (z - centerZ) / radiusZ;
+    const horizontal = nx * nx + nz * nz;
+    if (horizontal > 1) return null;
+    const verticalHalf = radiusY * Math.sqrt(Math.max(0, 1 - horizontal));
+    const floorY = centerY - verticalHalf;
+    const ceilingY = centerY + verticalHalf;
+    const ny = (y - centerY) / Math.max(1, verticalHalf);
+    if (ny * ny > 1) return null;
+
+    const pillarCellX = Math.floor(x / 13);
+    const pillarCellZ = Math.floor(z / 13);
+    const pillarX = pillarCellX * 13 + 6;
+    const pillarZ = pillarCellZ * 13 + 6;
+    const pillarRoll = noise2(seed + salt + 1, pillarCellX, pillarCellZ);
+    if (pillarRoll < 0.14 && Math.hypot(x - pillarX, z - pillarZ) <= 1.45) return blockIds.STONE;
+
+    const spikeCellX = Math.floor(x / 7);
+    const spikeCellZ = Math.floor(z / 7);
+    const spikeX = spikeCellX * 7 + 3;
+    const spikeZ = spikeCellZ * 7 + 3;
+    const spikeDistance = Math.hypot(x - spikeX, z - spikeZ);
+    if (spikeDistance <= 1.3) {
+      const length = 1 + Math.floor(noise2(seed + salt + 5, spikeCellX, spikeCellZ) * 4);
+      if (noise2(seed + salt + 3, spikeCellX, spikeCellZ) < 0.24 && y >= ceilingY - length + spikeDistance) return blockIds.STONE;
+      if (noise2(seed + salt + 7, spikeCellX, spikeCellZ) < 0.18 && y <= floorY + length - spikeDistance) return blockIds.STONE;
+    }
+
+    const lakeRoll = noise2(seed + salt + 11, Math.floor(centerX / 16), Math.floor(centerZ / 16));
+    if (lakeRoll < 0.42 && y <= floorY + 1.4 && horizontal < 0.58) {
+      return lakeRoll < 0.16 ? blockIds.LAVA : blockIds.WATER;
+    }
+    return blockIds.AIR;
+  }
+
+  function throughCaveRoomBlockAt(seed, x, y, z, groundH, world, blockIds) {
+    if (y <= 1 || y > groundH - 5 || !farFromSpawn(world, x, z, 36)) return null;
+    const cellSize = 96;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    for (let dz = -2; dz <= 2; dz += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        const feature = caveFeatureForCell(seed, world, cx, cz);
+        if (!feature || feature.type !== 'through') continue;
+        const radiusX = 30 + noise2(seed + 2141, cx, cz) * 18;
+        const radiusZ = 30 + noise2(seed + 2143, cx, cz) * 18;
+        const radiusY = 7 + noise2(seed + 2145, cx, cz) * 5;
+        const block = caveRoomBlock(seed, x, y, z, feature.endX, feature.endY, feature.endZ, radiusX, radiusY, radiusZ, 2147, blockIds);
+        if (block !== null) return block;
+      }
+    }
+    return null;
+  }
+
+  function deepCaveBlockAt(seed, x, y, z, groundH, world, blockIds) {
+    if (y <= 1 || y > groundH - 5 || !farFromSpawn(world, x, z, 36)) return null;
+    const cellSize = 128;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        if (noise2(seed + 2201, cx, cz) > 0.38) continue;
+        const centerX = cx * cellSize + Math.floor(cellSize * (0.22 + noise2(seed + 2203, cx, cz) * 0.56));
+        const centerZ = cz * cellSize + Math.floor(cellSize * (0.22 + noise2(seed + 2205, cx, cz) * 0.56));
+        const centerY = 9 + Math.floor(noise2(seed + 2207, cx, cz) * 12);
+        const radiusX = 38 + noise2(seed + 2209, cx, cz) * 24;
+        const radiusZ = 38 + noise2(seed + 2211, cx, cz) * 24;
+        const radiusY = 6 + noise2(seed + 2213, cx, cz) * 7;
+        const warpX = (smoothNoise(seed + 2215, x / 29, z / 29) - 0.5) * 8;
+        const warpZ = (smoothNoise(seed + 2217, x / 31, z / 31) - 0.5) * 8;
+        const nx = (x + warpX - centerX) / radiusX;
+        const nz = (z + warpZ - centerZ) / radiusZ;
+        const horizontal = nx * nx + nz * nz;
+        if (horizontal > 1) continue;
+        const verticalHalf = radiusY * Math.sqrt(Math.max(0, 1 - horizontal));
+        const floorY = centerY - verticalHalf;
+        const ceilingY = centerY + verticalHalf;
+        const ny = (y - centerY) / Math.max(1, verticalHalf);
+        if (ny * ny > 1) continue;
+
+        return caveRoomBlock(seed, x, y, z, centerX, centerY, centerZ, radiusX, radiusY, radiusZ, 2220, blockIds);
+      }
+    }
+    return null;
+  }
+
+  function caveBlockAt(seed, x, y, z, groundH, world, blockIds) {
+    const passage = passageCaveBlockAt(seed, x, y, z, groundH, world, blockIds);
+    if (passage !== null) return passage;
+    const throughRoom = throughCaveRoomBlockAt(seed, x, y, z, groundH, world, blockIds);
+    if (throughRoom !== null) return throughRoom;
+    return deepCaveBlockAt(seed, x, y, z, groundH, world, blockIds);
+  }
+
   function terrainBlockAt(seed, x, y, z, world, blockIds) {
     const h = terrainHeight(seed, x, z);
     const lake = lakeInfo(seed, x, z);
@@ -390,6 +575,8 @@
     const groundH = lake.inLake ? waterLevel - lake.depth : h;
     if (y === 0) return blockIds.BEDROCK;
     if (y <= groundH) {
+      const caveBlock = caveBlockAt(seed, x, y, z, groundH, world, blockIds);
+      if (caveBlock !== null) return caveBlock;
       if (undergroundLavaAt(seed, x, y, z, groundH, world)) return blockIds.LAVA;
       if (lake.inLake) {
         if (y >= groundH - 1) return blockIds.SAND;
