@@ -331,7 +331,8 @@
       && id !== BLOCK.TORCH
       && id !== BLOCK.DRY_BUSH
       && id !== BLOCK.ALGAE
-      && id !== BLOCK.TALL_ALGAE;
+      && id !== BLOCK.TALL_ALGAE
+      && id !== BLOCK.ACTIVE_STRANGE_PORTAL;
   }
 
   function pruneKeySetInChunk(set, bounds) {

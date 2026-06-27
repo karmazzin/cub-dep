@@ -5,6 +5,8 @@
   const { getBlock3D, isSolidBlock3D } = Game.world3d;
 
   const PHYSICS_STEP = 1 / 120;
+  const FLIGHT_SPEED_MULTIPLIER = 1.45;
+  const FLIGHT_BOOST_MULTIPLIER = 2.35;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -117,17 +119,40 @@
     return false;
   }
 
-  function updatePlayer3D(state, inputState, mouse, dt) {
+  function updatePlayer3D(state, inputState, mouse, dt, actions = {}) {
     const player = state.player;
     player.yaw -= mouse.dx * MOUSE_SENSITIVITY;
     player.pitch = clamp(player.pitch - mouse.dy * MOUSE_SENSITIVITY, -MAX_PITCH, MAX_PITCH);
+    const creative = state.worldMeta && state.worldMeta.mode === 'creative';
+    if (!creative) {
+      player.flying = false;
+      player.flightBoost = false;
+    } else if (actions.flyTogglePressed) {
+      player.flying = !player.flying;
+      if (player.flying) {
+        player.vy = 0;
+        player.onGround = false;
+      }
+      if (state.ui) {
+        state.ui.noticeText = player.flying ? 'Полет включен' : 'Полет выключен';
+        state.ui.noticeTimer = 1.35;
+      }
+    }
+    if (creative && actions.boostTogglePressed) {
+      player.flightBoost = !player.flightBoost;
+      if (state.ui) {
+        state.ui.noticeText = player.flightBoost ? 'Ускорение полета включено' : 'Ускорение полета выключено';
+        state.ui.noticeTimer = 1.35;
+      }
+    }
 
     const mobileForward = Number.isFinite(inputState.mobileMoveY) ? -inputState.mobileMoveY : 0;
     const mobileStrafe = Number.isFinite(inputState.mobileMoveX) ? inputState.mobileMoveX : 0;
     const forward = clamp((inputState.keys.KeyW ? 1 : 0) - (inputState.keys.KeyS ? 1 : 0) + mobileForward, -1, 1);
     const strafe = clamp((inputState.keys.KeyD ? 1 : 0) - (inputState.keys.KeyA ? 1 : 0) + mobileStrafe, -1, 1);
     const inLiquid = isInLiquid(state);
-    const sprinting = !inLiquid && (inputState.keys.ShiftLeft || inputState.keys.ShiftRight);
+    const descending = inputState.keys.ShiftLeft || inputState.keys.ShiftRight;
+    const sprinting = !player.flying && !inLiquid && descending;
     const speed = (inLiquid ? WALK_SPEED * 0.55 : WALK_SPEED) * (sprinting ? SPRINT_MULTIPLIER : 1);
     const sin = Math.sin(player.yaw);
     const cos = Math.cos(player.yaw);
@@ -139,6 +164,29 @@
     }
     player.vx = vx;
     player.vz = vz;
+
+    if (creative && player.flying) {
+      const boost = player.flightBoost ? FLIGHT_BOOST_MULTIPLIER : 1;
+      const flightSpeed = WALK_SPEED * FLIGHT_SPEED_MULTIPLIER * boost;
+      const vertical = clamp((inputState.keys.Space || inputState.mobileJump ? 1 : 0) - (descending ? 1 : 0), -1, 1);
+      player.vx = (sin * forward - cos * strafe) * flightSpeed;
+      player.vz = (cos * forward + sin * strafe) * flightSpeed;
+      if (forward !== 0 && strafe !== 0) {
+        player.vx *= Math.SQRT1_2;
+        player.vz *= Math.SQRT1_2;
+      }
+      player.vy = vertical * flightSpeed;
+      player.onGround = false;
+      let remaining = dt;
+      while (remaining > 0) {
+        const step = Math.min(PHYSICS_STEP, remaining);
+        moveAxis(state, 'x', player.vx * step);
+        moveAxis(state, 'z', player.vz * step);
+        moveAxis(state, 'y', player.vy * step);
+        remaining -= step;
+      }
+      return;
+    }
 
     if (inLiquid) {
       player.vy *= 0.82;

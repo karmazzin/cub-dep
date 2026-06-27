@@ -214,6 +214,7 @@
 
   function drawCompass(ctx, canvas, state) {
     const player = state.player;
+    const waypoint = state.ui && state.ui.mapWaypoint;
     const mobile = isMobileHud(canvas);
     const cx = mobile ? canvas.width - 42 : canvas.width - 74;
     const cy = mobile ? 88 : 64;
@@ -243,6 +244,29 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('N', 0, -1);
+    if (waypoint) {
+      const dx = waypoint.x - player.x;
+      const dz = waypoint.z - player.z;
+      const distance = Math.round(Math.hypot(dx, dz));
+      const targetYaw = Math.atan2(dx, dz);
+      const relative = targetYaw - player.yaw;
+      ctx.rotate(relative);
+      ctx.fillStyle = '#61d6ff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.68)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -radius + 5);
+      ctx.lineTo(mobile ? 6 : 8, -radius + (mobile ? 15 : 18));
+      ctx.lineTo(0, -radius + (mobile ? 12 : 14));
+      ctx.lineTo(mobile ? -6 : -8, -radius + (mobile ? 15 : 18));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.rotate(-relative);
+      ctx.fillStyle = '#f5f0df';
+      ctx.font = mobile ? '11px Arial' : '12px Arial';
+      ctx.fillText(`${distance} блоков`, 0, radius + (mobile ? 12 : 16));
+    }
     ctx.restore();
   }
 
@@ -417,9 +441,10 @@
     const y = Math.floor(player.y || 0) - spawnY;
     const z = Math.floor(player.z || 0) - spawnZ;
     const mobile = isMobileHud(canvas);
+    const flightText = player.flying ? ` Полет${player.flightBoost ? '+' : ''}` : '';
     const hudText = mobile
-      ? `X:${x} Y:${y} Z:${z}  Биом: ${getCurrentBiomeLabel(state)}`
-      : `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}`;
+      ? `X:${x} Y:${y} Z:${z}  Биом: ${getCurrentBiomeLabel(state)}${flightText}`
+      : `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}${flightText}`;
     ctx.font = '13px Arial';
     const panelWidth = Math.min(canvas.width - (mobile ? 122 : 36), Math.ceil(ctx.measureText(hudText).width + 24));
     ctx.fillStyle = 'rgba(8,12,16,0.58)';

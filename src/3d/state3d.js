@@ -15,6 +15,9 @@
         worldType: worldMeta && worldMeta.worldType ? worldMeta.worldType : 'normal',
         singleBiome: worldMeta && worldMeta.singleBiome ? worldMeta.singleBiome : 'forest',
         cavernBiome: worldMeta && worldMeta.cavernBiome ? worldMeta.cavernBiome : 'mix',
+        currentDimension: worldMeta && worldMeta.currentDimension ? worldMeta.currentDimension : 'overworld',
+        portalLinks: worldMeta && Array.isArray(worldMeta.portalLinks) ? worldMeta.portalLinks.map((link) => ({ ...link })) : [],
+        dimensionPlayers: worldMeta && worldMeta.dimensionPlayers ? { ...worldMeta.dimensionPlayers } : {},
         createdAt: worldMeta && worldMeta.createdAt ? worldMeta.createdAt : Date.now(),
         updatedAt: worldMeta && worldMeta.updatedAt ? worldMeta.updatedAt : Date.now(),
         player: worldMeta && worldMeta.player ? { ...worldMeta.player } : null,
@@ -60,6 +63,7 @@
         mapCenterZ: WORLD_D / 2,
         mapBitmap: null,
         mapBitmapKey: '',
+        mapWaypoint: null,
       },
       entities: {
         sheep: [],

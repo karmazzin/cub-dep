@@ -14,6 +14,10 @@
       breakPressed: false,
       placePressed: false,
       repairPressed: false,
+      previewPressed: false,
+      jumpPressed: false,
+      flyTogglePressed: false,
+      boostTogglePressed: false,
       mobileMoveX: 0,
       mobileMoveY: 0,
       mobileJump: false,
@@ -22,6 +26,8 @@
     const touches = new Map();
     const uiActions = [];
     let lastTouchTime = 0;
+    let lastSpacePressTime = -Infinity;
+    let lastShiftPressTime = -Infinity;
 
     function canvasPoint(event) {
       const rect = canvas.getBoundingClientRect();
@@ -58,6 +64,19 @@
 
     window.addEventListener('keydown', (event) => {
       if (event.code === 'KeyR' && !input.keys.KeyR) input.repairPressed = true;
+      if (event.code === 'KeyP' && !input.keys.KeyP) input.previewPressed = true;
+      if (event.code === 'KeyF' && !input.keys.KeyF) input.flyTogglePressed = true;
+      if (event.code === 'Space' && !input.keys.Space) {
+        const now = performance.now();
+        input.jumpPressed = true;
+        if (now - lastSpacePressTime <= 360) input.flyTogglePressed = true;
+        lastSpacePressTime = now;
+      }
+      if ((event.code === 'ShiftLeft' || event.code === 'ShiftRight') && !input.keys[event.code]) {
+        const now = performance.now();
+        if (now - lastShiftPressTime <= 360) input.boostTogglePressed = true;
+        lastShiftPressTime = now;
+      }
       input.keys[event.code] = true;
     });
 
@@ -217,10 +236,18 @@
         breakPressed: input.breakPressed,
         placePressed: input.placePressed,
         repairPressed: input.repairPressed,
+        previewPressed: input.previewPressed,
+        jumpPressed: input.jumpPressed,
+        flyTogglePressed: input.flyTogglePressed,
+        boostTogglePressed: input.boostTogglePressed,
       };
       input.breakPressed = false;
       input.placePressed = false;
       input.repairPressed = false;
+      input.previewPressed = false;
+      input.jumpPressed = false;
+      input.flyTogglePressed = false;
+      input.boostTogglePressed = false;
       return actions;
     }
 
@@ -234,6 +261,10 @@
       input.breakPressed = false;
       input.placePressed = false;
       input.repairPressed = false;
+      input.previewPressed = false;
+      input.jumpPressed = false;
+      input.flyTogglePressed = false;
+      input.boostTogglePressed = false;
       input.primaryDown = false;
       input.mobileMoveX = 0;
       input.mobileMoveY = 0;

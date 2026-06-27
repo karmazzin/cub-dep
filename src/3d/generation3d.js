@@ -290,14 +290,23 @@
     return { inLake: false, shore: sandyShore, depth: 0, edge, kind: 'lake' };
   }
 
+  function lowlandForestBlend(climate) {
+    const wetForest = smoothstep(0.48, 0.64, climate.moisture);
+    const coolForest = smoothstep(0.44, 0.54, climate.moisture) * (1 - smoothstep(0.42, 0.52, climate.heat));
+    return Math.max(wetForest, coolForest);
+  }
+
   function terrainBaseHeight(seed, x, z) {
     const biome = lowlandBiome(seed, x, z);
     const climate = climateAt(seed, x, z);
     const broad = smoothNoise(seed, x / 28, z / 28);
     const detail = smoothNoise(seed + 91, x / 7, z / 7);
-    const lowland = biome === 'forest'
-      ? 11 + broad * 8 + detail * 2 + climate.moisture * 2
-      : (biome === 'desert' ? 10 + broad * 6 + detail * 2 : 10 + broad * 7 + detail * 2);
+    const plains = 10 + broad * 7 + detail * 2;
+    const forest = 11 + broad * 8 + detail * 2 + climate.moisture * 2;
+    const desert = 10 + broad * 6 + detail * 2;
+    const forestBlend = lowlandForestBlend(climate);
+    const greenLowland = plains * (1 - forestBlend) + forest * forestBlend;
+    const lowland = biome === 'desert' ? desert : greenLowland;
     const ridge = ridgeNoise(seed + 97, x, z, 44);
     const mountain = 18 + broad * 15 + ridge * 18 + detail * 3;
     const strength = mountainStrength(seed, x, z);
@@ -326,10 +335,12 @@
     lake: 'Озеро',
     beach: 'Пляж',
     geysers: 'Долина гейзеров',
+    deep_cavern: 'Подземное измерение',
   };
 
   function getBiomeAt3D(state, x, z) {
     if (!state || !state.worldMeta) return 'plains';
+    if (state.worldMeta.currentDimension === 'underground') return 'deep_cavern';
     return biomeAt(worldSeed(state), Math.floor(x), Math.floor(z));
   }
 
@@ -393,6 +404,85 @@
       }
     }
     return entrances;
+  }
+
+  function portalRuinCount(seed) {
+    return 2 + (noise2(seed + 3301, 0, 0) < 0.58 ? 1 : 0);
+  }
+
+  function portalRuinAt(seed, world, index) {
+    if (!world) return null;
+    const margin = 96;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const roll = index * 17 + attempt;
+      const x = margin + Math.floor(noise2(seed + 3311, roll, index) * Math.max(1, world.w - margin * 2));
+      const z = margin + Math.floor(noise2(seed + 3313, index, roll) * Math.max(1, world.d - margin * 2));
+      if (!farFromSpawn(world, x, z, 180)) continue;
+      const y = 18 + Math.floor(noise2(seed + 3315, roll, index) * 13);
+      if (terrainHeight(seed, x, z) < y + 10) continue;
+      return {
+        id: index,
+        x,
+        y,
+        z,
+        axis: noise2(seed + 3317, index, roll) < 0.5 ? 'x' : 'z',
+      };
+    }
+    return null;
+  }
+
+  function getPortalRuins3D(state) {
+    const world = state && state.world;
+    if (!world || !state.worldMeta) return [];
+    const seed = worldSeed(state);
+    const count = portalRuinCount(seed);
+    const ruins = [];
+    for (let i = 0; i < count; i += 1) {
+      const ruin = portalRuinAt(seed, world, i);
+      if (ruin) ruins.push(ruin);
+    }
+    return ruins;
+  }
+
+  function portalRuinBlock(seed, x, y, z, ruin) {
+    const rx = x - ruin.x;
+    const ry = y - ruin.y;
+    const rz = z - ruin.z;
+    if (Math.abs(rx) > 8 || Math.abs(ry) > 6 || Math.abs(rz) > 8) return null;
+    const u = ruin.axis === 'x' ? rz : rx;
+    const w = ruin.axis === 'x' ? rx : rz;
+    const floorY = -4;
+    const room = (rx * rx) / 49 + ((ry + 1) * (ry + 1)) / 25 + (rz * rz) / 36 <= 1;
+    const inPortalPlane = Math.abs(w) <= 0;
+    const v = ry - floorY;
+    const absU = Math.abs(u);
+    if (inPortalPlane && v >= 0 && v <= 6 && (absU === 2 || (v === 6 && absU <= 2) || (v === 0 && absU <= 1))) {
+      const broken = (v === 6 && u === 2) || (v === 5 && u === -2) || (v === 1 && u === 2 && noise2(seed + 3321, ruin.id, 0) < 0.7);
+      if (!broken) return BLOCK.STRANGE_PORTAL_STONE;
+    }
+    if (inPortalPlane && u === 0 && v === 2) return BLOCK.STRANGE_PORTAL_CORE;
+    if (room && ry === floorY) {
+      const rune = (Math.abs(rx) === 3 && Math.abs(rz) <= 1) || (Math.abs(rz) === 3 && Math.abs(rx) <= 1);
+      if (rune && noise2(seed + 3323, x, z) < 0.56) return BLOCK.STRANGE_PORTAL_RUNE;
+      return noise2(seed + 3325, x, z) < 0.18 ? BLOCK.STRANGE_PORTAL_STONE : BLOCK.DEEPSTONE;
+    }
+    if (room && ry <= floorY + 1 && Math.abs(w) + Math.abs(u) > 4 && noise2(seed + 3327, x, z) < 0.08) {
+      return BLOCK.STRANGE_PORTAL_STONE;
+    }
+    if (room) return BLOCK.AIR;
+    return null;
+  }
+
+  function portalRuinBlockAt(seed, x, y, z, groundH, world) {
+    if (!world || y <= 2 || y >= groundH - 4 || !farFromSpawn(world, x, z, 160)) return null;
+    const count = portalRuinCount(seed);
+    for (let i = 0; i < count; i += 1) {
+      const ruin = portalRuinAt(seed, world, i);
+      if (!ruin) continue;
+      const block = portalRuinBlock(seed, x, y, z, ruin);
+      if (block !== null) return block;
+    }
+    return null;
   }
 
   function featureCenter(seed, x, z, cellSize, salt) {
@@ -637,7 +727,62 @@
     return hash(state.worldMeta.seed || state.worldMeta.name || Date.now());
   }
 
+  function currentDimension(state) {
+    return state && state.worldMeta && state.worldMeta.currentDimension === 'underground' ? 'underground' : 'overworld';
+  }
+
+  function dimensionWorldId(baseWorldId, dimension) {
+    if (!baseWorldId) return '';
+    return dimension === 'underground' ? `${baseWorldId}:underground` : baseWorldId;
+  }
+
+  function currentStorageWorldId(state, targetWorldId = null) {
+    const base = targetWorldId || (state && state.worldMeta ? state.worldMeta.id : '');
+    return dimensionWorldId(base, currentDimension(state));
+  }
+
+  function undergroundPortalBlockAt(seed, x, y, z, worldMeta) {
+    const links = worldMeta && Array.isArray(worldMeta.portalLinks) ? worldMeta.portalLinks : [];
+    for (const link of links) {
+      const portal = link && link.underground;
+      if (!portal) continue;
+      const axis = portal.axis || 'x';
+      const rx = x - portal.x;
+      const ry = y - portal.y;
+      const rz = z - portal.z;
+      const u = axis === 'x' ? rz : rx;
+      const w = axis === 'x' ? rx : rz;
+      const v = ry + 4;
+      if (w === 0 && Math.abs(u) <= 1 && v >= 1 && v <= 5) return BLOCK.ACTIVE_STRANGE_PORTAL;
+      const ruin = { id: link.id || 0, x: portal.x, y: portal.y, z: portal.z, axis: portal.axis || 'x' };
+      const block = portalRuinBlock(seed, x, y, z, ruin);
+      if (block === BLOCK.AIR) return BLOCK.AIR;
+      if (block === BLOCK.STRANGE_PORTAL_CORE) return BLOCK.ACTIVE_STRANGE_PORTAL;
+      if (block !== null) return block;
+    }
+    return null;
+  }
+
+  function undergroundTerrainBlockAt(seed, x, y, z, world, worldMeta) {
+    if (y === 0) return BLOCK.BEDROCK;
+    if (x <= 0 || z <= 0 || x >= world.w - 1 || z >= world.d - 1) return BLOCK.BEDROCK;
+    const portal = undergroundPortalBlockAt(seed, x, y, z, worldMeta);
+    if (portal !== null) return portal;
+    const floor = 8 + Math.floor(smoothNoise(seed + 4101, x / 55, z / 55) * 7);
+    const ceiling = 86 + Math.floor(smoothNoise(seed + 4103, x / 70, z / 70) * 22);
+    if (y <= floor) return y === floor && smoothNoise(seed + 4105, x / 13, z / 13) > 0.72 ? BLOCK.DEEPSTONE : BLOCK.STONE;
+    if (y >= ceiling) return BLOCK.STONE;
+    const cellX = Math.floor(x / 31);
+    const cellZ = Math.floor(z / 31);
+    const px = cellX * 31 + 15;
+    const pz = cellZ * 31 + 15;
+    const pillar = noise2(seed + 4111, cellX, cellZ) < 0.22 && Math.hypot(x - px, z - pz) <= 2.1;
+    if (pillar && y > floor + 1 && y < ceiling - 1) return BLOCK.STONE;
+    return BLOCK.AIR;
+  }
+
   function terrainBlockAt(seed, x, y, z, world = null) {
+    if (world && world.dimension === 'underground') return undergroundTerrainBlockAt(seed, x, y, z, world, world.worldMeta);
     const h = terrainHeight(seed, x, z);
     const lake = lakeInfo(seed, x, z);
     const biome = lake.inLake ? 'lake' : (lake.shore ? 'beach' : (geyserValleyInfo(seed, x, z).inValley ? 'geysers' : baseLandBiome(seed, x, z)));
@@ -645,6 +790,8 @@
     const groundH = lake.inLake ? waterLevel - lake.depth : h;
     if (y === 0) return BLOCK.BEDROCK;
     if (y <= groundH) {
+      const portalRuin = portalRuinBlockAt(seed, x, y, z, groundH, world);
+      if (portalRuin !== null) return portalRuin;
       const caveBlock = caveBlockAt(seed, x, y, z, groundH, biome, world);
       if (caveBlock !== null) return caveBlock;
       if (undergroundLavaAt(seed, x, y, z, groundH, world)) return BLOCK.LAVA;
@@ -748,7 +895,7 @@
         if (!job) return;
         loading.pendingIds.delete(data.id);
         loading.pendingKeys.delete(job.key);
-        if (job.worldId !== stateRef.worldMeta.id || job.seed !== worldSeed(stateRef)) return;
+        if (job.worldId !== currentStorageWorldId(stateRef) || job.seed !== worldSeed(stateRef)) return;
         installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel, data.grassLevel || null);
       };
       chunkWorker.onerror = () => {
@@ -800,7 +947,7 @@
     const loading = ensureChunkLoading(state);
     if (!storage || !storage.isAvailable || !storage.isAvailable() || !state.world.savedChunks || !state.world.savedChunks.has(job.key)) return false;
     loading.loadingSaved.add(job.key);
-    storage.loadChunkSnapshot(state.worldMeta.id, job.key).then((snapshot) => {
+    storage.loadChunkSnapshot(currentStorageWorldId(state), job.key).then((snapshot) => {
       loading.loadingSaved.delete(job.key);
       if (!snapshot) {
         if (state.world.savedChunks) state.world.savedChunks.delete(job.key);
@@ -860,7 +1007,7 @@
     nextWorkerJobId += 1;
     loading.pendingIds.set(id, {
       key: job.key,
-      worldId: state.worldMeta.id,
+        worldId: currentStorageWorldId(state),
       seed,
     });
     loading.pendingKeys.add(job.key);
@@ -868,7 +1015,7 @@
       type: 'generate',
       id,
       seed,
-      world: { w: state.world.w, h: state.world.h, d: state.world.d },
+      world: { w: state.world.w, h: state.world.h, d: state.world.d, dimension: currentDimension(state), worldMeta: state.worldMeta },
       blockIds: BLOCK,
       cx: job.cx,
       cy: job.cy,
@@ -927,7 +1074,7 @@
         if (!keepUnsaved) world.unsavedChunks.delete(key);
         continue;
       }
-      const saved = await storage.saveChunkSnapshot(targetWorldId, key, snapshot);
+      const saved = await storage.saveChunkSnapshot(currentStorageWorldId(state, targetWorldId), key, snapshot);
       if (!saved) continue;
       if (!keepUnsaved) {
         world.unsavedChunks.delete(key);
@@ -1399,7 +1546,7 @@
     let generated = 0;
     queueChunksAroundPlayer3D(state, radius);
     generated += processTerrainQueue3D(state, seed);
-    generated += decorateReadyColumnsAround(state, seed, pcx, pcz, radius);
+    if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, radius);
     unloadDistantChunks3D(state);
     return generated;
   }
@@ -1411,7 +1558,11 @@
     const savedPlayer = state.worldMeta && state.worldMeta.player ? state.worldMeta.player : null;
     const hasSavedPlayer = !!(savedPlayer && Number.isFinite(savedPlayer.x) && Number.isFinite(savedPlayer.y) && Number.isFinite(savedPlayer.z));
     activeState = state;
+    world.dimension = currentDimension(state);
+    world.worldMeta = state.worldMeta;
     clearWorld3D(state);
+    state.world.dimension = currentDimension(state);
+    state.world.worldMeta = state.worldMeta;
     state.world.savedChunks = savedChunks;
     if (!state.entities) state.entities = {};
     state.entities.sheep = [];
@@ -1456,6 +1607,9 @@
     saveModifiedChunks3D,
     getBiomeAt3D,
     getCaveEntrancesInArea3D,
+    getPortalRuins3D,
+    dimensionWorldId,
+    currentStorageWorldId,
     BIOME_LABELS,
   };
 })();

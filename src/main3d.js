@@ -18,6 +18,7 @@
   let autosaveRunning = false;
   let autosavePending = false;
   let autosaveBaseWorldId = '';
+  let dimensionSwitching = false;
   const input = Game.input3d.createInput3D(canvas3d, () => state);
   const AUTOSAVE_WORLD_ID = '__autosave__';
   const AUTOSAVE_INTERVAL_MS = 10000;
@@ -32,6 +33,7 @@
     lake: '#357fb3',
     beach: '#d8c78a',
     geysers: '#9a7b5a',
+    deep_cavern: '#35353a',
   };
 
   function makeSeed() {
@@ -142,7 +144,7 @@
           <button class="menu-btn" type="button" data-action="show-load" data-context="${context}">Загрузить мир</button>
           ${pauseExit}
         </div>
-        <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, ЛКМ - добыча, ПКМ - поставить, R - починить блок, 1-9/0 - выбор блока.'}</div>
+        <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, F - полет в creative, ЛКМ - добыча, ПКМ - поставить, R - починить, P - предпросмотр, 1-9/0 - выбор блока.'}</div>
       </form>
     `;
   }
@@ -207,15 +209,70 @@
     };
   }
 
+  function currentDimension() {
+    return state && state.worldMeta && state.worldMeta.currentDimension === 'underground' ? 'underground' : 'overworld';
+  }
+
+  function dimensionStorageWorldId(baseWorldId, dimension) {
+    if (Game.generation3d && Game.generation3d.dimensionWorldId) return Game.generation3d.dimensionWorldId(baseWorldId, dimension);
+    return dimension === 'underground' ? `${baseWorldId}:underground` : baseWorldId;
+  }
+
+  function captureDimensionPlayer() {
+    if (!state || !state.player) return null;
+    return {
+      x: state.player.x,
+      y: state.player.y,
+      z: state.player.z,
+      yaw: state.player.yaw,
+      pitch: state.player.pitch,
+    };
+  }
+
+  function applyDimensionPlayer(playerMeta) {
+    if (!state || !state.player || !playerMeta) return;
+    if (Number.isFinite(playerMeta.x)) state.player.x = playerMeta.x;
+    if (Number.isFinite(playerMeta.y)) state.player.y = playerMeta.y;
+    if (Number.isFinite(playerMeta.z)) state.player.z = playerMeta.z;
+    if (Number.isFinite(playerMeta.yaw)) state.player.yaw = playerMeta.yaw;
+    if (Number.isFinite(playerMeta.pitch)) state.player.pitch = playerMeta.pitch;
+    state.player.vx = 0;
+    state.player.vy = 0;
+    state.player.vz = 0;
+  }
+
+  async function saveAllDimensionChunks(targetWorldId, options = {}) {
+    if (!state || !state.worldMeta || !Game.generation3d || !Game.generation3d.saveModifiedChunks3D) return 0;
+    const originalWorld = state.world;
+    const originalDimension = currentDimension();
+    const worlds = state.dimensionWorlds || {};
+    worlds[originalDimension] = originalWorld;
+    let saved = 0;
+    for (const dimension of Object.keys(worlds)) {
+      state.world = worlds[dimension];
+      state.worldMeta.currentDimension = dimension;
+      if (state.world) {
+        state.world.dimension = dimension;
+        state.world.worldMeta = state.worldMeta;
+      }
+      saved += await Game.generation3d.saveModifiedChunks3D(state, targetWorldId, options);
+    }
+    state.world = originalWorld;
+    state.worldMeta.currentDimension = originalDimension;
+    if (state.world) {
+      state.world.dimension = originalDimension;
+      state.world.worldMeta = state.worldMeta;
+    }
+    return saved;
+  }
+
   async function saveCurrentWorld() {
     if (!state || !state.worldMeta || !Game.storage3d || !Game.storage3d.saveWorldMeta) return false;
     state.worldMeta.player = capturePlayerMeta();
     state.worldMeta.updatedAt = Date.now();
     const metaSaved = await Game.storage3d.saveWorldMeta(state.worldMeta);
     if (!metaSaved) return false;
-    if (Game.generation3d && Game.generation3d.saveAllModifiedChunks3D) {
-      await Game.generation3d.saveAllModifiedChunks3D(state);
-    }
+    await saveAllDimensionChunks(state.worldMeta.id, { keepUnsaved: false });
     return true;
   }
 
@@ -248,9 +305,7 @@
     };
     const metaSaved = await storage.saveWorldMeta(meta);
     if (!metaSaved) return false;
-    if (Game.generation3d && Game.generation3d.saveModifiedChunks3D) {
-      await Game.generation3d.saveModifiedChunks3D(state, AUTOSAVE_WORLD_ID, { keepUnsaved: true });
-    }
+    await saveAllDimensionChunks(AUTOSAVE_WORLD_ID, { keepUnsaved: true });
     savedWorlds.set(AUTOSAVE_WORLD_ID, meta);
     return true;
   }
@@ -282,10 +337,11 @@
     return saved;
   }
 
-  async function startWorldFromMeta(meta, savedChunkKeys = []) {
+  async function startWorldFromMeta(meta) {
     lastAutosaveAt = Date.now();
     autosaveBaseWorldId = meta && meta.id === AUTOSAVE_WORLD_ID ? AUTOSAVE_WORLD_ID : '';
     state = Game.state3d.createGameState3D(meta);
+    state.dimensionWorlds = {};
     if (Game.inventory3d) {
       if (Game.inventory3d.ensureInventory) Game.inventory3d.ensureInventory(state);
       if (Game.inventory3d.ensureHotbar) Game.inventory3d.ensureHotbar(state);
@@ -297,7 +353,11 @@
       if (Number.isFinite(state.worldMeta.player.yaw)) state.player.yaw = state.worldMeta.player.yaw;
       if (Number.isFinite(state.worldMeta.player.pitch)) state.player.pitch = state.worldMeta.player.pitch;
     }
-    if (savedChunkKeys.length > 0) state.world.savedChunks = new Set(savedChunkKeys);
+    if (Game.storage3d && Game.storage3d.listChunkKeys && state.worldMeta.id) {
+      const storageId = dimensionStorageWorldId(state.worldMeta.id, currentDimension());
+      const savedChunkKeys = await Game.storage3d.listChunkKeys(storageId);
+      if (savedChunkKeys.length > 0) state.world.savedChunks = new Set(savedChunkKeys);
+    }
     Game.generation3d.generateWorld3D(state);
     if (!Game.renderer3d.init(canvas3d)) {
       menuRoot.innerHTML = '<div class="menu-panel">WebGL не удалось запустить.</div>';
@@ -322,8 +382,7 @@
     }
     const meta = savedWorlds.get(worldId);
     if (!meta) return;
-    const savedChunkKeys = Game.storage3d && Game.storage3d.listChunkKeys ? await Game.storage3d.listChunkKeys(worldId) : [];
-    await startWorldFromMeta(meta, savedChunkKeys);
+    await startWorldFromMeta(meta);
   }
 
   async function deleteSavedWorld(worldId) {
@@ -372,6 +431,12 @@
     return Math.max(min, Math.min(max, value));
   }
 
+  function setNotice(text) {
+    if (!state || !state.ui) return;
+    state.ui.noticeText = text;
+    state.ui.noticeTimer = 1.35;
+  }
+
   function ensureMapCanvas() {
     if (!mapRoot) return null;
     mapCanvas = mapRoot.querySelector('.map-canvas');
@@ -382,7 +447,7 @@
 
   function mapBitmapKey() {
     if (!state || !state.worldMeta) return '';
-    return `${state.worldMeta.id || ''}:${state.worldMeta.seed || ''}:${MAP_BITMAP_SIZE}`;
+    return `${state.worldMeta.id || ''}:${state.worldMeta.seed || ''}:${state.worldMeta.currentDimension || 'overworld'}:${MAP_BITMAP_SIZE}`;
   }
 
   function ensureMapBitmap() {
@@ -546,6 +611,98 @@
     }
   }
 
+  function drawPortalRuinIcon(ctx, x, y, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.42, size * 0.78, size * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#14101d';
+    ctx.lineWidth = Math.max(4, size * 0.28);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.42, size * 0.36);
+    ctx.lineTo(-size * 0.42, -size * 0.32);
+    ctx.moveTo(size * 0.42, size * 0.12);
+    ctx.lineTo(size * 0.42, -size * 0.2);
+    ctx.moveTo(-size * 0.42, -size * 0.32);
+    ctx.lineTo(size * 0.14, -size * 0.48);
+    ctx.stroke();
+    ctx.strokeStyle = '#8f68c8';
+    ctx.lineWidth = Math.max(2, size * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.42, size * 0.36);
+    ctx.lineTo(-size * 0.42, -size * 0.32);
+    ctx.moveTo(size * 0.42, size * 0.12);
+    ctx.lineTo(size * 0.42, -size * 0.2);
+    ctx.moveTo(-size * 0.42, -size * 0.32);
+    ctx.lineTo(size * 0.14, -size * 0.48);
+    ctx.stroke();
+    ctx.fillStyle = '#4d356f';
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.lineWidth = Math.max(1, size * 0.08);
+    ctx.beginPath();
+    ctx.arc(0, size * 0.1, size * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawCreativePortalRuins(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.mode !== 'creative') return;
+    if (state.worldMeta.currentDimension === 'underground') {
+      const links = Array.isArray(state.worldMeta.portalLinks) ? state.worldMeta.portalLinks : [];
+      const iconSize = Math.max(11 * window.devicePixelRatio, Math.min(25 * window.devicePixelRatio, 8 * window.devicePixelRatio * Math.sqrt(scale)));
+      for (const link of links) {
+        const portal = link && link.underground;
+        if (!portal) continue;
+        drawPortalRuinIcon(ctx, mapX + portal.x * scale, mapY + portal.z * scale, iconSize);
+      }
+      return;
+    }
+    const generation = Game.generation3d;
+    if (!generation || !generation.getPortalRuins3D) return;
+    const ruins = generation.getPortalRuins3D(state);
+    const iconSize = Math.max(11 * window.devicePixelRatio, Math.min(25 * window.devicePixelRatio, 8 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const ruin of ruins) {
+      if (ruin.x < 0 || ruin.x > world.w || ruin.z < 0 || ruin.z > world.d) continue;
+      drawPortalRuinIcon(ctx, mapX + ruin.x * scale, mapY + ruin.z * scale, iconSize);
+    }
+  }
+
+  function drawMapWaypoint(ctx, mapX, mapY, scale) {
+    const waypoint = state && state.ui ? state.ui.mapWaypoint : null;
+    if (!waypoint) return;
+    const x = mapX + waypoint.x * scale;
+    const y = mapY + waypoint.z * scale;
+    const size = Math.max(8 * window.devicePixelRatio, Math.min(18 * window.devicePixelRatio, 10 * Math.sqrt(scale)));
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.lineWidth = Math.max(3, size * 0.28);
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(0, size);
+    ctx.moveTo(-size, 0);
+    ctx.lineTo(size, 0);
+    ctx.stroke();
+    ctx.strokeStyle = '#ffdf7a';
+    ctx.lineWidth = Math.max(1.5, size * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(0, size);
+    ctx.moveTo(-size, 0);
+    ctx.lineTo(size, 0);
+    ctx.stroke();
+    ctx.fillStyle = '#ffdf7a';
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function resizeMapCanvas() {
     const canvas = ensureMapCanvas();
     if (!canvas) return;
@@ -589,6 +746,8 @@
     ctx.lineWidth = Math.max(1, window.devicePixelRatio);
     ctx.strokeRect(x + 0.5, y + 0.5, viewW - 1, viewH - 1);
     drawCreativeCaveEntrances(ctx, x, y, scale, width, height, world);
+    drawCreativePortalRuins(ctx, x, y, scale, world);
+    drawMapWaypoint(ctx, x, y, scale);
 
     const playerX = x + state.player.x * scale;
     const playerY = y + state.player.z * scale;
@@ -643,7 +802,7 @@
             </div>
           `).join('')}
         </div>
-        <div class="map-hint">Колесо мыши - масштаб, перетаскивание - сдвиг, M или Escape - закрыть.</div>
+        <div class="map-hint">ЛКМ - поставить цель, C - сбросить цель, колесо мыши - масштаб, перетаскивание - сдвиг, M или Escape - закрыть.</div>
       </div>
     `;
     ensureMapCanvas();
@@ -652,6 +811,10 @@
 
   function openMap() {
     if (!state || screen !== 'playing') return;
+    if (!state.worldMeta || state.worldMeta.mode !== 'creative') {
+      setNotice('Карта доступна только в творческом режиме');
+      return;
+    }
     input.resetMovement();
     if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
     state.ui.mapCenterX = state.player.x;
@@ -673,6 +836,133 @@
     state.ui.mapCenterX = state.player.x;
     state.ui.mapCenterZ = state.player.z;
     renderMap();
+  }
+
+  function setMapWaypointFromScreen(screenX, screenY) {
+    if (!state || !state.ui || !state.world || !mapCanvas) return;
+    const pos = mapScreenToWorld(screenX, screenY);
+    state.ui.mapWaypoint = {
+      x: clamp(pos.x, 0, state.world.w),
+      z: clamp(pos.z, 0, state.world.d),
+    };
+    setNotice('Цель поставлена');
+    renderMap();
+  }
+
+  function clearMapWaypoint() {
+    if (!state || !state.ui || !state.ui.mapWaypoint) return;
+    state.ui.mapWaypoint = null;
+    setNotice('Цель сброшена');
+    renderMap();
+  }
+
+  function playerTouchingActivePortal() {
+    if (!state || !state.player || !state.world) return null;
+    const block = Game.blocks && Game.blocks.BLOCK;
+    const player = state.player;
+    const minX = Math.floor(player.x - 0.32);
+    const maxX = Math.floor(player.x + 0.32);
+    const minY = Math.floor(player.y);
+    const maxY = Math.floor(player.y + 1.78);
+    const minZ = Math.floor(player.z - 0.32);
+    const maxZ = Math.floor(player.z + 0.32);
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let z = minZ; z <= maxZ; z += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          if (Game.world3d.getBlock3D(state, x, y, z) === block.ACTIVE_STRANGE_PORTAL) return { x, y, z };
+        }
+      }
+    }
+    return null;
+  }
+
+  function linkForPortalTouch(touch) {
+    const links = state && state.worldMeta && Array.isArray(state.worldMeta.portalLinks) ? state.worldMeta.portalLinks : [];
+    const dimension = currentDimension();
+    for (const link of links) {
+      const portal = link && link[dimension];
+      if (!portal) continue;
+      const dx = Math.abs(touch.x - portal.x);
+      const dy = Math.abs(touch.y - portal.y);
+      const dz = Math.abs(touch.z - portal.z);
+      if (portal.axis === 'x') {
+        if (dx <= 1 && dz <= 2 && dy <= 4) return link;
+      } else if (dz <= 1 && dx <= 2 && dy <= 4) {
+        return link;
+      }
+    }
+    return null;
+  }
+
+  async function switchDimension(targetDimension, targetPortal) {
+    if (!state || !state.worldMeta || !targetPortal || dimensionSwitching) return;
+    dimensionSwitching = true;
+    try {
+      const fromDimension = currentDimension();
+      if (!state.dimensionWorlds) state.dimensionWorlds = {};
+      if (!state.dimensionEntities) state.dimensionEntities = {};
+      if (!state.worldMeta.dimensionPlayers) state.worldMeta.dimensionPlayers = {};
+      state.worldMeta.dimensionPlayers[fromDimension] = captureDimensionPlayer();
+      state.dimensionWorlds[fromDimension] = state.world;
+      state.dimensionEntities[fromDimension] = state.entities ? { sheep: Array.isArray(state.entities.sheep) ? state.entities.sheep : [] } : { sheep: [] };
+
+      let nextWorld = state.dimensionWorlds[targetDimension];
+      if (!nextWorld) {
+        const constants = Game.constants3d;
+        nextWorld = Game.world3d.createWorld3D(constants.WORLD_W, constants.WORLD_H, constants.WORLD_D);
+        state.dimensionWorlds[targetDimension] = nextWorld;
+      }
+      state.world = nextWorld;
+      state.entities = state.dimensionEntities[targetDimension] || { sheep: [] };
+      state.worldMeta.currentDimension = targetDimension;
+      state.world.dimension = targetDimension;
+      state.world.worldMeta = state.worldMeta;
+      const entryPlayer = {
+        x: targetPortal.x + 0.5,
+        y: targetPortal.y + 1.2,
+        z: targetPortal.z + 0.5,
+        yaw: state.player.yaw,
+        pitch: state.player.pitch,
+      };
+      state.worldMeta.player = entryPlayer;
+      applyDimensionPlayer(entryPlayer);
+
+      if (Game.storage3d && Game.storage3d.listChunkKeys && state.worldMeta.id) {
+        const storageId = dimensionStorageWorldId(state.worldMeta.id, targetDimension);
+        const keys = await Game.storage3d.listChunkKeys(storageId);
+        if (keys.length && (!state.world.savedChunks || state.world.savedChunks.size === 0)) state.world.savedChunks = new Set(keys);
+      }
+      const needsGenerate = !state.world.chunks || state.world.chunks.size === 0;
+      if (needsGenerate) Game.generation3d.generateWorld3D(state);
+      state.dimensionWorlds[targetDimension] = state.world;
+      applyDimensionPlayer(entryPlayer);
+      state.player.portalCooldown = 1.2;
+      state.ui.mapBitmap = null;
+      state.ui.mapBitmapKey = '';
+      if (Game.renderer3d) Game.renderer3d.setWorld(state);
+      setNotice(targetDimension === 'underground' ? 'Подземное измерение' : 'Обычный мир');
+      if (Game.storage3d && Game.storage3d.saveWorldMeta && state.worldMeta.id) {
+        state.worldMeta.player = capturePlayerMeta();
+        state.worldMeta.updatedAt = Date.now();
+        Game.storage3d.saveWorldMeta(state.worldMeta);
+      }
+    } finally {
+      dimensionSwitching = false;
+    }
+  }
+
+  function updatePortalTravel(dt) {
+    if (!state || !state.player) return;
+    state.player.portalCooldown = Math.max(0, (state.player.portalCooldown || 0) - dt);
+    if (state.player.portalCooldown > 0 || dimensionSwitching) return;
+    const touch = playerTouchingActivePortal();
+    if (!touch) return;
+    const link = linkForPortalTouch(touch);
+    if (!link) return;
+    const targetDimension = currentDimension() === 'underground' ? 'overworld' : 'underground';
+    const targetPortal = link[targetDimension];
+    if (!targetPortal) return;
+    switchDimension(targetDimension, targetPortal);
   }
 
   function selectHotbarIndex(index) {
@@ -740,9 +1030,11 @@
     state.ui.mobileMoveY = input.input.mobileMoveY || 0;
     if (!handleMobileUiActions()) return;
     const mouse = input.consumeMouse();
-    Game.player3d.updatePlayer3D(state, input.input, mouse, dt);
+    const actions = input.consumeActions();
+    Game.player3d.updatePlayer3D(state, input.input, mouse, dt, actions);
+    updatePortalTravel(dt);
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
-    Game.interaction3d.updateInteraction3D(state, input.input, input.consumeActions(), dt);
+    Game.interaction3d.updateInteraction3D(state, input.input, actions, dt);
     if (Game.interaction3d.updateDynamite3D) Game.interaction3d.updateDynamite3D(state, dt);
     if (Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
     Game.fluids3d.updateFluids3D(state, dt);
@@ -859,6 +1151,7 @@
         y: event.clientY,
         centerX: state.ui.mapCenterX || state.world.w / 2,
         centerZ: state.ui.mapCenterZ || state.world.d / 2,
+        moved: false,
       };
       canvas.classList.add('is-dragging');
       if (canvas.setPointerCapture) {
@@ -880,11 +1173,14 @@
       if (!Number.isFinite(scale) || scale <= 0) return;
       state.ui.mapCenterX = clamp(mapDrag.centerX - (event.clientX - mapDrag.x) / scale, 0, state.world.w);
       state.ui.mapCenterZ = clamp(mapDrag.centerZ - (event.clientY - mapDrag.y) / scale, 0, state.world.d);
+      if (Math.hypot(event.clientX - mapDrag.x, event.clientY - mapDrag.y) > 5) mapDrag.moved = true;
       renderMap();
       event.preventDefault();
     });
     const endMapDrag = (event) => {
       if (!mapDrag || (event && mapDrag.pointerId !== event.pointerId)) return;
+      const wasClick = event && !mapDrag.moved && event.target === mapCanvas;
+      if (wasClick) setMapWaypointFromScreen(event.clientX, event.clientY);
       mapDrag = null;
       if (mapCanvas) mapCanvas.classList.remove('is-dragging');
     };
@@ -896,6 +1192,12 @@
     if (event.code === 'KeyM' && screen === 'playing') {
       input.input.keys[event.code] = false;
       openMap();
+      event.preventDefault();
+      return;
+    }
+    if (event.code === 'KeyC' && (screen === 'playing' || screen === 'map')) {
+      input.input.keys[event.code] = false;
+      clearMapWaypoint();
       event.preventDefault();
       return;
     }

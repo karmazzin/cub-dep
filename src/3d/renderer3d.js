@@ -31,6 +31,11 @@
   let dynamiteOverlayGeometry = null;
   let dynamiteOverlayMaterials = null;
   let dynamiteOverlayMeshes = [];
+  let previewFluidMesh = null;
+  let previewFluidGeometry = null;
+  let previewFluidMaterial = null;
+  let previewFluidCapacity = 0;
+  let previewTntMesh = null;
   let sheepMeshes = new Map();
   let sheepMaterials = null;
   let textureAtlas = null;
@@ -279,7 +284,7 @@
     const base = hexToRgb(BLOCK_COLORS[id] || '#b43a2f');
     ctx.fillStyle = rgbToCss(base);
     ctx.fillRect(x, y, size, size);
-    const stickCount = id === BLOCK.DYNAMITE_MEGA_HUGE ? 6 : (id === BLOCK.DYNAMITE_HUGE ? 5 : (id === BLOCK.DYNAMITE_LARGE ? 4 : 3));
+    const stickCount = id === BLOCK.DYNAMITE_POWER_100 ? 7 : (id === BLOCK.DYNAMITE_POWER_75 ? 6 : (id === BLOCK.DYNAMITE_MEGA_HUGE ? 5 : (id === BLOCK.DYNAMITE_HUGE ? 4 : 3)));
     const stickW = Math.max(4, Math.floor(size / (stickCount + 2)));
     const startX = x + Math.floor((size - stickW * stickCount) / 2);
     for (let i = 0; i < stickCount; i += 1) {
@@ -305,12 +310,96 @@
     }
   }
 
+  function drawTntRemoteTile(ctx, rng, x, y, size) {
+    const base = hexToRgb(BLOCK_COLORS[BLOCK.TNT_REMOTE] || '#4f6d78');
+    fillPixelNoise(ctx, rng, base, x, y, size, 24, 2);
+    ctx.fillStyle = '#263942';
+    ctx.fillRect(x + Math.floor(size * 0.16), y + Math.floor(size * 0.18), Math.floor(size * 0.68), Math.floor(size * 0.64));
+    ctx.fillStyle = '#6f8d98';
+    ctx.fillRect(x + Math.floor(size * 0.22), y + Math.floor(size * 0.24), Math.floor(size * 0.56), Math.floor(size * 0.26));
+    ctx.fillStyle = '#f0d05a';
+    ctx.fillRect(x + Math.floor(size * 0.28), y + Math.floor(size * 0.30), Math.floor(size * 0.44), Math.max(2, Math.floor(size * 0.08)));
+    ctx.fillStyle = '#cb3d33';
+    ctx.beginPath();
+    ctx.arc(x + size * 0.50, y + size * 0.66, Math.max(3, size * 0.13), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#d9eef0';
+    ctx.lineWidth = Math.max(1, Math.floor(size / 18));
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.62, y + size * 0.18);
+    ctx.lineTo(x + size * 0.80, y + size * 0.04);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+  }
+
+  function drawStrangePortalTile(ctx, rng, id, x, y, size) {
+    const base = hexToRgb(BLOCK_COLORS[id] || '#251d31');
+    if (id === BLOCK.ACTIVE_STRANGE_PORTAL) {
+      fillPixelNoise(ctx, rng, base, x, y, size, 18, 3);
+      ctx.fillStyle = 'rgba(230,230,230,0.42)';
+      ctx.fillRect(x + size * 0.18, y + size * 0.18, size * 0.64, size * 0.64);
+      ctx.strokeStyle = '#d0d0d0';
+      ctx.lineWidth = Math.max(1, Math.floor(size / 12));
+      ctx.beginPath();
+      ctx.moveTo(x + size * 0.28, y + size * 0.5);
+      ctx.quadraticCurveTo(x + size * 0.5, y + size * 0.22, x + size * 0.72, y + size * 0.5);
+      ctx.quadraticCurveTo(x + size * 0.5, y + size * 0.78, x + size * 0.28, y + size * 0.5);
+      ctx.stroke();
+      return;
+    }
+    fillPixelNoise(ctx, rng, base, x, y, size, 32, 2);
+    if (id === BLOCK.STRANGE_PORTAL_CORE) {
+      ctx.fillStyle = '#171120';
+      ctx.fillRect(x + size * 0.18, y + size * 0.18, size * 0.64, size * 0.64);
+      ctx.fillStyle = 'rgba(149,104,206,0.78)';
+      ctx.beginPath();
+      ctx.arc(x + size * 0.5, y + size * 0.5, size * 0.23, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#21152f';
+      ctx.lineWidth = Math.max(1, Math.floor(size / 12));
+      ctx.beginPath();
+      ctx.moveTo(x + size * 0.34, y + size * 0.28);
+      ctx.lineTo(x + size * 0.62, y + size * 0.72);
+      ctx.moveTo(x + size * 0.68, y + size * 0.32);
+      ctx.lineTo(x + size * 0.42, y + size * 0.62);
+      ctx.stroke();
+    } else if (id === BLOCK.STRANGE_PORTAL_RUNE) {
+      ctx.strokeStyle = '#9d7ad4';
+      ctx.lineWidth = Math.max(1, Math.floor(size / 13));
+      ctx.beginPath();
+      ctx.moveTo(x + size * 0.28, y + size * 0.72);
+      ctx.lineTo(x + size * 0.5, y + size * 0.25);
+      ctx.lineTo(x + size * 0.72, y + size * 0.72);
+      ctx.moveTo(x + size * 0.38, y + size * 0.52);
+      ctx.lineTo(x + size * 0.62, y + size * 0.52);
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = '#7a5aaa';
+      ctx.lineWidth = Math.max(1, Math.floor(size / 16));
+      for (let i = 0; i < 5; i += 1) {
+        const sx = x + size * (0.18 + rng() * 0.64);
+        const sy = y + size * (0.18 + rng() * 0.64);
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + (rng() - 0.5) * size * 0.36, sy + (rng() - 0.5) * size * 0.36);
+        ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.34)';
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+  }
+
   function drawBlockTile(ctx, id, faceType, variant, x, y, size) {
     const rng = mulberry32(id * 9973 + variant * 131 + faceType.charCodeAt(0) * 17);
     const base = hexToRgb(BLOCK_COLORS[id] || '#ffffff');
     const kind = blockKind(id);
 
-    if (id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE) {
+    if (id === BLOCK.STRANGE_PORTAL_STONE || id === BLOCK.STRANGE_PORTAL_CORE || id === BLOCK.STRANGE_PORTAL_RUNE || id === BLOCK.ACTIVE_STRANGE_PORTAL) {
+      drawStrangePortalTile(ctx, rng, id, x, y, size);
+    } else if (id === BLOCK.TNT_REMOTE) {
+      drawTntRemoteTile(ctx, rng, x, y, size);
+    } else if (id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE || id === BLOCK.DYNAMITE_POWER_75 || id === BLOCK.DYNAMITE_POWER_100) {
       drawDynamiteTile(ctx, rng, id, x, y, size);
     } else if (id === BLOCK.GRASS) {
       if (faceType === 'top') drawGrassTop(ctx, rng, x, y, size, variant);
@@ -857,6 +946,20 @@
         new THREE.MeshBasicMaterial({ color: 0xff3b28, transparent: true, opacity: 0.46, depthWrite: false }),
       ];
       scene.add(dynamiteOverlayGroup);
+      previewFluidGeometry = new THREE.BoxGeometry(1.02, 1.02, 1.02);
+      previewFluidMaterial = new THREE.MeshBasicMaterial({
+        color: 0x2f82d0,
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+      });
+      previewTntMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(1, 48, 24),
+        new THREE.MeshBasicMaterial({ color: 0xff3b28, transparent: true, opacity: 0.62, wireframe: true, depthWrite: false })
+      );
+      previewTntMesh.renderOrder = 3;
+      previewTntMesh.visible = false;
+      scene.add(previewTntMesh);
     }
     return true;
   }
@@ -884,6 +987,52 @@
       mesh.material.opacity = flash ? 0.35 + urgent * 0.28 : 0.18 + urgent * 0.18;
       mesh.position.set(item.x + 0.5, item.y + 0.5, item.z + 0.5);
       mesh.visible = true;
+    }
+  }
+
+  function fluidPreviewColor(fluidId) {
+    if (fluidId === BLOCK.LAVA) return 0xff7a1c;
+    if (fluidId === BLOCK.HOT_WATER) return 0x2368b8;
+    return 0x2f82d0;
+  }
+
+  function updatePreviewOverlay(state) {
+    if (!scene || !previewFluidGeometry || !previewFluidMaterial || !previewTntMesh) return;
+    const preview = state && state.ui ? state.ui.preview : null;
+    const fluidVisible = preview && preview.type === 'fluid' && Array.isArray(preview.cells) && preview.cells.length > 0;
+    if (fluidVisible) {
+      const cells = preview.cells;
+      if (!previewFluidMesh || previewFluidCapacity < cells.length) {
+        if (previewFluidMesh) {
+          scene.remove(previewFluidMesh);
+          previewFluidMesh.dispose && previewFluidMesh.dispose();
+        }
+        previewFluidCapacity = Math.max(cells.length, previewFluidCapacity * 2, 64);
+        previewFluidMesh = new THREE.InstancedMesh(previewFluidGeometry, previewFluidMaterial, previewFluidCapacity);
+        previewFluidMesh.renderOrder = 3;
+        scene.add(previewFluidMesh);
+      }
+      previewFluidMaterial.color.setHex(fluidPreviewColor(preview.fluidId));
+      previewFluidMesh.count = cells.length;
+      const matrix = new THREE.Matrix4();
+      for (let i = 0; i < cells.length; i += 1) {
+        const cell = cells[i];
+        matrix.makeTranslation(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5);
+        previewFluidMesh.setMatrixAt(i, matrix);
+      }
+      previewFluidMesh.instanceMatrix.needsUpdate = true;
+      previewFluidMesh.visible = true;
+    } else if (previewFluidMesh) {
+      previewFluidMesh.visible = false;
+    }
+
+    if (preview && preview.type === 'tnt') {
+      const radius = Math.max(0.5, preview.radius || 1);
+      previewTntMesh.position.set(preview.x + 0.5, preview.y + 0.5, preview.z + 0.5);
+      previewTntMesh.scale.setScalar(radius);
+      previewTntMesh.visible = true;
+    } else {
+      previewTntMesh.visible = false;
     }
   }
 
@@ -1577,6 +1726,7 @@
     updateSkyLayer(player);
     updateSteamParticles(state);
     updateDynamiteOverlays(state);
+    updatePreviewOverlay(state);
     syncSheepMeshes(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
