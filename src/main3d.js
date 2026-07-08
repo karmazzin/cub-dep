@@ -30,22 +30,130 @@
     forest: '#2f6b42',
     desert: '#c9b36a',
     mountains: '#8f9693',
+    cliffs: '#6f7472',
+    volcanic: '#2b2528',
+    snow_plains: '#d8e5ea',
+    spruce_forest: '#254f46',
+    mountain_forest: '#4f6650',
     lake: '#357fb3',
     beach: '#d8c78a',
     geysers: '#9a7b5a',
     deep_cavern: '#35353a',
   };
+  const SPAWN_SEED_SEARCH_ATTEMPTS = 3000;
+  const SPAWN_BIOME_OPTIONS = [
+    { id: 'any', label: 'Любой' },
+    { id: 'plains', label: 'Равнина' },
+    { id: 'forest', label: 'Лес' },
+    { id: 'desert', label: 'Пустыня' },
+    { id: 'mountains', label: 'Горы' },
+    { id: 'cliffs', label: 'Скалы' },
+    { id: 'volcanic', label: 'Вулканический биом' },
+    { id: 'snow_plains', label: 'Снежная равнина' },
+    { id: 'spruce_forest', label: 'Хвойный лес' },
+    { id: 'mountain_forest', label: 'Горный лес' },
+    { id: 'beach', label: 'Пляж' },
+    { id: 'geysers', label: 'Долина гейзеров' },
+  ];
+  const SPAWN_BIOME_IDS = new Set(SPAWN_BIOME_OPTIONS.map((item) => item.id));
 
   function makeSeed() {
     return Math.random().toString(36).slice(2, 10).toUpperCase();
   }
 
+  function normalizeChunkRenderDistance(value) {
+    return Game.constants3d && Game.constants3d.normalizeChunkRenderDistance
+      ? Game.constants3d.normalizeChunkRenderDistance(value)
+      : 'auto';
+  }
+
+  function renderChunkRenderDistanceOptions(selected = 'auto') {
+    const normalized = normalizeChunkRenderDistance(selected);
+    const options = [`<option value="auto" ${normalized === 'auto' ? 'selected' : ''}>Авто</option>`];
+    for (let distance = 1; distance <= 10; distance += 1) {
+      options.push(`<option value="${distance}" ${normalized === distance ? 'selected' : ''}>${distance}</option>`);
+    }
+    return options.join('');
+  }
+
+  function normalizeSpawnBiome(value) {
+    const id = String(value || 'any').trim();
+    return SPAWN_BIOME_IDS.has(id) ? id : 'any';
+  }
+
+  function renderSpawnBiomeOptions(selected = 'any') {
+    const normalized = normalizeSpawnBiome(selected);
+    return SPAWN_BIOME_OPTIONS.map((item) => (
+      `<option value="${item.id}" ${item.id === normalized ? 'selected' : ''}>${escapeHtml(item.label)}</option>`
+    )).join('');
+  }
+
+  function waitForNextFrame() {
+    return new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+
+  function renderWorldCreationStatus(spawnBiome = 'any') {
+    const searchingSeed = normalizeSpawnBiome(spawnBiome) !== 'any';
+    menuRoot.innerHTML = `
+      <div class="menu-panel">
+        <h1 class="menu-title">${searchingSeed ? 'Поиск сида' : 'Создание мира'}</h1>
+        <p class="menu-subtitle">${searchingSeed ? 'Ищем подходящий стартовый биом.' : 'Готовим стартовую область.'}</p>
+        ${searchingSeed ? '<p class="menu-hint" id="seedSearchStatus">Готовим проверку сидов.</p>' : ''}
+      </div>
+    `;
+    setScreen('menu');
+  }
+
+  function updateSeedSearchStatus(seed) {
+    const status = document.getElementById('seedSearchStatus');
+    if (!status) return;
+    status.textContent = seed ? `Проверяем сид ${seed}` : 'Готовим проверку сидов.';
+  }
+
+  function syncSpawnSeedInput() {
+    const form = document.getElementById('newWorldForm');
+    if (!form) return;
+    const seedInput = form.querySelector('input[name="seed"]');
+    const spawnSelect = form.querySelector('select[name="spawnBiome"]');
+    if (!seedInput || !spawnSelect) return;
+    const searchingSeed = normalizeSpawnBiome(spawnSelect.value) !== 'any';
+    seedInput.disabled = searchingSeed;
+    seedInput.placeholder = searchingSeed ? 'Сид будет найден автоматически' : 'Случайный сид';
+    if (searchingSeed) seedInput.value = '';
+  }
+
+  async function resolveSeedForSpawnBiome(form) {
+    const spawnBiome = normalizeSpawnBiome(form && form.spawnBiome);
+    if (spawnBiome === 'any') {
+      const seed = form && form.seed && form.seed.trim ? form.seed.trim() : '';
+      return { seed: seed || makeSeed(), usedSearch: false };
+    }
+    const generation = Game.generation3d;
+    if (!generation || !generation.seedHasDefaultSpawnBiome3D) {
+      return { seed: makeSeed(), usedSearch: false };
+    }
+    for (let attempt = 0; attempt < SPAWN_SEED_SEARCH_ATTEMPTS; attempt += 1) {
+      const seed = makeSeed();
+      updateSeedSearchStatus(seed);
+      if (generation.seedHasDefaultSpawnBiome3D(seed, spawnBiome)) {
+        return { seed, usedSearch: true };
+      }
+      if (attempt % 30 === 29) await waitForNextFrame();
+    }
+    return { seed: makeSeed(), usedSearch: false };
+  }
+
   function createWorldMeta(form) {
+    const chunkRenderDistance = normalizeChunkRenderDistance(form.chunkRenderDistance);
+    const spawnBiome = normalizeSpawnBiome(form.spawnBiome);
     return {
       id: `world-${Date.now().toString(36)}`,
       name: form.name && form.name.trim() ? form.name.trim() : 'Новый мир',
       seed: form.seed && form.seed.trim() ? form.seed.trim() : makeSeed(),
       mode: form.mode === 'creative' ? 'creative' : 'survival',
+      chunkRenderDistance,
+      spawnBiome,
+      spawnBiomeSeedSearch: form.spawnBiomeSeedSearch === true,
       worldType: 'normal',
       singleBiome: 'forest',
       cavernBiome: 'mix',
@@ -53,6 +161,129 @@
       createdAt: Date.now(),
       updatedAt: Date.now(),
       player: null,
+    };
+  }
+
+  function createEducationWorldMeta(countryId, grade, subjectId, lesson) {
+    const education = Game.education3d
+      ? Game.education3d.createEducationMeta(countryId, grade, subjectId, lesson)
+      : null;
+    const subject = education && education.subjectLabel ? education.subjectLabel : 'Обучение';
+    const lessonNumber = education && education.lesson ? education.lesson : 1;
+    return {
+      id: `education-${Date.now().toString(36)}`,
+      name: `Обучение: ${subject}, урок ${lessonNumber}`,
+      seed: makeSeed(),
+      mode: 'education',
+      worldType: 'normal',
+      singleBiome: 'forest',
+      cavernBiome: 'mix',
+      kind: '3d',
+      education,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      player: null,
+    };
+  }
+
+  function createGrade5ExamWorldMeta(countryId) {
+    const education = Game.education3d && Game.education3d.createGrade5ExamMeta
+      ? Game.education3d.createGrade5ExamMeta(countryId)
+      : null;
+    return {
+      id: `education-exam-${Date.now().toString(36)}`,
+      name: 'Экзамен перед 5 классом',
+      seed: makeSeed(),
+      mode: 'education',
+      worldType: 'normal',
+      singleBiome: 'forest',
+      cavernBiome: 'mix',
+      kind: '3d',
+      education,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      player: null,
+    };
+  }
+
+  function createGrade6ExamWorldMeta(countryId) {
+    const education = Game.education3d && Game.education3d.createGrade6ExamMeta
+      ? Game.education3d.createGrade6ExamMeta(countryId)
+      : null;
+    return {
+      id: `education-exam-${Date.now().toString(36)}`,
+      name: 'Экзамен перед 6 классом',
+      seed: makeSeed(),
+      mode: 'education',
+      worldType: 'normal',
+      singleBiome: 'forest',
+      cavernBiome: 'mix',
+      kind: '3d',
+      education,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      player: null,
+    };
+  }
+
+  function createCustomLessonEditorWorldMeta(courseId, lesson) {
+    const course = Game.education3d && Game.education3d.customCourseById ? Game.education3d.customCourseById(courseId) : null;
+    const seed = lesson && lesson.seed ? lesson.seed : makeSeed();
+    return {
+      id: lesson && lesson.mapWorldId ? lesson.mapWorldId : `custom-map-${Date.now().toString(36)}`,
+      name: `Редактор урока: ${lesson && lesson.title ? lesson.title : 'Урок'}`,
+      seed,
+      mode: 'creative',
+      worldType: 'normal',
+      singleBiome: 'forest',
+      cavernBiome: 'mix',
+      kind: '3d',
+      customLessonEditor: {
+        courseId,
+        lessonId: lesson ? lesson.id : '',
+        countryId: course ? course.countryId : 'ru',
+        grade: course ? course.grade : 1,
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      player: null,
+    };
+  }
+
+  function createCustomLessonPlayWorldMeta(courseId, lesson, savedMapMeta = null) {
+    const course = Game.education3d && Game.education3d.customCourseById ? Game.education3d.customCourseById(courseId) : null;
+    const playMode = Game.education3d && Game.education3d.normalizeCustomLessonMode
+      ? Game.education3d.normalizeCustomLessonMode(lesson && lesson.mode)
+      : 'survival';
+    const seed = lesson && lesson.seed ? lesson.seed : makeSeed();
+    const spawnMode = Game.education3d && Game.education3d.normalizeCustomLessonSpawnMode
+      ? Game.education3d.normalizeCustomLessonSpawnMode(lesson && lesson.spawnMode)
+      : 'editor_position';
+    const editorPlayer = savedMapMeta && savedMapMeta.player && Number.isFinite(savedMapMeta.player.x)
+      ? { ...savedMapMeta.player }
+      : null;
+    return {
+      id: lesson && lesson.hasMap && lesson.mapWorldId ? lesson.mapWorldId : `custom-play-${Date.now().toString(36)}`,
+      name: `Урок: ${lesson && lesson.title ? lesson.title : 'Урок'}`,
+      seed,
+      mode: playMode === 'creative_adventure' ? 'creative' : 'survival',
+      worldType: 'normal',
+      singleBiome: 'forest',
+      cavernBiome: 'mix',
+      kind: '3d',
+      customLessonPlay: {
+        courseId,
+        lessonId: lesson ? lesson.id : '',
+        countryId: course ? course.countryId : 'ru',
+        grade: course ? course.grade : 1,
+        title: lesson && lesson.title ? lesson.title : 'Урок',
+        code: lesson && lesson.code ? JSON.parse(JSON.stringify(lesson.code)) : null,
+        mode: playMode,
+        spawnMode,
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      player: spawnMode === 'editor_position' ? editorPlayer : null,
     };
   }
 
@@ -64,6 +295,156 @@
       '"': '&quot;',
       "'": '&#39;',
     })[char]);
+  }
+
+  function customLessonCodeActions(lesson) {
+    const code = lesson && lesson.code && typeof lesson.code === 'object' ? lesson.code : {};
+    const actions = Array.isArray(code.actions) ? code.actions : [];
+    return actions.length ? actions : [{ number: 1, start: [], complete: [] }];
+  }
+
+  function customLessonCodeAction(lesson, number) {
+    const actions = customLessonCodeActions(lesson);
+    return actions.find((item) => Number(item.number) === Number(number)) || actions[0];
+  }
+
+  function formatCodeStartBlock(block) {
+    if (!block) return '';
+    if (block.type === 'give') return `Выдать предмет [${block.item || 'предмет'}] в ячейку [${block.slot || 1}]`;
+    if (block.type === 'teleport') return `Телепортировать игрока в координаты [${block.coords || '0, 0, 0'}]`;
+    if (block.type === 'say') return `Написать ему [${block.text || 'текст'}]`;
+    if (block.type === 'thumbnail') return `Поставить миниатюру [${block.name || 'файл'}]`;
+    return 'Неизвестный блок';
+  }
+
+  function formatCodeCompleteBlock(block) {
+    if (!block) return '';
+    if (block.type === 'place') return `Поставил блок [${block.block || 'блок'}]`;
+    if (block.type === 'mine') return `Разрушил блок [${block.block || 'блок'}]`;
+    if (block.type === 'biome') return `Попал в биом [${block.biome || 'биом'}]`;
+    return 'Неизвестное условие';
+  }
+
+  function codeItemSortRank(id, label) {
+    const block = Game.blocks && Game.blocks.BLOCK ? Game.blocks.BLOCK : {};
+    const frequent = [
+      block.DIRT, block.STONE, block.WOOD, block.PLANK, block.SAND, block.WATER,
+      block.LEAF, block.GRASS, block.LAVA, block.BORDER,
+    ];
+    const index = frequent.indexOf(Number(id));
+    if (index >= 0) return index;
+    if (label && String(label).startsWith('Буква ')) return 200 + String(label).charCodeAt(6);
+    if (Number(id) < 0) return 600 + Math.abs(Number(id));
+    if (String(label || '').startsWith('ТНТ') || String(label || '').includes('портал')) return 700 + Number(id);
+    return 300 + Number(id);
+  }
+
+  function lessonCodeItems(includeSpawnEggs = true) {
+    const labels = Game.interaction3d && Game.interaction3d.BLOCK_LABELS ? Game.interaction3d.BLOCK_LABELS : {};
+    const entries = Object.keys(labels)
+      .map((id) => ({ id: Number(id), label: labels[id] }))
+      .filter((item) => Number.isFinite(item.id) && item.label && (includeSpawnEggs || item.id >= 0));
+    entries.sort((a, b) => {
+      const rank = codeItemSortRank(a.id, a.label) - codeItemSortRank(b.id, b.label);
+      return rank || String(a.label).localeCompare(String(b.label), 'ru');
+    });
+    return entries;
+  }
+
+  function lessonCodeItemLabel(id) {
+    const labels = Game.interaction3d && Game.interaction3d.BLOCK_LABELS ? Game.interaction3d.BLOCK_LABELS : {};
+    return labels[id] || '';
+  }
+
+  function defaultLessonCodeItem(includeSpawnEggs = true) {
+    return lessonCodeItems(includeSpawnEggs)[0] || { id: 2, label: 'Земля' };
+  }
+
+  function selectedCodeItemId(value, fallbackLabel = '') {
+    if (value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) return Number(value);
+    const wanted = String(fallbackLabel || value || '').trim().toLowerCase();
+    const found = lessonCodeItems(true).find((item) => String(item.label).trim().toLowerCase() === wanted);
+    return found ? found.id : null;
+  }
+
+  function renderCodeItemOptions(selected, includeSpawnEggs = true) {
+    const selectedId = selectedCodeItemId(selected && selected.itemId, selected && (selected.item || selected.block));
+    return lessonCodeItems(includeSpawnEggs).map((item) => `
+      <option value="${item.id}" ${item.id === selectedId ? 'selected' : ''}>${escapeHtml(item.label)}</option>
+    `).join('');
+  }
+
+  function renderBiomeOptions(selected) {
+    const labels = Game.generation3d && Game.generation3d.BIOME_LABELS ? Game.generation3d.BIOME_LABELS : {};
+    return Object.keys(labels).map((id) => `
+      <option value="${escapeHtml(labels[id])}" ${String(selected || '').toLowerCase() === String(labels[id]).toLowerCase() || String(selected || '').toLowerCase() === id ? 'selected' : ''}>${escapeHtml(labels[id])}</option>
+    `).join('');
+  }
+
+  function renderCodeBlockControls(block, actionNumber, blockKind, index, context) {
+    const common = `data-country-id="${escapeHtml(context.countryId || 'ru')}" data-grade="${Number(context.grade) || 1}" data-course-id="${escapeHtml(context.courseId || '')}" data-lesson-id="${escapeHtml(context.lessonId || '')}" data-action-number="${actionNumber}" data-block-kind="${blockKind}" data-block-index="${index}"`;
+    if (block.type === 'give') {
+      return `
+        <span>Выдать предмет</span>
+        <select class="lesson-code-param lesson-code-param-wide" data-action="education-custom-code-edit-block" data-code-field="itemId" ${common}>${renderCodeItemOptions(block, true)}</select>
+        <span>в ячейку</span>
+        <input class="lesson-code-param lesson-code-param-small" type="number" min="1" max="10" value="${Number(block.slot) || 1}" data-action="education-custom-code-edit-block" data-code-field="slot" ${common} />
+      `;
+    }
+    if (block.type === 'teleport') {
+      return `
+        <span>Телепортировать игрока в координаты</span>
+        <input class="lesson-code-param lesson-code-param-wide" value="${escapeHtml(block.coords || '')}" placeholder="10, 65, 20" data-action="education-custom-code-edit-block" data-code-field="coords" ${common} />
+      `;
+    }
+    if (block.type === 'say') {
+      return `
+        <span>Написать ему</span>
+        <input class="lesson-code-param lesson-code-param-wide" value="${escapeHtml(block.text || '')}" placeholder="Текст" data-action="education-custom-code-edit-block" data-code-field="text" ${common} />
+      `;
+    }
+    if (block.type === 'thumbnail') {
+      return `<span>Поставить миниатюру</span><span class="lesson-code-param-label">${escapeHtml(block.name || 'файл')}</span>`;
+    }
+    if (block.type === 'place' || block.type === 'mine') {
+      return `
+        <span>${block.type === 'place' ? 'Поставил блок' : 'Разрушил блок'}</span>
+        <select class="lesson-code-param lesson-code-param-wide" data-action="education-custom-code-edit-block" data-code-field="blockId" ${common}>${renderCodeItemOptions({ itemId: block.blockId, item: block.block }, false)}</select>
+      `;
+    }
+    if (block.type === 'biome') {
+      return `
+        <span>Попал в биом</span>
+        <select class="lesson-code-param lesson-code-param-wide" data-action="education-custom-code-edit-block" data-code-field="biome" ${common}>${renderBiomeOptions(block.biome)}</select>
+      `;
+    }
+    return '<span>Неизвестный блок</span>';
+  }
+
+  function renderCodeBlockList(blocks, emptyText, removeAction, actionNumber, blockKind, context = {}) {
+    if (!blocks || !blocks.length) {
+      return `<div class="lesson-code-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return blocks.map((block, index) => `
+      <div class="lesson-code-block lesson-code-block-${escapeHtml(block.type || 'unknown')}">
+        <div class="lesson-code-block-content">
+          ${renderCodeBlockControls(block, actionNumber, blockKind, index, context)}
+        </div>
+        <button class="lesson-code-remove" type="button" data-action="${removeAction}" data-country-id="${escapeHtml(context.countryId || 'ru')}" data-grade="${Number(context.grade) || 1}" data-course-id="${escapeHtml(context.courseId || '')}" data-lesson-id="${escapeHtml(context.lessonId || '')}" data-action-number="${actionNumber}" data-block-kind="${blockKind}" data-block-index="${index}" title="Удалить">x</button>
+      </div>
+    `).join('');
+  }
+
+  function getEducationCountryLabel(countryId) {
+    const countries = Game.education3d && Array.isArray(Game.education3d.COUNTRIES) ? Game.education3d.COUNTRIES : [];
+    const country = countries.find((item) => item.id === countryId);
+    return country ? country.label : 'Россия';
+  }
+
+  function openEducationMenu() {
+    const countryId = Game.education3d && Game.education3d.getSavedCountryId ? Game.education3d.getSavedCountryId() : '';
+    if (countryId) renderUnifiedMenu('start', 'education-grade', { countryId });
+    else renderUnifiedMenu('start', 'education-country');
   }
 
   function setScreen(nextScreen) {
@@ -82,7 +463,7 @@
     if (state && state.pause) state.pause.open = screen === 'paused' || screen === 'inventory' || screen === 'map';
   }
 
-  function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main') {
+  function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main', options = {}) {
     const isPause = context === 'pause';
     const name = state && state.worldMeta && state.worldMeta.name ? state.worldMeta.name : 'Мир';
     const seed = state && state.worldMeta && state.worldMeta.seed ? state.worldMeta.seed : '';
@@ -105,6 +486,349 @@
       return;
     }
 
+    if (!isPause && view === 'education-country') {
+      const countries = Game.education3d ? Game.education3d.COUNTRIES : [];
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-wide">
+          <h1 class="menu-title">Обучение</h1>
+          <p class="menu-subtitle">Выберите страну программы.</p>
+          <div class="education-grid education-grid-countries">
+            ${countries.map((country) => `
+              <button class="menu-btn education-option" type="button" data-action="education-country" data-country-id="${escapeHtml(country.id)}">
+                ${escapeHtml(country.label)}
+              </button>
+            `).join('')}
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="back-menu" data-context="start">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-grade') {
+      const countryId = options.countryId || 'ru';
+      menuRoot.innerHTML = `
+        <div class="menu-panel">
+          <h1 class="menu-title">Класс</h1>
+          <p class="menu-subtitle">${escapeHtml(getEducationCountryLabel(countryId))}. Сейчас работают 1, 2, 3, 4, 5, 6 и 7 классы.</p>
+          <div class="education-grid education-grid-grades">
+            ${Array.from({ length: 11 }, (_, i) => i + 1).map((grade) => `
+              <button class="menu-btn education-option" type="button" data-action="education-grade" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}">
+                ${grade}
+              </button>
+            `).join('')}
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="change-education-country" data-context="start">Сменить страну</button>
+            <button class="menu-btn" type="button" data-action="back-menu" data-context="start">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-unavailable') {
+      const countryId = options.countryId || 'ru';
+      menuRoot.innerHTML = `
+        <div class="menu-panel">
+          <h1 class="menu-title">Обучение</h1>
+          <p class="menu-subtitle">Извините, пока что не работает</p>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="education-back-grade" data-country-id="${escapeHtml(countryId)}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-grade5-exam') {
+      const countryId = options.countryId || 'ru';
+      const passCoins = Game.education3d && Game.education3d.GRADE5_EXAM_PASS_COINS
+        ? Game.education3d.GRADE5_EXAM_PASS_COINS
+        : 35;
+      menuRoot.innerHTML = `
+        <div class="menu-panel">
+          <h1 class="menu-title">Экзамен перед 5 классом</h1>
+          <p class="menu-subtitle">Чтобы открыть 5 класс, надо пройти один большой экзамен по программе 4 класса. В нем ${passCoins} заданий: по 5 заданий от каждого предмета 4 класса.</p>
+          <div class="menu-actions">
+            <button class="menu-btn menu-btn-primary" type="button" data-action="education-grade5-exam-start" data-country-id="${escapeHtml(countryId)}">Начать экзамен</button>
+            <button class="menu-btn" type="button" data-action="education-back-grade" data-country-id="${escapeHtml(countryId)}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-grade6-exam') {
+      const countryId = options.countryId || 'ru';
+      const passCoins = Game.education3d && Game.education3d.GRADE6_EXAM_PASS_COINS
+        ? Game.education3d.GRADE6_EXAM_PASS_COINS
+        : 45;
+      menuRoot.innerHTML = `
+        <div class="menu-panel">
+          <h1 class="menu-title">Экзамен перед 6 классом</h1>
+          <p class="menu-subtitle">Чтобы открыть 6 класс, надо пройти один большой экзамен по программе 5 класса. В нем ${passCoins} заданий: по 5 заданий от каждого предмета 5 класса.</p>
+          <div class="menu-actions">
+            <button class="menu-btn menu-btn-primary" type="button" data-action="education-grade6-exam-start" data-country-id="${escapeHtml(countryId)}">Начать экзамен</button>
+            <button class="menu-btn" type="button" data-action="education-back-grade" data-country-id="${escapeHtml(countryId)}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-subject') {
+      const countryId = options.countryId || 'ru';
+      const grade = Number(options.grade) || 1;
+      const subjects = Game.education3d && Game.education3d.getSubjects ? Game.education3d.getSubjects(grade) : (Game.education3d ? Game.education3d.SUBJECTS : []);
+      const customCourses = Game.education3d && Game.education3d.customCoursesFor ? Game.education3d.customCoursesFor(countryId, grade) : [];
+      const lessonCount = Game.education3d && Game.education3d.LESSON_COUNT ? Game.education3d.LESSON_COUNT : 100;
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-wide">
+          <h1 class="menu-title">Предмет</h1>
+          <p class="menu-subtitle">Выберите предмет. Предмет пройден после ${lessonCount}/${lessonCount} уроков.</p>
+          <div class="education-grid education-grid-subjects">
+            ${subjects.map((subject) => {
+              const completedCount = Game.education3d && Game.education3d.completedLessonCount
+                ? Game.education3d.completedLessonCount(countryId, grade, subject.id)
+                : 0;
+              const completed = completedCount >= lessonCount;
+              return `
+                <button class="menu-btn education-subject" type="button" data-action="education-subject" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-subject-id="${escapeHtml(subject.id)}">
+                  <span>${escapeHtml(subject.label)}</span>
+                  <span class="education-subject-status">${completed ? '✓' : ''} ${completedCount}/${lessonCount}</span>
+                </button>
+              `;
+            }).join('')}
+            ${customCourses.map((course) => `
+              <button class="menu-btn education-subject" type="button" data-action="education-custom-course" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}">
+                <span>${escapeHtml(course.title)}</span>
+                <span class="education-subject-status">${course.lessons.length} уроков</span>
+              </button>
+            `).join('')}
+            <button class="menu-btn education-subject" type="button" data-action="education-custom-add" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}">
+              <span>+ Добавить свой</span>
+              <span class="education-subject-status">Курс</span>
+            </button>
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="education-back-grade" data-country-id="${escapeHtml(countryId)}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-custom-course') {
+      const countryId = options.countryId || 'ru';
+      const grade = Number(options.grade) || 1;
+      const courseId = options.courseId || '';
+      const course = Game.education3d && Game.education3d.customCourseById ? Game.education3d.customCourseById(courseId) : null;
+      if (!course) {
+        renderUnifiedMenu('start', 'education-subject', { countryId, grade });
+        return;
+      }
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-wide">
+          <h1 class="menu-title">${escapeHtml(course.title)}</h1>
+          <p class="menu-subtitle">Уроков: ${course.lessons.length}. Можно добавить сколько угодно уроков.</p>
+          <div class="education-grid education-grid-lessons">
+            ${course.lessons.map((lesson, index) => {
+              const ready = !!lesson.ready;
+              return `
+              <button class="menu-btn education-lesson" type="button" data-action="${ready ? 'education-custom-play' : 'education-custom-creator'}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}" data-lesson-id="${escapeHtml(lesson.id)}">
+                <span class="education-lesson-title">
+                  <span>${escapeHtml(lesson.title || `Урок ${index + 1}`)}</span>
+                  <span class="education-lesson-topic">${escapeHtml(lesson.seed || 'случайный seed')} / ${lesson.hasMap ? 'карта создана' : 'без карты'}${ready ? ' / готов' : ' / черновик'}</span>
+                </span>
+                <span class="education-subject-status">${ready ? 'Войти' : 'Создатель'}</span>
+              </button>
+            `;
+            }).join('')}
+            <button class="menu-btn education-lesson" type="button" data-action="education-custom-add-lesson" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}">
+              <span class="education-lesson-title">
+                <span>+ Добавить урок</span>
+                <span class="education-lesson-topic">Новый урок курса</span>
+              </span>
+              <span class="education-subject-status">+</span>
+            </button>
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="education-back-subject" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-custom-creator') {
+      const countryId = options.countryId || 'ru';
+      const grade = Number(options.grade) || 1;
+      const courseId = options.courseId || (state && state.worldMeta && state.worldMeta.customLessonEditor ? state.worldMeta.customLessonEditor.courseId : '');
+      const lessonId = options.lessonId || (state && state.worldMeta && state.worldMeta.customLessonEditor ? state.worldMeta.customLessonEditor.lessonId : '');
+      const course = Game.education3d && Game.education3d.customCourseById ? Game.education3d.customCourseById(courseId) : null;
+      const lesson = Game.education3d && Game.education3d.customLessonById ? Game.education3d.customLessonById(courseId, lessonId) : null;
+      if (!course || !lesson) {
+        renderUnifiedMenu('start', 'education-subject', { countryId, grade });
+        return;
+      }
+      const mode = Game.education3d && Game.education3d.normalizeCustomLessonMode ? Game.education3d.normalizeCustomLessonMode(lesson.mode) : 'survival';
+      const spawnMode = Game.education3d && Game.education3d.normalizeCustomLessonSpawnMode ? Game.education3d.normalizeCustomLessonSpawnMode(lesson.spawnMode) : 'editor_position';
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-wide">
+          <h1 class="menu-title">Создатель</h1>
+          <p class="menu-subtitle">${escapeHtml(course.title)} / ${escapeHtml(lesson.title)}. Seed: ${escapeHtml(lesson.seed || 'случайный')}</p>
+          <div class="menu-field">
+            <span>Режим прохождения</span>
+            <div class="menu-mode-options">
+              <label class="menu-mode-option">
+                <input type="radio" name="customLessonMode" value="survival" ${mode === 'survival' ? 'checked' : ''} />
+                <span>Выживание</span>
+              </label>
+              <label class="menu-mode-option">
+                <input type="radio" name="customLessonMode" value="adventure" ${mode === 'adventure' ? 'checked' : ''} />
+                <span>Приключение</span>
+              </label>
+              <label class="menu-mode-option">
+                <input type="radio" name="customLessonMode" value="creative_adventure" ${mode === 'creative_adventure' ? 'checked' : ''} />
+                <span>Приключенческий креатив</span>
+              </label>
+            </div>
+          </div>
+          <div class="menu-field">
+            <span>Место старта</span>
+            <div class="menu-mode-options">
+              <label class="menu-mode-option">
+                <input type="radio" name="customLessonSpawnMode" value="editor_position" ${spawnMode === 'editor_position' ? 'checked' : ''} />
+                <span>Место редактора</span>
+              </label>
+              <label class="menu-mode-option">
+                <input type="radio" name="customLessonSpawnMode" value="world_spawn" ${spawnMode === 'world_spawn' ? 'checked' : ''} />
+                <span>Спавн мира</span>
+              </label>
+            </div>
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="education-custom-create-map" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}" data-lesson-id="${escapeHtml(lesson.id)}">${lesson.hasMap ? 'Редактировать карту' : 'Создать карту'}</button>
+            <button class="menu-btn" type="button" data-action="education-custom-code" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}" data-lesson-id="${escapeHtml(lesson.id)}">Код</button>
+            <button class="menu-btn menu-btn-primary" type="button" data-action="education-custom-done" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}" data-lesson-id="${escapeHtml(lesson.id)}">Готово</button>
+            <button class="menu-btn" type="button" data-action="education-custom-course" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(course.id)}">Назад</button>
+          </div>
+          <div class="menu-hint">Граница доступна только в редакторе карты пользовательского урока.</div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-custom-code') {
+      const countryId = options.countryId || 'ru';
+      const grade = Number(options.grade) || 1;
+      const courseId = options.courseId || '';
+      const lessonId = options.lessonId || '';
+      const lesson = Game.education3d && Game.education3d.customLessonById ? Game.education3d.customLessonById(courseId, lessonId) : null;
+      if (!lesson) {
+        renderUnifiedMenu('start', 'education-subject', { countryId, grade });
+        return;
+      }
+      const actions = customLessonCodeActions(lesson).slice().sort((a, b) => Number(a.number) - Number(b.number));
+      const selectedNumber = Number(options.actionNumber) || (actions[0] ? actions[0].number : 1);
+      const selectedAction = customLessonCodeAction(lesson, selectedNumber);
+      const actionNumber = Number(selectedAction.number) || 1;
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-wide">
+          <h1 class="menu-title">Код</h1>
+          <p class="menu-subtitle">${escapeHtml(lesson.title)}. Если условий завершения несколько, игрок должен выполнить их все.</p>
+          <div class="lesson-code-toolbar">
+            <label class="menu-field lesson-code-select">
+              <span>Действие</span>
+              <select data-action="education-custom-code-select" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">
+                ${actions.map((item) => `
+                  <option value="${Number(item.number) || 1}" ${Number(item.number) === actionNumber ? 'selected' : ''}>Действие ${Number(item.number) || 1}</option>
+                `).join('')}
+              </select>
+            </label>
+            <button class="menu-btn" type="button" data-action="education-custom-code-add-action" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">+ Действие</button>
+          </div>
+          <div class="lesson-code-workspace">
+            <aside class="lesson-code-palette">
+              <div class="lesson-code-palette-group">
+                <h2>При начале</h2>
+                <button class="menu-btn lesson-code-palette-block" draggable="true" type="button" data-action="education-custom-code-add-start" data-code-group="start" data-code-type="give" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Выдать предмет</button>
+                <button class="menu-btn lesson-code-palette-block" draggable="true" type="button" data-action="education-custom-code-add-start" data-code-group="start" data-code-type="teleport" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Телепортировать</button>
+                <button class="menu-btn lesson-code-palette-block" draggable="true" type="button" data-action="education-custom-code-add-start" data-code-group="start" data-code-type="say" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Написать</button>
+                <label class="menu-btn lesson-code-file">
+                  Поставить миниатюру
+                  <input type="file" accept="image/*" data-action="education-custom-code-thumbnail" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}" />
+                </label>
+              </div>
+              <div class="lesson-code-palette-group">
+                <h2>Завершение</h2>
+                <button class="menu-btn lesson-code-palette-block" draggable="true" type="button" data-action="education-custom-code-add-complete" data-code-group="complete" data-code-type="place" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Поставил блок</button>
+                <button class="menu-btn lesson-code-palette-block" draggable="true" type="button" data-action="education-custom-code-add-complete" data-code-group="complete" data-code-type="mine" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Разрушил блок</button>
+                <button class="menu-btn lesson-code-palette-block" draggable="true" type="button" data-action="education-custom-code-add-complete" data-code-group="complete" data-code-type="biome" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Попал в биом</button>
+              </div>
+            </aside>
+            <main class="lesson-code-stage">
+              <section class="lesson-code-stack">
+                <h2>При начале действия [${actionNumber}]</h2>
+                <div class="lesson-code-stack-body" data-code-drop-kind="start" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">
+                  ${renderCodeBlockList(selectedAction.start, 'Перетащи или нажми блоки слева, чтобы добавить команды.', 'education-custom-code-remove-block', actionNumber, 'start', { countryId, grade, courseId, lessonId })}
+                </div>
+              </section>
+              <section class="lesson-code-stack lesson-code-stack-complete">
+                <h2>Что нужно для игрока, чтобы выполнить действие [${actionNumber}]</h2>
+                <div class="lesson-code-stack-body" data-code-drop-kind="complete" data-action-number="${actionNumber}" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">
+                  ${renderCodeBlockList(selectedAction.complete, 'Добавь условия слева. Если условий несколько, нужны все.', 'education-custom-code-remove-block', actionNumber, 'complete', { countryId, grade, courseId, lessonId })}
+                </div>
+              </section>
+            </main>
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="education-custom-creator" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-course-id="${escapeHtml(courseId)}" data-lesson-id="${escapeHtml(lessonId)}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    if (!isPause && view === 'education-lesson') {
+      const countryId = options.countryId || 'ru';
+      const grade = Number(options.grade) || 1;
+      const subjectId = options.subjectId || 'language';
+      const subjects = Game.education3d && Game.education3d.getSubjects ? Game.education3d.getSubjects(grade) : (Game.education3d ? Game.education3d.SUBJECTS : []);
+      const subject = subjects.find((item) => item.id === subjectId) || { id: subjectId, label: 'Предмет' };
+      const lessonCount = Game.education3d && Game.education3d.LESSON_COUNT ? Game.education3d.LESSON_COUNT : 100;
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-wide">
+          <h1 class="menu-title">${escapeHtml(subject.label)}</h1>
+          <p class="menu-subtitle">Выберите урок. В каждом уроке 10 заданий.</p>
+          <div class="education-grid education-grid-lessons">
+            ${Array.from({ length: lessonCount }, (_, i) => i + 1).map((lesson) => {
+              const completed = Game.education3d && Game.education3d.isCompleted(countryId, grade, subject.id, lesson);
+              const summary = Game.education3d && Game.education3d.getLessonSummary
+                ? Game.education3d.getLessonSummary(subject.id, grade, lesson)
+                : '';
+              return `
+                <button class="menu-btn education-lesson" type="button" data-action="education-lesson" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}" data-subject-id="${escapeHtml(subject.id)}" data-lesson="${lesson}">
+                  <span class="education-lesson-title">
+                    <span>Урок ${lesson}</span>
+                    ${summary ? `<span class="education-lesson-topic">${escapeHtml(summary)}</span>` : ''}
+                  </span>
+                  <span class="education-subject-status">${completed ? '✓ Перепройти' : 'Начать'}</span>
+                </button>
+              `;
+            }).join('')}
+          </div>
+          <div class="menu-actions">
+            <button class="menu-btn" type="button" data-action="education-back-subject" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}">Назад</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
     const fields = isPause ? '' : `
       <label class="menu-field">
         <span>Название мира</span>
@@ -113,6 +837,18 @@
       <label class="menu-field">
         <span>Сид</span>
         <input name="seed" maxlength="60" placeholder="Случайный сид" autocomplete="off" />
+      </label>
+      <label class="menu-field">
+        <span>Прорисовка чанков</span>
+        <select name="chunkRenderDistance">
+          ${renderChunkRenderDistanceOptions()}
+        </select>
+      </label>
+      <label class="menu-field">
+        <span>Биом спавна</span>
+        <select name="spawnBiome">
+          ${renderSpawnBiomeOptions()}
+        </select>
       </label>
       <div class="menu-field">
         <span>Режим</span>
@@ -131,8 +867,16 @@
     const primary = isPause
       ? '<button class="menu-btn menu-btn-primary" type="button" data-action="resume">Продолжить</button>'
       : '<button class="menu-btn menu-btn-primary" type="submit">Создать мир</button>';
+    const editor = state && state.worldMeta ? state.worldMeta.customLessonEditor : null;
+    const creatorAction = isPause && state && state.worldMeta && state.worldMeta.customLessonEditor
+      ? `<button class="menu-btn" type="button" data-action="education-custom-creator" data-country-id="${escapeHtml(editor.countryId || 'ru')}" data-grade="${Number(editor.grade) || 1}" data-course-id="${escapeHtml(editor.courseId)}" data-lesson-id="${escapeHtml(editor.lessonId)}">Доделать мир</button>`
+      : '';
     const pauseExit = isPause
       ? '<button class="menu-btn" type="button" data-action="main-menu">В главное меню</button>'
+      : '';
+    const customPlay = state && state.worldMeta ? state.worldMeta.customLessonPlay : null;
+    const editPlayAction = isPause && customPlay
+      ? `<button class="menu-btn" type="button" data-action="education-custom-edit-map" data-country-id="${escapeHtml(customPlay.countryId || 'ru')}" data-grade="${Number(customPlay.grade) || 1}" data-course-id="${escapeHtml(customPlay.courseId)}" data-lesson-id="${escapeHtml(customPlay.lessonId)}">Редактировать</button>`
       : '';
     menuRoot.innerHTML = `
       <form class="menu-panel ${isPause ? 'pause-panel' : ''}" id="${isPause ? 'pauseMenuForm' : 'newWorldForm'}">
@@ -141,12 +885,16 @@
         ${fields}
         <div class="menu-actions">
           ${primary}
+          ${creatorAction}
+          ${editPlayAction}
           <button class="menu-btn" type="button" data-action="show-load" data-context="${context}">Загрузить мир</button>
+          ${isPause ? '' : '<button class="menu-btn" type="button" data-action="show-education" data-context="start">Обучение</button>'}
           ${pauseExit}
         </div>
         <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, F - полет в creative, ЛКМ - добыча, ПКМ - поставить, R - починить, P - предпросмотр, 1-9/0 - выбор блока.'}</div>
       </form>
     `;
+    syncSpawnSeedInput();
   }
 
   function formatDate(value) {
@@ -194,17 +942,24 @@
 
   function capturePlayerMeta() {
     if (!state || !state.player) return null;
+    const saveSlot = (slot) => slot ? {
+      id: slot.id,
+      count: slot.count,
+      data: slot.data ? JSON.parse(JSON.stringify(slot.data)) : undefined,
+    } : null;
     return {
       x: state.player.x,
       y: state.player.y,
       z: state.player.z,
       yaw: state.player.yaw,
       pitch: state.player.pitch,
+      scale: Number.isFinite(state.player.scale) ? state.player.scale : 1,
+      targetScale: Number.isFinite(state.player.targetScale) ? state.player.targetScale : (Number.isFinite(state.player.scale) ? state.player.scale : 1),
       inventory: Array.isArray(state.player.inventory)
-        ? state.player.inventory.map((slot) => slot ? { id: slot.id, count: slot.count } : null)
+        ? state.player.inventory.map(saveSlot)
         : [],
       hotbar: Array.isArray(state.player.hotbar)
-        ? state.player.hotbar.map((slot) => slot ? { id: slot.id, count: slot.count } : null)
+        ? state.player.hotbar.map(saveSlot)
         : [],
     };
   }
@@ -226,6 +981,8 @@
       z: state.player.z,
       yaw: state.player.yaw,
       pitch: state.player.pitch,
+      scale: Number.isFinite(state.player.scale) ? state.player.scale : 1,
+      targetScale: Number.isFinite(state.player.targetScale) ? state.player.targetScale : (Number.isFinite(state.player.scale) ? state.player.scale : 1),
     };
   }
 
@@ -236,9 +993,38 @@
     if (Number.isFinite(playerMeta.z)) state.player.z = playerMeta.z;
     if (Number.isFinite(playerMeta.yaw)) state.player.yaw = playerMeta.yaw;
     if (Number.isFinite(playerMeta.pitch)) state.player.pitch = playerMeta.pitch;
+    if (Number.isFinite(playerMeta.scale)) state.player.scale = playerMeta.scale;
+    if (Number.isFinite(playerMeta.targetScale)) state.player.targetScale = playerMeta.targetScale;
+    else if (Number.isFinite(playerMeta.scale)) state.player.targetScale = playerMeta.scale;
     state.player.vx = 0;
     state.player.vy = 0;
     state.player.vz = 0;
+  }
+
+  function placeCustomLessonPlayerOnSurface() {
+    if (!state || !state.world || !state.player || !state.worldMeta || !state.worldMeta.customLessonPlay) return;
+    const block = Game.blocks && Game.blocks.BLOCK;
+    if (!block) return;
+    const x = Math.max(1, Math.min(state.world.w - 2, Math.floor(state.player.x)));
+    const z = Math.max(1, Math.min(state.world.d - 2, Math.floor(state.player.z)));
+    const passable = new Set([block.AIR, block.WATER, block.HOT_WATER, block.LAVA]);
+    for (let y = state.world.h - 2; y >= 1; y -= 1) {
+      const id = Game.world3d.getBlock3D(state, x, y, z);
+      if (passable.has(id)) continue;
+      state.player.y = Math.min(state.world.h + 4, y + 2);
+      state.player.vx = 0;
+      state.player.vy = 0;
+      state.player.vz = 0;
+      state.worldMeta.player = capturePlayerMeta();
+      return;
+    }
+    if (Game.generation3d && Game.generation3d.getSurfaceSpawnY3D) {
+      state.player.y = Game.generation3d.getSurfaceSpawnY3D(state, x, z);
+      state.player.vx = 0;
+      state.player.vy = 0;
+      state.player.vz = 0;
+      state.worldMeta.player = capturePlayerMeta();
+    }
   }
 
   async function saveAllDimensionChunks(targetWorldId, options = {}) {
@@ -352,6 +1138,9 @@
       state.player.z = state.worldMeta.player.z;
       if (Number.isFinite(state.worldMeta.player.yaw)) state.player.yaw = state.worldMeta.player.yaw;
       if (Number.isFinite(state.worldMeta.player.pitch)) state.player.pitch = state.worldMeta.player.pitch;
+      if (Number.isFinite(state.worldMeta.player.scale)) state.player.scale = state.worldMeta.player.scale;
+      if (Number.isFinite(state.worldMeta.player.targetScale)) state.player.targetScale = state.worldMeta.player.targetScale;
+      else if (Number.isFinite(state.worldMeta.player.scale)) state.player.targetScale = state.worldMeta.player.scale;
     }
     if (Game.storage3d && Game.storage3d.listChunkKeys && state.worldMeta.id) {
       const storageId = dimensionStorageWorldId(state.worldMeta.id, currentDimension());
@@ -359,6 +1148,7 @@
       if (savedChunkKeys.length > 0) state.world.savedChunks = new Set(savedChunkKeys);
     }
     Game.generation3d.generateWorld3D(state);
+    placeCustomLessonPlayerOnSurface();
     if (!Game.renderer3d.init(canvas3d)) {
       menuRoot.innerHTML = '<div class="menu-panel">WebGL не удалось запустить.</div>';
       setScreen('menu');
@@ -371,8 +1161,279 @@
   }
 
   async function startWorld(form) {
-    const meta = createWorldMeta(form);
+    renderWorldCreationStatus(form && form.spawnBiome);
+    await waitForNextFrame();
+    const resolvedSeed = await resolveSeedForSpawnBiome(form || {});
+    const meta = createWorldMeta({
+      ...(form || {}),
+      seed: resolvedSeed.seed,
+      spawnBiomeSeedSearch: resolvedSeed.usedSearch,
+    });
     await startWorldFromMeta(meta);
+  }
+
+  async function startEducationWorld(countryId, grade, subjectId, lesson) {
+    const meta = createEducationWorldMeta(countryId, grade, subjectId, lesson);
+    await startWorldFromMeta(meta);
+  }
+
+  async function startGrade5ExamWorld(countryId) {
+    const meta = createGrade5ExamWorldMeta(countryId);
+    await startWorldFromMeta(meta);
+  }
+
+  async function startGrade6ExamWorld(countryId) {
+    const meta = createGrade6ExamWorldMeta(countryId);
+    await startWorldFromMeta(meta);
+  }
+
+  async function startCustomLessonMapEditor(courseId, lessonId) {
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    const meta = createCustomLessonEditorWorldMeta(courseId, lesson);
+    lesson.seed = meta.seed;
+    lesson.hasMap = true;
+    lesson.mapWorldId = meta.id;
+    if (Game.education3d && Game.education3d.saveCustomLesson) Game.education3d.saveCustomLesson(courseId, lesson);
+    await startWorldFromMeta(meta);
+  }
+
+  async function startCustomLessonPlay(courseId, lessonId) {
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    if (!lesson.ready) {
+      const course = Game.education3d && Game.education3d.customCourseById ? Game.education3d.customCourseById(courseId) : null;
+      renderUnifiedMenu('start', 'education-custom-creator', {
+        countryId: course ? course.countryId : 'ru',
+        grade: course ? course.grade : 1,
+        courseId,
+        lessonId,
+      });
+      setScreen('menu');
+      return;
+    }
+    let savedMapMeta = null;
+    if (lesson.mapWorldId && Game.storage3d && Game.storage3d.listWorldMetas) {
+      const worlds = await Game.storage3d.listWorldMetas();
+      savedMapMeta = worlds.find((world) => world && world.id === lesson.mapWorldId) || null;
+    }
+    await startWorldFromMeta(createCustomLessonPlayWorldMeta(courseId, lesson, savedMapMeta));
+  }
+
+  function selectedCustomLessonMode() {
+    const checked = menuRoot.querySelector('input[name="customLessonMode"]:checked');
+    const value = checked && checked.value ? checked.value : 'survival';
+    return Game.education3d && Game.education3d.normalizeCustomLessonMode
+      ? Game.education3d.normalizeCustomLessonMode(value)
+      : value;
+  }
+
+  function selectedCustomLessonSpawnMode() {
+    const checked = menuRoot.querySelector('input[name="customLessonSpawnMode"]:checked');
+    const value = checked && checked.value ? checked.value : 'editor_position';
+    return Game.education3d && Game.education3d.normalizeCustomLessonSpawnMode
+      ? Game.education3d.normalizeCustomLessonSpawnMode(value)
+      : value;
+  }
+
+  async function saveCustomCreatorLesson(courseId, lessonId, options = {}) {
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return null;
+    lesson.mode = selectedCustomLessonMode();
+    lesson.spawnMode = selectedCustomLessonSpawnMode();
+    if (options.ready) lesson.ready = true;
+    if (state && state.worldMeta && state.worldMeta.customLessonEditor
+      && state.worldMeta.customLessonEditor.courseId === courseId
+      && state.worldMeta.customLessonEditor.lessonId === lessonId) {
+      lesson.hasMap = true;
+      lesson.mapWorldId = state.worldMeta.id || lesson.mapWorldId || '';
+      lesson.seed = state.worldMeta.seed || lesson.seed || '';
+      await saveCurrentWorld();
+    }
+    return Game.education3d && Game.education3d.saveCustomLesson
+      ? Game.education3d.saveCustomLesson(courseId, lesson)
+      : lesson;
+  }
+
+  function saveCustomLessonCode(courseId, lesson) {
+    return Game.education3d && Game.education3d.saveCustomLesson
+      ? Game.education3d.saveCustomLesson(courseId, lesson)
+      : lesson;
+  }
+
+  function renderCustomLessonCodeMenuFromTarget(target, actionNumber) {
+    renderUnifiedMenu('start', 'education-custom-code', {
+      countryId: target.dataset.countryId || 'ru',
+      grade: Number(target.dataset.grade) || 1,
+      courseId: target.dataset.courseId || '',
+      lessonId: target.dataset.lessonId || '',
+      actionNumber: Number(actionNumber) || Number(target.dataset.actionNumber) || 1,
+    });
+    setScreen('menu');
+  }
+
+  function addCustomLessonCodeAction(target) {
+    const courseId = target.dataset.courseId || '';
+    const lessonId = target.dataset.lessonId || '';
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    const actions = customLessonCodeActions(lesson);
+    const maxNumber = actions.reduce((max, action) => Math.max(max, Number(action.number) || 1), 0);
+    const number = maxNumber + 1;
+    lesson.code = { actions: actions.concat([{ number, start: [], complete: [] }]) };
+    saveCustomLessonCode(courseId, lesson);
+    renderCustomLessonCodeMenuFromTarget(target, number);
+  }
+
+  function findCustomLessonCodeActionForEdit(lesson, number) {
+    lesson.code = lesson.code && typeof lesson.code === 'object' ? lesson.code : { actions: [] };
+    lesson.code.actions = customLessonCodeActions(lesson).slice();
+    let action = lesson.code.actions.find((item) => Number(item.number) === Number(number));
+    if (!action) {
+      action = { number: Number(number) || 1, start: [], complete: [] };
+      lesson.code.actions.push(action);
+    }
+    action.start = Array.isArray(action.start) ? action.start : [];
+    action.complete = Array.isArray(action.complete) ? action.complete : [];
+    return action;
+  }
+
+  function addCustomLessonStartBlock(target) {
+    const courseId = target.dataset.courseId || '';
+    const lessonId = target.dataset.lessonId || '';
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    const actionNumber = Number(target.dataset.actionNumber) || 1;
+    const action = findCustomLessonCodeActionForEdit(lesson, actionNumber);
+    const type = target.dataset.codeType || '';
+    if (type === 'give') {
+      const item = defaultLessonCodeItem(true);
+      action.start.push({ type, itemId: item.id, item: item.label, slot: 1 });
+    } else if (type === 'teleport') {
+      action.start.push({ type, coords: '0, 65, 0' });
+    } else if (type === 'say') {
+      action.start.push({ type, text: 'Текст задания' });
+    }
+    saveCustomLessonCode(courseId, lesson);
+    renderCustomLessonCodeMenuFromTarget(target, actionNumber);
+  }
+
+  function addCustomLessonCompleteBlock(target) {
+    const courseId = target.dataset.courseId || '';
+    const lessonId = target.dataset.lessonId || '';
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    const actionNumber = Number(target.dataset.actionNumber) || 1;
+    const action = findCustomLessonCodeActionForEdit(lesson, actionNumber);
+    const type = target.dataset.codeType || '';
+    if (type === 'place' || type === 'mine') {
+      const block = defaultLessonCodeItem(false);
+      action.complete.push({ type, blockId: block.id, block: block.label });
+    } else if (type === 'biome') {
+      action.complete.push({ type, biome: 'Горы' });
+    }
+    saveCustomLessonCode(courseId, lesson);
+    renderCustomLessonCodeMenuFromTarget(target, actionNumber);
+  }
+
+  function removeCustomLessonCodeBlock(target) {
+    const courseId = target.dataset.courseId || '';
+    const lessonId = target.dataset.lessonId || '';
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    const actionNumber = Number(target.dataset.actionNumber) || 1;
+    const action = findCustomLessonCodeActionForEdit(lesson, actionNumber);
+    const list = target.dataset.blockKind === 'complete' ? action.complete : action.start;
+    const index = Number(target.dataset.blockIndex);
+    if (Number.isInteger(index) && index >= 0) list.splice(index, 1);
+    saveCustomLessonCode(courseId, lesson);
+    renderCustomLessonCodeMenuFromTarget(target, actionNumber);
+  }
+
+  function addCustomLessonThumbnail(input) {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    if (!file) return;
+    const courseId = input.dataset.courseId || '';
+    const lessonId = input.dataset.lessonId || '';
+    const actionNumber = Number(input.dataset.actionNumber) || 1;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const lesson = Game.education3d && Game.education3d.customLessonById
+        ? Game.education3d.customLessonById(courseId, lessonId)
+        : null;
+      if (!lesson) return;
+      const action = findCustomLessonCodeActionForEdit(lesson, actionNumber);
+      action.start.push({
+        type: 'thumbnail',
+        name: file.name || 'миниатюра',
+        dataUrl: String(reader.result || ''),
+      });
+      saveCustomLessonCode(courseId, lesson);
+    renderCustomLessonCodeMenuFromTarget(input, actionNumber);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function editCustomLessonCodeBlock(target) {
+    const courseId = target.dataset.courseId || '';
+    const lessonId = target.dataset.lessonId || '';
+    const lesson = Game.education3d && Game.education3d.customLessonById
+      ? Game.education3d.customLessonById(courseId, lessonId)
+      : null;
+    if (!lesson) return;
+    const actionNumber = Number(target.dataset.actionNumber) || 1;
+    const action = findCustomLessonCodeActionForEdit(lesson, actionNumber);
+    const list = target.dataset.blockKind === 'complete' ? action.complete : action.start;
+    const block = list[Number(target.dataset.blockIndex)];
+    if (!block) return;
+    const field = target.dataset.codeField || '';
+    const value = target.value;
+    if (field === 'itemId') {
+      block.itemId = Number(value);
+      block.item = lessonCodeItemLabel(block.itemId);
+    } else if (field === 'blockId') {
+      block.blockId = Number(value);
+      block.block = lessonCodeItemLabel(block.blockId);
+    } else if (field === 'slot') {
+      block.slot = Math.max(1, Math.min(10, Number(value) || 1));
+    } else if (field === 'coords') {
+      block.coords = String(value || '').trim();
+    } else if (field === 'text') {
+      block.text = String(value || '').trim();
+    } else if (field === 'biome') {
+      block.biome = String(value || '').trim();
+    }
+    saveCustomLessonCode(courseId, lesson);
+  }
+
+  function addCustomLessonCodeBlockFromDrop(payload, dropTarget) {
+    if (!payload || !dropTarget || payload.group !== dropTarget.dataset.codeDropKind) return;
+    const fakeTarget = {
+      dataset: {
+        countryId: dropTarget.dataset.countryId || 'ru',
+        grade: dropTarget.dataset.grade || '1',
+        courseId: dropTarget.dataset.courseId || '',
+        lessonId: dropTarget.dataset.lessonId || '',
+        actionNumber: dropTarget.dataset.actionNumber || '1',
+        codeType: payload.type || '',
+      },
+    };
+    if (payload.group === 'start') addCustomLessonStartBlock(fakeTarget);
+    else if (payload.group === 'complete') addCustomLessonCompleteBlock(fakeTarget);
   }
 
   async function loadWorld(worldId) {
@@ -416,13 +1477,24 @@
     if (!state || screen !== 'playing') return;
     input.resetMovement();
     if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
+    if (Game.inventory3d && Game.inventory3d.closeChest) Game.inventory3d.closeChest(state);
     if (Game.inventory3d && inventoryRoot) Game.inventory3d.renderInventory(inventoryRoot, state);
+    setScreen('inventory');
+  }
+
+  function openChestInventory(x, y, z) {
+    if (!state || screen !== 'playing' || !Game.inventory3d || !inventoryRoot) return;
+    if (!Game.inventory3d.openChest(state, x, y, z)) return;
+    input.resetMovement();
+    if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
+    Game.inventory3d.renderInventory(inventoryRoot, state);
     setScreen('inventory');
   }
 
   function closeInventory() {
     if (!state || screen !== 'inventory') return;
     if (Game.inventory3d && Game.inventory3d.clearCarried) Game.inventory3d.clearCarried(state);
+    if (Game.inventory3d && Game.inventory3d.closeChest) Game.inventory3d.closeChest(state);
     input.resetMovement();
     setScreen('playing');
   }
@@ -672,6 +1744,141 @@
     }
   }
 
+  function drawVillageIcon(ctx, x, y, size, village) {
+    const color = village && village.color ? village.color : '#d6b45d';
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.42, size * 0.82, size * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#f0d9a6';
+    ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+    ctx.lineWidth = Math.max(1.5, size * 0.1);
+    ctx.beginPath();
+    ctx.rect(-size * 0.42, -size * 0.04, size * 0.84, size * 0.48);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.lineWidth = Math.max(2, size * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.54, -size * 0.04);
+    ctx.lineTo(0, -size * 0.52);
+    ctx.lineTo(size * 0.54, -size * 0.04);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#6b4a2e';
+    ctx.fillRect(-size * 0.12, size * 0.14, size * 0.24, size * 0.3);
+    ctx.fillStyle = '#2f5f7a';
+    ctx.fillRect(size * 0.2, size * 0.12, size * 0.14, size * 0.14);
+    ctx.restore();
+  }
+
+  function drawCreativeVillages(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.mode !== 'creative') return;
+    if (state.worldMeta.currentDimension === 'underground') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getVillages3D) return;
+    const villages = generation.getVillages3D(state);
+    if (!villages.length) return;
+    const links = generation.getVillageRoadLinks3D ? generation.getVillageRoadLinks3D(state) : [];
+    ctx.save();
+    ctx.strokeStyle = 'rgba(68,44,24,0.76)';
+    ctx.lineWidth = Math.max(2 * window.devicePixelRatio, Math.min(5 * window.devicePixelRatio, 2 * window.devicePixelRatio * Math.sqrt(scale)));
+    ctx.setLineDash([5 * window.devicePixelRatio, 4 * window.devicePixelRatio]);
+    for (const link of links) {
+      ctx.beginPath();
+      ctx.moveTo(mapX + link.fromX * scale, mapY + link.fromZ * scale);
+      ctx.lineTo(mapX + link.toX * scale, mapY + link.toZ * scale);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    const iconSize = Math.max(12 * window.devicePixelRatio, Math.min(28 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const village of villages) {
+      if (village.x < 0 || village.x > world.w || village.z < 0 || village.z > world.d) continue;
+      drawVillageIcon(ctx, mapX + village.x * scale, mapY + village.z * scale, iconSize, village);
+    }
+  }
+
+  function drawBearDenIcon(ctx, x, y, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.42, size * 0.86, size * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#7a5a37';
+    ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+    ctx.lineWidth = Math.max(1.5, size * 0.1);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.68, size * 0.28);
+    ctx.quadraticCurveTo(-size * 0.34, -size * 0.28, 0, -size * 0.26);
+    ctx.quadraticCurveTo(size * 0.42, -size * 0.22, size * 0.68, size * 0.28);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#11100d';
+    ctx.beginPath();
+    ctx.ellipse(size * 0.04, size * 0.22, size * 0.34, size * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#6a3f25';
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.lineWidth = Math.max(1, size * 0.07);
+    ctx.beginPath();
+    ctx.arc(size * 0.08, size * 0.18, size * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#1d130e';
+    ctx.beginPath();
+    ctx.arc(size * 0.16, size * 0.16, size * 0.04, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#5a3820';
+    ctx.lineWidth = Math.max(2, size * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.1, -size * 0.18);
+    ctx.lineTo(-size * 0.1, -size * 0.64);
+    ctx.stroke();
+    ctx.fillStyle = '#24533d';
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.1, -size * 0.74);
+    ctx.lineTo(-size * 0.42, -size * 0.28);
+    ctx.lineTo(size * 0.22, -size * 0.28);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.62)';
+    ctx.lineWidth = Math.max(1, size * 0.06);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBearDens(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getBearDens3D) return;
+    const dens = generation.getBearDens3D(state);
+    if (!dens.length) return;
+    const iconSize = Math.max(12 * window.devicePixelRatio, Math.min(28 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const den of dens) {
+      if (!den || den.x < 0 || den.x > world.w || den.z < 0 || den.z > world.d) continue;
+      drawBearDenIcon(ctx, mapX + den.x * scale, mapY + den.z * scale, iconSize);
+    }
+  }
+
   function drawMapWaypoint(ctx, mapX, mapY, scale) {
     const waypoint = state && state.ui ? state.ui.mapWaypoint : null;
     if (!waypoint) return;
@@ -747,6 +1954,8 @@
     ctx.strokeRect(x + 0.5, y + 0.5, viewW - 1, viewH - 1);
     drawCreativeCaveEntrances(ctx, x, y, scale, width, height, world);
     drawCreativePortalRuins(ctx, x, y, scale, world);
+    drawCreativeVillages(ctx, x, y, scale, world);
+    drawBearDens(ctx, x, y, scale, world);
     drawMapWaypoint(ctx, x, y, scale);
 
     const playerX = x + state.player.x * scale;
@@ -801,6 +2010,14 @@
               <span>${escapeHtml(labels[biome] || biome)}</span>
             </div>
           `).join('')}
+          <div class="map-legend-item">
+            <span class="map-legend-swatch" style="background:#d6b45d"></span>
+            <span>Деревня</span>
+          </div>
+          <div class="map-legend-item">
+            <span class="map-legend-swatch" style="background:#7a5a37"></span>
+            <span>Берлога</span>
+          </div>
         </div>
         <div class="map-hint">ЛКМ - поставить цель, C - сбросить цель, колесо мыши - масштаб, перетаскивание - сдвиг, M или Escape - закрыть.</div>
       </div>
@@ -809,9 +2026,9 @@
     renderMap();
   }
 
-  function openMap() {
+  function openMap(options = {}) {
     if (!state || screen !== 'playing') return;
-    if (!state.worldMeta || state.worldMeta.mode !== 'creative') {
+    if (!options.allowAnyMode && (!state.worldMeta || state.worldMeta.mode !== 'creative')) {
       setNotice('Карта доступна только в творческом режиме');
       return;
     }
@@ -830,6 +2047,9 @@
     if (mapCanvas) mapCanvas.classList.remove('is-dragging');
     setScreen('playing');
   }
+
+  Game.openMap = openMap;
+  Game.openChestInventory = openChestInventory;
 
   function centerMapOnPlayer() {
     if (!state || !state.player) return;
@@ -1013,7 +2233,7 @@
 
   function update(dt) {
     if (!state) return;
-    if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+    if (!state.perf) state.perf = {};
     state.ui.fpsFrames += 1;
     state.ui.fpsAccum += dt;
     if (state.ui.fpsAccum >= 0.25) {
@@ -1031,13 +2251,27 @@
     if (!handleMobileUiActions()) return;
     const mouse = input.consumeMouse();
     const actions = input.consumeActions();
+    let t0 = performance.now();
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt, actions);
+    state.perf.playerMs = performance.now() - t0;
+    t0 = performance.now();
+    if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+    state.perf.chunksMs = performance.now() - t0;
     updatePortalTravel(dt);
+    t0 = performance.now();
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
+    state.perf.entitiesMs = performance.now() - t0;
+    t0 = performance.now();
     Game.interaction3d.updateInteraction3D(state, input.input, actions, dt);
     if (Game.interaction3d.updateDynamite3D) Game.interaction3d.updateDynamite3D(state, dt);
+    if (Game.education3d && Game.education3d.updateEducation) Game.education3d.updateEducation(state);
+    state.perf.interactionMs = performance.now() - t0;
+    t0 = performance.now();
     if (Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
+    state.perf.grassMs = performance.now() - t0;
+    t0 = performance.now();
     Game.fluids3d.updateFluids3D(state, dt);
+    state.perf.fluidMs = performance.now() - t0;
   }
 
   function loop(now) {
@@ -1048,25 +2282,32 @@
       triggerAutosave();
       if (screen === 'playing') {
         Game.renderer3d.resize(canvas3d, overlay);
+        const renderStart = performance.now();
         Game.renderer3d.render(state, overlayCtx, overlay);
+        if (state.perf) state.perf.renderMs = performance.now() - renderStart;
       }
     } else if ((screen === 'paused' || screen === 'inventory' || screen === 'map') && state) {
       if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
       triggerAutosave();
       Game.renderer3d.resize(canvas3d, overlay);
+      const renderStart = performance.now();
       Game.renderer3d.render(state, overlayCtx, overlay);
+      if (state.perf) state.perf.renderMs = performance.now() - renderStart;
       if (screen === 'map') renderMap();
     }
     requestAnimationFrame(loop);
   }
 
   menuRoot.addEventListener('submit', (event) => {
+    if (!event.target || event.target.id !== 'newWorldForm') return;
     event.preventDefault();
     const data = new FormData(event.target);
     startWorld({
       name: data.get('name') || '',
       seed: data.get('seed') || '',
       mode: data.get('mode') || 'survival',
+      chunkRenderDistance: data.get('chunkRenderDistance') || 'auto',
+      spawnBiome: data.get('spawnBiome') || 'any',
     });
   });
 
@@ -1081,10 +2322,192 @@
       renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'load');
     } else if (action === 'back-menu') {
       renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'main');
+    } else if (action === 'show-education') {
+      openEducationMenu();
+    } else if (action === 'change-education-country') {
+      renderUnifiedMenu('start', 'education-country');
+    } else if (action === 'education-country') {
+      const countryId = Game.education3d && Game.education3d.saveCountryId
+        ? Game.education3d.saveCountryId(target.dataset.countryId || 'ru')
+        : (target.dataset.countryId || 'ru');
+      renderUnifiedMenu('start', 'education-grade', { countryId });
+    } else if (action === 'education-back-grade') {
+      renderUnifiedMenu('start', 'education-grade', { countryId: target.dataset.countryId || 'ru' });
+    } else if (action === 'education-grade') {
+      const grade = Number(target.dataset.grade) || 1;
+      const countryId = target.dataset.countryId || 'ru';
+      if (grade !== 1 && grade !== 2 && grade !== 3 && grade !== 4 && grade !== 5 && grade !== 6 && grade !== 7) renderUnifiedMenu('start', 'education-unavailable', { countryId, grade });
+      else if (event.shiftKey && grade === 5 && Game.education3d && Game.education3d.markGrade5ExamCompleted) {
+        Game.education3d.markGrade5ExamCompleted(countryId);
+        renderUnifiedMenu('start', 'education-subject', { countryId, grade });
+      }
+      else if (event.shiftKey && grade === 6 && Game.education3d && Game.education3d.markGrade6ExamCompleted) {
+        Game.education3d.markGrade6ExamCompleted(countryId);
+        renderUnifiedMenu('start', 'education-subject', { countryId, grade });
+      }
+      else if (grade === 5 && Game.education3d && Game.education3d.isGrade5ExamCompleted && !Game.education3d.isGrade5ExamCompleted(countryId)) {
+        renderUnifiedMenu('start', 'education-grade5-exam', { countryId });
+      }
+      else if (grade === 6 && Game.education3d && Game.education3d.isGrade6ExamCompleted && !Game.education3d.isGrade6ExamCompleted(countryId)) {
+        renderUnifiedMenu('start', 'education-grade6-exam', { countryId });
+      }
+      else renderUnifiedMenu('start', 'education-subject', { countryId, grade });
+    } else if (action === 'education-grade5-exam-start') {
+      startGrade5ExamWorld(target.dataset.countryId || 'ru');
+    } else if (action === 'education-grade6-exam-start') {
+      startGrade6ExamWorld(target.dataset.countryId || 'ru');
+    } else if (action === 'education-subject') {
+      renderUnifiedMenu('start', 'education-lesson', {
+        countryId: target.dataset.countryId || 'ru',
+        grade: Number(target.dataset.grade) || 1,
+        subjectId: target.dataset.subjectId || 'language',
+      });
+    } else if (action === 'education-back-subject') {
+      renderUnifiedMenu('start', 'education-subject', {
+        countryId: target.dataset.countryId || 'ru',
+        grade: Number(target.dataset.grade) || 1,
+      });
+    } else if (action === 'education-lesson') {
+      startEducationWorld(
+        target.dataset.countryId || 'ru',
+        Number(target.dataset.grade) || 1,
+        target.dataset.subjectId || 'language',
+        Number(target.dataset.lesson) || 1,
+      );
+    } else if (action === 'education-custom-add') {
+      const title = window.prompt('Название курса');
+      if (!title || !title.trim()) return;
+      const countryId = target.dataset.countryId || 'ru';
+      const grade = Number(target.dataset.grade) || 1;
+      const course = Game.education3d && Game.education3d.createCustomCourse
+        ? Game.education3d.createCustomCourse(countryId, grade, title.trim())
+        : null;
+      renderUnifiedMenu('start', course ? 'education-custom-course' : 'education-subject', {
+        countryId,
+        grade,
+        courseId: course ? course.id : '',
+      });
+    } else if (action === 'education-custom-course') {
+      renderUnifiedMenu('start', 'education-custom-course', {
+        countryId: target.dataset.countryId || 'ru',
+        grade: Number(target.dataset.grade) || 1,
+        courseId: target.dataset.courseId || '',
+      });
+      setScreen('menu');
+    } else if (action === 'education-custom-add-lesson') {
+      const seed = window.prompt('Seed урока (можно оставить пустым)');
+      if (seed === null) return;
+      const countryId = target.dataset.countryId || 'ru';
+      const grade = Number(target.dataset.grade) || 1;
+      const courseId = target.dataset.courseId || '';
+      const lesson = Game.education3d && Game.education3d.createCustomLesson
+        ? Game.education3d.createCustomLesson(courseId, seed.trim())
+        : null;
+      renderUnifiedMenu('start', lesson ? 'education-custom-creator' : 'education-custom-course', {
+        countryId,
+        grade,
+        courseId,
+        lessonId: lesson ? lesson.id : '',
+      });
+      setScreen('menu');
+    } else if (action === 'education-custom-creator') {
+      renderUnifiedMenu('start', 'education-custom-creator', {
+        countryId: target.dataset.countryId || 'ru',
+        grade: Number(target.dataset.grade) || 1,
+        courseId: target.dataset.courseId || '',
+        lessonId: target.dataset.lessonId || '',
+      });
+      setScreen('menu');
+    } else if (action === 'education-custom-play') {
+      startCustomLessonPlay(target.dataset.courseId || '', target.dataset.lessonId || '');
+    } else if (action === 'education-custom-code') {
+      renderUnifiedMenu('start', 'education-custom-code', {
+        countryId: target.dataset.countryId || 'ru',
+        grade: Number(target.dataset.grade) || 1,
+        courseId: target.dataset.courseId || '',
+        lessonId: target.dataset.lessonId || '',
+      });
+      setScreen('menu');
+    } else if (action === 'education-custom-code-add-action') {
+      addCustomLessonCodeAction(target);
+    } else if (action === 'education-custom-code-add-start') {
+      addCustomLessonStartBlock(target);
+    } else if (action === 'education-custom-code-add-complete') {
+      addCustomLessonCompleteBlock(target);
+    } else if (action === 'education-custom-code-remove-block') {
+      removeCustomLessonCodeBlock(target);
+    } else if (action === 'education-custom-create-map') {
+      saveCustomCreatorLesson(target.dataset.courseId || '', target.dataset.lessonId || '').then(() => {
+        startCustomLessonMapEditor(target.dataset.courseId || '', target.dataset.lessonId || '');
+      });
+    } else if (action === 'education-custom-edit-map') {
+      startCustomLessonMapEditor(target.dataset.courseId || '', target.dataset.lessonId || '');
+    } else if (action === 'education-custom-done') {
+      const countryId = target.dataset.countryId || 'ru';
+      const grade = Number(target.dataset.grade) || 1;
+      const courseId = target.dataset.courseId || '';
+      saveCustomCreatorLesson(courseId, target.dataset.lessonId || '', { ready: true }).then(() => {
+        state = null;
+        renderUnifiedMenu('start', 'education-custom-course', { countryId, grade, courseId });
+        setScreen('menu');
+      });
     } else if (action === 'load-world') {
       loadWorld(target.dataset.worldId);
     } else if (action === 'delete-world') {
       deleteSavedWorld(target.dataset.worldId);
+    }
+  });
+
+  menuRoot.addEventListener('change', (event) => {
+    const element = event.target;
+    const target = element && element.closest ? element.closest('[data-action]') : element;
+    const action = target && target.dataset ? target.dataset.action : '';
+    if (element && element.name === 'spawnBiome') {
+      syncSpawnSeedInput();
+    }
+    if (action === 'education-custom-code-select') {
+      renderCustomLessonCodeMenuFromTarget(target, Number(target.value) || 1);
+    } else if (action === 'education-custom-code-thumbnail') {
+      addCustomLessonThumbnail(target);
+    } else if (action === 'education-custom-code-edit-block') {
+      editCustomLessonCodeBlock(target);
+    }
+  });
+
+  menuRoot.addEventListener('input', (event) => {
+    const target = event.target && event.target.closest ? event.target.closest('[data-action]') : event.target;
+    const action = target && target.dataset ? target.dataset.action : '';
+    if (action === 'education-custom-code-edit-block') {
+      editCustomLessonCodeBlock(target);
+    }
+  });
+
+  menuRoot.addEventListener('dragstart', (event) => {
+    const target = event.target && event.target.closest ? event.target.closest('.lesson-code-palette-block') : null;
+    if (!target || !event.dataTransfer) return;
+    event.dataTransfer.setData('application/x-cubdep-code-block', JSON.stringify({
+      group: target.dataset.codeGroup || '',
+      type: target.dataset.codeType || '',
+    }));
+    event.dataTransfer.effectAllowed = 'copy';
+  });
+
+  menuRoot.addEventListener('dragover', (event) => {
+    const dropTarget = event.target && event.target.closest ? event.target.closest('[data-code-drop-kind]') : null;
+    if (!dropTarget) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  });
+
+  menuRoot.addEventListener('drop', (event) => {
+    const dropTarget = event.target && event.target.closest ? event.target.closest('[data-code-drop-kind]') : null;
+    if (!dropTarget || !event.dataTransfer) return;
+    event.preventDefault();
+    try {
+      const payload = JSON.parse(event.dataTransfer.getData('application/x-cubdep-code-block') || '{}');
+      addCustomLessonCodeBlockFromDrop(payload, dropTarget);
+    } catch (error) {
+      // Ignore malformed drag data.
     }
   });
 
@@ -1189,6 +2612,17 @@
   }
 
   window.addEventListener('keydown', (event) => {
+    const scaleUpKey = event.code === 'NumpadAdd' || event.code === 'Equal';
+    const scaleDownKey = event.code === 'NumpadSubtract' || event.code === 'Minus';
+    if ((scaleUpKey || scaleDownKey) && screen === 'inventory' && state && Game.interaction3d && Game.interaction3d.usePlayerScalePotionShortcut) {
+      const item = Game.interaction3d.ITEM || {};
+      const potionId = scaleUpKey ? item.GROW_POTION : item.SHRINK_POTION;
+      Game.interaction3d.usePlayerScalePotionShortcut(state, potionId);
+      input.input.scaleUpPressed = false;
+      input.input.scaleDownPressed = false;
+      event.preventDefault();
+      return;
+    }
     if (event.code === 'KeyM' && screen === 'playing') {
       input.input.keys[event.code] = false;
       openMap();

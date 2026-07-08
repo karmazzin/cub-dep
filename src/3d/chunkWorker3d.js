@@ -6,6 +6,7 @@
   const CHUNK_SIZE = 16;
   const BIOME_TRANSITION_RADIUS = 18;
   const BIOME_TRANSITION_OFFSETS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  const guaranteedVolcanicCache = new Map();
 
   function noise2(seed, x, z) {
     let n = seed + Math.imul(x, 374761393) + Math.imul(z, 668265263);
@@ -65,14 +66,91 @@
 
   function lowlandBiome(seed, x, z) {
     const climate = climateAt(seed, x, z);
+    if (climate.heat < 0.26 && climate.moisture < 0.62) return 'snow_plains';
+    if (climate.heat < 0.38 && climate.moisture >= 0.48) return 'spruce_forest';
     const dry = climate.heat > 0.54 && climate.moisture < 0.48;
     if (dry && climate.moisture < 0.54 - climate.heat * 0.18) return 'desert';
     if (climate.moisture > 0.56 || (climate.moisture > 0.5 && climate.heat < 0.46)) return 'forest';
     return 'plains';
   }
 
+  function mountainForestInfluence(seed, x, z) {
+    let count = 0;
+    for (const [dx, dz] of BIOME_TRANSITION_OFFSETS) {
+      const sampleX = x + dx * 34;
+      const sampleZ = z + dz * 34;
+      if (mountainStrength(seed, sampleX, sampleZ) <= 0.52 && lowlandBiome(seed, sampleX, sampleZ) === 'forest') count += 1;
+    }
+    return count / BIOME_TRANSITION_OFFSETS.length;
+  }
+
+  function guaranteedVolcanicFeature(seed) {
+    if (guaranteedVolcanicCache.has(seed)) return guaranteedVolcanicCache.get(seed);
+    const worldSize = 2048;
+    const margin = 220;
+    let best = null;
+    for (let i = 0; i < 24; i += 1) {
+      const x = margin + Math.floor(noise2(seed + 2711, i, 0) * (worldSize - margin * 2));
+      const z = margin + Math.floor(noise2(seed + 2713, 0, i) * (worldSize - margin * 2));
+      const mountain = mountainStrength(seed, x, z);
+      const ridge = ridgeNoise(seed + 2715, x, z, 70);
+      const score = mountain * 0.82 + ridge * 0.18;
+      if (!best || score > best.score) best = { x, z, score, index: i };
+    }
+    const feature = best
+      ? {
+        x: best.x,
+        z: best.z,
+        radius: 42 + noise2(seed + 2717, best.index, 0) * 34,
+      }
+      : null;
+    guaranteedVolcanicCache.set(seed, feature);
+    return feature;
+  }
+
+  function volcanicInfo(seed, x, z) {
+    let best = null;
+    const guaranteed = guaranteedVolcanicFeature(seed);
+    if (guaranteed) {
+      const edgeNoise = (smoothNoise(seed + 2719, x / 24, z / 24) - 0.5) * 10;
+      const dist = Math.hypot(x - guaranteed.x, z - guaranteed.z) + edgeNoise;
+      if (dist <= guaranteed.radius + 28) {
+        const edge = guaranteed.radius - dist;
+        best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+      }
+    }
+    if (mountainStrength(seed, x, z) < 0.58) return best || { inVolcanic: false, fringe: false, edge: 99 };
+    const cellSize = 420;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        if (noise2(seed + 2701, cx, cz) > 0.095) continue;
+        const centerX = cx * cellSize + Math.floor(cellSize * (0.24 + noise2(seed + 2703, cx, cz) * 0.52));
+        const centerZ = cz * cellSize + Math.floor(cellSize * (0.24 + noise2(seed + 2705, cx, cz) * 0.52));
+        if (mountainStrength(seed, centerX, centerZ) < 0.64) continue;
+        const radius = 30 + noise2(seed + 2707, cx, cz) * 42;
+        const edgeNoise = (smoothNoise(seed + 2709, x / 24, z / 24) - 0.5) * 10;
+        const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
+        if (dist > radius + 28) continue;
+        const edge = radius - dist;
+        if (!best || edge > best.edge) best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+      }
+    }
+    return best || { inVolcanic: false, fringe: false, edge: 99 };
+  }
+
   function baseLandBiome(seed, x, z) {
-    if (mountainStrength(seed, x, z) > 0.62) return 'mountains';
+    const mountain = mountainStrength(seed, x, z);
+    const volcanic = volcanicInfo(seed, x, z);
+    if (volcanic.inVolcanic) return 'volcanic';
+    if (mountain > 0.62) {
+      if (mountainForestInfluence(seed, x, z) > 0.18) return 'mountain_forest';
+      if (ridgeNoise(seed + 740, x, z, 54) > 0.72 && noise2(seed + 741, Math.floor(x / 18), Math.floor(z / 18)) > 0.48) return 'cliffs';
+      return 'mountains';
+    }
     return lowlandBiome(seed, x, z);
   }
 
@@ -85,6 +163,8 @@
   }
 
   function geyserValleyInfo(seed, x, z) {
+    const volcanic = volcanicInfo(seed, x, z);
+    if (!volcanic.inVolcanic && volcanic.fringe) return { inValley: true, edge: Math.max(1, 28 + volcanic.edge) };
     if (mountainStrength(seed, x, z) < 0.58) return { inValley: false, edge: 99 };
     const cellSize = 320;
     const cellX = Math.floor(x / cellSize);
@@ -110,7 +190,7 @@
   }
 
   function dryTransitionSurface(seed, x, z, biome, blockIds) {
-    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers') return blockIds.AIR;
+    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers' || biome === 'cliffs' || biome === 'volcanic' || biome === 'mountain_forest') return blockIds.AIR;
     const desert = baseBiomeInfluence(seed, x, z, 'desert');
     const green = baseBiomeInfluence(seed, x, z, 'plains') + baseBiomeInfluence(seed, x, z, 'forest');
     const noise = smoothNoise(seed + 913, x / 5, z / 5);
@@ -348,6 +428,22 @@
   }
 
   function surfaceLiquidAt(seed, x, y, z, h, world, blockIds) {
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'volcanic') {
+      const volcanicLava = basinLiquidAt(seed, x, y, z, h, world, blockIds, {
+        block: blockIds.LAVA,
+        cellSize: 18,
+        salt: 1721,
+        chanceSalt: 1723,
+        radiusSalt: 1725,
+        chance: 0.22,
+        minRadius: 2.1,
+        radiusRange: 3.4,
+        minHeight: WATER_LEVEL + 3,
+        spawnDistance: 18,
+      });
+      if (volcanicLava !== blockIds.AIR) return volcanicLava;
+    }
     const lava = basinLiquidAt(seed, x, y, z, h, world, blockIds, {
       block: blockIds.LAVA,
       cellSize: 32,
@@ -708,7 +804,19 @@
         }
         return y >= groundH - 4 ? blockIds.SAND : blockIds.STONE;
       }
-      if (biome === 'mountains' || biome === 'geysers') {
+      if (biome === 'volcanic') {
+        if (y >= groundH - 4) return blockIds.BLACKSTONE;
+        return blockIds.STONE;
+      }
+      if (biome === 'cliffs') {
+        return blockIds.STONE;
+      }
+      if (biome === 'snow_plains' || biome === 'spruce_forest') {
+        if (y === groundH) return blockIds.SNOW;
+        if (y >= groundH - 3) return blockIds.DIRT;
+        return blockIds.STONE;
+      }
+      if (biome === 'mountains' || biome === 'geysers' || biome === 'mountain_forest') {
         if (y === groundH && y >= SNOW_LEVEL) return blockIds.SNOW;
         if (y >= groundH - 1 && y >= DRY_MOUNTAIN_LEVEL) return blockIds.RED_EARTH;
         if (y >= groundH - 2 && y < DRY_MOUNTAIN_LEVEL) return blockIds.DIRT;
@@ -732,7 +840,7 @@
   function hasInitialGrass(seed, x, y, z, world, blockIds) {
     const biome = biomeAt(seed, x, z);
     return y === terrainHeight(seed, x, z)
-      && (biome === 'plains' || biome === 'forest')
+      && (biome === 'plains' || biome === 'forest' || biome === 'spruce_forest')
       && dryTransitionSurface(seed, x, z, biome, blockIds) === blockIds.AIR
       && terrainBlockAt(seed, x, y + 1, z, world, blockIds) === blockIds.AIR;
   }

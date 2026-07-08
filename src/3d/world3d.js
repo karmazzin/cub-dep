@@ -19,6 +19,7 @@
       waterSources: new Set(),
       lavaSources: new Set(),
       blockDamage: {},
+      chests: {},
       dirtyAll: true,
       dirtyChunks: new Set(),
     };
@@ -99,6 +100,7 @@
     else world.generatedChunks = new Set();
     if (world.decoratedColumns) world.decoratedColumns.clear();
     else world.decoratedColumns = new Set();
+    if (world.decorationChunkRangeCache) world.decorationChunkRangeCache.clear();
     if (world.modifiedChunks) world.modifiedChunks.clear();
     else world.modifiedChunks = new Set();
     if (world.unsavedChunks) world.unsavedChunks.clear();
@@ -110,10 +112,14 @@
     if (world.lavaSources) world.lavaSources.clear();
     else world.lavaSources = new Set();
     world.blockDamage = {};
+    world.chests = {};
     world.chunkLoading = null;
     world.lastQueuedChunks = 0;
     world.lastPendingChunks = 0;
     world.lastDecoratedColumns = 0;
+    world.lastGenerationError = null;
+    if (world.decorationFailedColumns) world.decorationFailedColumns.clear();
+    else world.decorationFailedColumns = new Map();
     world.lastUnloadedChunks = 0;
     world.dirtyAll = true;
     if (world.dirtyChunks) world.dirtyChunks.clear();
@@ -153,7 +159,9 @@
     const world = state && state.world;
     if (!world || !world.dirtyChunks || !inBounds3D(world, x, y, z)) return;
     const size = Game.constants3d.CHUNK_SIZE;
-    const chunks = world.dirtyChunks;
+    const chunks = world.suppressChunkDirty
+      ? (world.suppressedDirtyChunks || (world.suppressedDirtyChunks = new Set()))
+      : world.dirtyChunks;
     const cx = Math.floor(x / size);
     const cy = Math.floor(y / size);
     const cz = Math.floor(z / size);
@@ -196,7 +204,8 @@
     if (!entry && id === BLOCK.AIR) return false;
     if (!entry) entry = getChunkForBlock3D(world, x, y, z, true);
     if (!entry.chunk.grassLevel) entry.chunk.grassLevel = new Uint8Array(entry.chunk.blocks.length);
-    if (entry.chunk.blocks[entry.index] === id) return false;
+    const previousId = entry.chunk.blocks[entry.index];
+    if (previousId === id) return false;
     entry.chunk.blocks[entry.index] = id;
     entry.chunk.grassLevel[entry.index] = 0;
     const key = `${x},${y},${z}`;
@@ -215,6 +224,7 @@
       if (world.lavaSources) world.lavaSources.delete(key);
     }
     if (world.blockDamage) delete world.blockDamage[key];
+    if (previousId === BLOCK.CHEST && id !== BLOCK.CHEST && world.chests) delete world.chests[key];
     markChunkDirty3D(state, x, y, z);
     markChunkDirty3D(state, x, y - 1, z);
     markChunkModified3D(state, x, y, z);
@@ -328,7 +338,6 @@
       && id !== BLOCK.WATER
       && id !== BLOCK.HOT_WATER
       && id !== BLOCK.LAVA
-      && id !== BLOCK.TORCH
       && id !== BLOCK.DRY_BUSH
       && id !== BLOCK.ALGAE
       && id !== BLOCK.TALL_ALGAE
@@ -382,6 +391,7 @@
     pruneKeySetInChunk(world.waterSources, bounds);
     pruneKeySetInChunk(world.lavaSources, bounds);
     pruneObjectKeysInChunk(world.blockDamage, bounds);
+    pruneObjectKeysInChunk(world.chests, bounds);
     return true;
   }
 
@@ -395,6 +405,7 @@
     pruneKeySetInChunk(world.waterSources, bounds);
     pruneKeySetInChunk(world.lavaSources, bounds);
     pruneObjectKeysInChunk(world.blockDamage, bounds);
+    pruneObjectKeysInChunk(world.chests, bounds);
     const size = Game.constants3d.CHUNK_SIZE;
     for (let ly = 0; ly < size; ly += 1) {
       const y = cy * size + ly;
@@ -409,8 +420,7 @@
           const id = chunk.blocks[index];
           const sourceKey = `${x},${y},${z}`;
           const level = chunk.fluidLevel[index];
-          if ((id === BLOCK.WATER || id === BLOCK.HOT_WATER) && level === 0) world.waterSources.add(sourceKey);
-          else if (id === BLOCK.LAVA && level === 0) world.lavaSources.add(sourceKey);
+          if (id === BLOCK.LAVA && level === 0) world.lavaSources.add(sourceKey);
         }
       }
     }
@@ -457,9 +467,12 @@
     pruneKeySetInChunk(world.waterSources, bounds);
     pruneKeySetInChunk(world.lavaSources, bounds);
     pruneObjectKeysInChunk(world.blockDamage, bounds);
+    pruneObjectKeysInChunk(world.chests, bounds);
     for (const key of savedState.waterSources || []) world.waterSources.add(key);
     for (const key of savedState.lavaSources || []) world.lavaSources.add(key);
     for (const [key, value] of Object.entries(savedState.blockDamage || {})) world.blockDamage[key] = value;
+    if (!world.chests) world.chests = {};
+    for (const [key, value] of Object.entries(savedState.chests || {})) world.chests[key] = value;
     if (world.dirtyChunks) world.dirtyChunks.add(chunkKeyFromCoords3D(cx, cy, cz));
     return true;
   }
@@ -473,6 +486,7 @@
     const waterSources = [];
     const lavaSources = [];
     const blockDamage = {};
+    const chests = {};
     const isInBounds = (key) => {
       if (!bounds) return false;
       const parts = key.split(',').map(Number);
@@ -489,6 +503,9 @@
     for (const [key, value] of Object.entries(world.blockDamage || {})) {
       if (isInBounds(key)) blockDamage[key] = value;
     }
+    for (const [key, value] of Object.entries(world.chests || {})) {
+      if (isInBounds(key)) chests[key] = value;
+    }
     return {
       cx: chunk.cx,
       cy: chunk.cy,
@@ -499,12 +516,14 @@
       waterSources,
       lavaSources,
       blockDamage,
+      chests,
     };
   }
 
   Game.world3d = {
     createWorld3D,
     clearWorld3D,
+    markChunkModified3D,
     getBlock3D,
     setBlock3D,
     getGrassLevel3D,

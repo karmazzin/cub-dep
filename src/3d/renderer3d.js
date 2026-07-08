@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK, BLOCK_COLORS } = Game.blocks;
-  const { EYE_HEIGHT, CHUNK_SIZE, CHUNK_RENDER_DISTANCE, CAMERA_FAR_CHUNKS, CHUNK_MESH_REBUILD_BUDGET } = Game.constants3d;
+  const { EYE_HEIGHT, CHUNK_SIZE, CAMERA_FAR_CHUNKS, CHUNK_MESH_REBUILD_TIME_BUDGET_MS, getChunkRenderDistanceValue } = Game.constants3d;
   const { getBlock3D, getFluidLevel3D, getGrassLevel3D } = Game.world3d;
   const { drawUI3D } = Game.ui3d;
 
@@ -33,6 +33,10 @@
   let dynamiteOverlayMeshes = [];
   let previewFluidMesh = null;
   let previewFluidGeometry = null;
+  let lastResizeW = 0;
+  let lastResizeH = 0;
+  let meshRebuildQueue = [];
+  let meshRebuildQueued = new Set();
   let previewFluidMaterial = null;
   let previewFluidCapacity = 0;
   let previewTntMesh = null;
@@ -62,11 +66,13 @@
   const SKY_FOG_COLOR = 0x87bfe8;
   const CLOUD_HEIGHT = 88;
   const CLOUD_CELL_SIZE = 76;
-  const CLOUD_GRID_RADIUS = 2;
+  const CLOUD_GRID_RADIUS = 3;
   const CLOUDS_PER_CELL = 4;
   const CLOUD_PUFFS_PER_CLOUD = 9;
   const CLOUD_WEATHER_CYCLE = 120;
   const CLOUD_WIND_CYCLE = 46;
+  const CLOUD_FADE_START = 118;
+  const CLOUD_FADE_END = 182;
   const STEAM_PARTICLE_LIMIT = 90;
   const STEAM_GEYSER_SCAN_RADIUS = 24;
   const crackSegments = [
@@ -123,25 +129,27 @@
 
   function blockKind(id) {
     const B = BLOCK;
-    if (id === B.GRASS || id === B.MOSS || id === B.MUSHROOM_SOIL || id === B.RED_EARTH || id === B.ASH) return 'soil';
-    if (id === B.DIRT || id === B.PATH || id === B.SAND || id === B.SNOW || id === B.CLOUD) return 'soft';
+    if (id === B.GRASS || id === B.MOSS || id === B.MUSHROOM_SOIL || id === B.RED_EARTH || id === B.SCORCHED_DIRT || id === B.ASH) return 'soil';
+    if (id === B.DIRT || id === B.PATH || id === B.SAND || id === B.SNOW || id === B.CLOUD || id === B.WOOL) return 'soft';
     if (id === B.WOOD || id === B.SPRUCE_WOOD || id === B.GREAT_TREE_WOOD || id === B.SEQUOIA_WOOD || id === B.PILLAR) return 'wood';
-    if (id === B.PLANK || id === B.SEQUOIA_PLANK || id === B.DOOR || id === B.CHEST || id === B.LADDER) return 'plank';
+    if (id === B.CHEST) return 'chest';
+    if (id === B.PLANK || id === B.SEQUOIA_PLANK || id === B.DOOR || id === B.LADDER) return 'plank';
     if (id === B.LEAF || id === B.SPRUCE_LEAF || id === B.SEQUOIA_LEAF || id === B.DRY_BUSH || id === B.CACTUS) return 'leaf';
     if (id === B.WATER || id === B.HOT_WATER || id === B.STEAM_WATER) return 'water';
     if (id === B.LAVA || id === B.FIRE_PORTAL || id === B.AIR_DIMENSION_PORTAL || id === B.AIR_THIEF_PORTAL || id === B.AIR_HOME_PORTAL || id === B.ELEMENTAL_RETURN_PORTAL || id === B.END_GATE || id === B.WATER_DIMENSION_PORTAL) return 'glow';
     if (id === B.COAL_ORE || id === B.GOLD_ORE || id === B.IRON_ORE || id === B.DIAMOND_ORE || id === B.DEEP_ORE || id === B.FRIENDSHIP_ORE || id === B.STEAM_ORE || id === B.INVISIBLE_ORE) return 'ore';
-    if (id === B.TORCH || id === B.GOLDEN_FLOWER || id === B.EMBER_FLOWER || id === B.EMBER_SHRUB || id === B.GLOW_ALGAE || id === B.TALL_GLOW_ALGAE || id === B.ALGAE || id === B.TALL_ALGAE || id === B.SMALL_GLOW_MUSHROOM) return 'plant';
+    if (id === B.GOLDEN_FLOWER || id === B.EMBER_FLOWER || id === B.EMBER_SHRUB || id === B.GLOW_ALGAE || id === B.TALL_GLOW_ALGAE || id === B.ALGAE || id === B.TALL_ALGAE || id === B.SMALL_GLOW_MUSHROOM) return 'plant';
     if (id === B.WHITE_MUSHROOM_STEM || id === B.WHITE_MUSHROOM_CAP || id === B.FLY_AGARIC_STEM || id === B.FLY_AGARIC_CAP || id === B.GLOW_MUSHROOM_STEM || id === B.GLOW_MUSHROOM_CAP || id === B.SMALL_WHITE_MUSHROOM || id === B.SMALL_FLY_AGARIC) return 'mushroom';
     if (id === B.PINK_CORAL || id === B.BLUE_CORAL || id === B.GOLD_CORAL || id === B.CORAL_STONE) return 'coral';
     if (id === B.WATER_CRYSTAL || id === B.AIR_CRYSTAL || id === B.ECHO_CORE || id === B.ROOT_CORE || id === B.FRIENDSHIP_AMULET) return 'crystal';
     if (id === B.COBWEB) return 'web';
-    if (id === B.BEDROCK || id === B.STONE || id === B.BLACKSTONE || id === B.DEEPSTONE || id === B.BASALT || id === B.ROOT_STONE || id === B.ASH_STONE || id === B.FURNACE || id === B.WATER_FRAME || id === B.WATER_WELL_FRAME || id === B.MAIN_WELL_FRAME || id === B.AIR_ENTRANCE_FRAME || id === B.GOLDEN_GARDEN_SHELL || id === B.FIRE_SEAL || id === B.ROOT_PLATFORM || id === B.ECHO_SHARD_PEDESTAL || id === B.ROOT_NODE) return 'stone';
+    if (id === B.BEDROCK || id === B.STONE || id === B.BLACKSTONE || id === B.DEEPSTONE || id === B.BASALT || id === B.ROOT_STONE || id === B.ASH_STONE || id === B.WATER_FRAME || id === B.WATER_WELL_FRAME || id === B.MAIN_WELL_FRAME || id === B.AIR_ENTRANCE_FRAME || id === B.GOLDEN_GARDEN_SHELL || id === B.FIRE_SEAL || id === B.ROOT_PLATFORM || id === B.ECHO_SHARD_PEDESTAL || id === B.ROOT_NODE) return 'stone';
     return 'generic';
   }
 
   function dirtPalette(id) {
     if (id === BLOCK.RED_EARTH) return { r: 118, g: 62, b: 42 };
+    if (id === BLOCK.SCORCHED_DIRT) return { r: 70, g: 45, b: 32 };
     if (id === BLOCK.MUSHROOM_SOIL) return { r: 82, g: 68, b: 52 };
     if (id === BLOCK.ASH) return { r: 108, g: 102, b: 98 };
     if (id === BLOCK.PATH) return { r: 118, g: 86, b: 46 };
@@ -152,7 +160,7 @@
     if (id === BLOCK.BEDROCK) return { r: 34, g: 34, b: 34 };
     if (id === BLOCK.BLACKSTONE) return { r: 38, g: 38, b: 42 };
     if (id === BLOCK.DEEPSTONE) return { r: 62, g: 66, b: 72 };
-    if (id === BLOCK.BASALT) return { r: 60, g: 56, b: 60 };
+    if (id === BLOCK.BASALT) return { r: 38, g: 38, b: 42 };
     if (id === BLOCK.ASH_STONE) return { r: 72, g: 68, b: 66 };
     if (id === BLOCK.ROOT_STONE) return { r: 70, g: 62, b: 52 };
     if (id === BLOCK.CORAL_STONE) return { r: 74, g: 104, b: 112 };
@@ -280,6 +288,51 @@
     }
   }
 
+  function drawChestTile(ctx, rng, x, y, size, faceType) {
+    const body = { r: 132, g: 78, b: 32 };
+    const lid = { r: 96, g: 55, b: 24 };
+    const trim = { r: 56, g: 34, b: 22 };
+    fillPixelNoise(ctx, rng, body, x, y, size, 18, 2);
+
+    ctx.fillStyle = rgbToCss(lid);
+    ctx.fillRect(x, y, size, Math.max(5, Math.floor(size * 0.32)));
+    ctx.fillStyle = rgbToCss(trim);
+    ctx.fillRect(x, y + Math.floor(size * 0.30), size, Math.max(2, Math.floor(size * 0.08)));
+    ctx.fillRect(x, y, Math.max(2, Math.floor(size * 0.08)), size);
+    ctx.fillRect(x + size - Math.max(2, Math.floor(size * 0.08)), y, Math.max(2, Math.floor(size * 0.08)), size);
+
+    ctx.strokeStyle = rgbToCss(adjustColor(trim, -8));
+    ctx.lineWidth = Math.max(1, Math.floor(size / 20));
+    for (let xx = x + Math.floor(size * 0.24); xx < x + size; xx += Math.floor(size * 0.26)) {
+      ctx.beginPath();
+      ctx.moveTo(xx + 0.5, y + Math.floor(size * 0.38));
+      ctx.lineTo(xx + 0.5, y + size);
+      ctx.stroke();
+    }
+
+    if (faceType !== 'top' && faceType !== 'bottom') {
+      const lockW = Math.max(5, Math.floor(size * 0.22));
+      const lockH = Math.max(5, Math.floor(size * 0.20));
+      const lockX = x + Math.floor((size - lockW) / 2);
+      const lockY = y + Math.floor(size * 0.36);
+      ctx.fillStyle = '#d8b04a';
+      ctx.fillRect(lockX, lockY, lockW, lockH);
+      ctx.fillStyle = '#7a5220';
+      ctx.fillRect(lockX + Math.floor(lockW * 0.4), lockY + Math.floor(lockH * 0.48), Math.max(1, Math.floor(lockW * 0.22)), Math.max(2, Math.floor(lockH * 0.38)));
+    } else {
+      ctx.strokeStyle = rgbToCss(adjustColor(trim, -4));
+      ctx.lineWidth = Math.max(1, Math.floor(size / 16));
+      ctx.beginPath();
+      ctx.moveTo(x + Math.floor(size * 0.12), y + Math.floor(size * 0.5));
+      ctx.lineTo(x + Math.floor(size * 0.88), y + Math.floor(size * 0.5));
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+  }
+
   function drawDynamiteTile(ctx, rng, id, x, y, size) {
     const base = hexToRgb(BLOCK_COLORS[id] || '#b43a2f');
     ctx.fillStyle = rgbToCss(base);
@@ -394,6 +447,7 @@
     const rng = mulberry32(id * 9973 + variant * 131 + faceType.charCodeAt(0) * 17);
     const base = hexToRgb(BLOCK_COLORS[id] || '#ffffff');
     const kind = blockKind(id);
+    const letter = Game.blocks.LETTER_BLOCKS && Game.blocks.LETTER_BLOCKS[id];
 
     if (id === BLOCK.STRANGE_PORTAL_STONE || id === BLOCK.STRANGE_PORTAL_CORE || id === BLOCK.STRANGE_PORTAL_RUNE || id === BLOCK.ACTIVE_STRANGE_PORTAL) {
       drawStrangePortalTile(ctx, rng, id, x, y, size);
@@ -405,12 +459,14 @@
       if (faceType === 'top') drawGrassTop(ctx, rng, x, y, size, variant);
       else if (faceType === 'bottom') drawDirt(ctx, rng, x, y, size, { r: 126, g: 84, b: 48 });
       else drawGrassSide(ctx, rng, x, y, size, variant);
-    } else if (id === BLOCK.DIRT || id === BLOCK.PATH || id === BLOCK.MUSHROOM_SOIL || id === BLOCK.RED_EARTH || id === BLOCK.ASH) {
+    } else if (id === BLOCK.DIRT || id === BLOCK.PATH || id === BLOCK.MUSHROOM_SOIL || id === BLOCK.RED_EARTH || id === BLOCK.SCORCHED_DIRT || id === BLOCK.ASH) {
       drawDirt(ctx, rng, x, y, size, dirtPalette(id));
     } else if (kind === 'stone' || kind === 'ore') {
       drawStoneBase(ctx, rng, x, y, size, stonePalette(id), id === BLOCK.BEDROCK || id === BLOCK.BLACKSTONE || id === BLOCK.DEEPSTONE);
     } else if (kind === 'wood') {
       drawWoodTile(ctx, rng, x, y, size, base, faceType);
+    } else if (kind === 'chest') {
+      drawChestTile(ctx, rng, x, y, size, faceType);
     } else if (kind === 'plank') {
       drawPlankTile(ctx, rng, x, y, size, base);
     } else {
@@ -431,7 +487,7 @@
       }
     }
 
-    if ((kind === 'soil' || kind === 'soft') && id !== BLOCK.GRASS && id !== BLOCK.DIRT && id !== BLOCK.PATH && id !== BLOCK.MUSHROOM_SOIL && id !== BLOCK.RED_EARTH && id !== BLOCK.ASH) {
+    if ((kind === 'soil' || kind === 'soft') && id !== BLOCK.GRASS && id !== BLOCK.DIRT && id !== BLOCK.PATH && id !== BLOCK.MUSHROOM_SOIL && id !== BLOCK.RED_EARTH && id !== BLOCK.SCORCHED_DIRT && id !== BLOCK.ASH) {
       for (let i = 0; i < 24; i += 1) {
         ctx.fillStyle = rgbToCss(adjustColor(base, kind === 'soil' ? 36 : -24));
         ctx.fillRect(x + Math.floor(rng() * size), y + Math.floor(rng() * size), 1, 3 + Math.floor(rng() * 4));
@@ -497,6 +553,14 @@
     if (kind !== 'soil' && kind !== 'soft' && kind !== 'stone' && kind !== 'ore' && kind !== 'leaf' && id !== BLOCK.GRASS && id !== BLOCK.DIRT) {
       ctx.strokeStyle = 'rgba(0,0,0,0.16)';
       ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    }
+
+    if (letter) {
+      ctx.fillStyle = 'rgba(42,31,22,0.86)';
+      ctx.font = `bold ${Math.max(14, Math.floor(size * 0.62))}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(letter, x + size / 2, y + size / 2 + size * 0.03, size * 0.82);
     }
   }
 
@@ -642,7 +706,7 @@
   function hashBlockVariant(x, y, z, id, face) {
     if (id === BLOCK.GRASS && face.type === 'top') return 0;
     if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.STEAM_WATER) return 0;
-    if (id === BLOCK.DIRT || id === BLOCK.PATH || id === BLOCK.MUSHROOM_SOIL || id === BLOCK.RED_EARTH || id === BLOCK.ASH) return 0;
+    if (id === BLOCK.DIRT || id === BLOCK.PATH || id === BLOCK.MUSHROOM_SOIL || id === BLOCK.RED_EARTH || id === BLOCK.SCORCHED_DIRT || id === BLOCK.ASH) return 0;
     if ((id === BLOCK.WOOD || id === BLOCK.SPRUCE_WOOD || id === BLOCK.GREAT_TREE_WOOD || id === BLOCK.SEQUOIA_WOOD) && face.type === 'side') return 0;
     let hash = Math.imul(x + 101, 374761393) ^ Math.imul(y + 59, 668265263) ^ Math.imul(z + 211, 2147483647);
     hash ^= Math.imul(id + 17, 1274126177);
@@ -826,18 +890,19 @@
     };
   }
 
-  function isChunkInRenderDistance(entry, playerChunk) {
+  function isChunkInRenderDistance(entry, playerChunk, renderDistance) {
     const dx = entry.cx - playerChunk.cx;
     const dz = entry.cz - playerChunk.cz;
-    return dx * dx + dz * dz <= CHUNK_RENDER_DISTANCE * CHUNK_RENDER_DISTANCE;
+    return dx * dx + dz * dz <= renderDistance * renderDistance;
   }
 
   function updateChunkVisibility(state) {
     const playerChunk = getPlayerChunk(state.player);
+    const renderDistance = getChunkRenderDistanceValue(state.worldMeta);
     let visibleChunks = 0;
     let visibleMeshes = 0;
     for (const entry of chunkMeshes.values()) {
-      const visible = isChunkInRenderDistance(entry, playerChunk);
+      const visible = isChunkInRenderDistance(entry, playerChunk, renderDistance);
       if (entry.solid) entry.solid.visible = visible;
       if (entry.water) entry.water.visible = visible;
       if (entry.lava) entry.lava.visible = visible;
@@ -851,7 +916,7 @@
     if (debugInfo) {
       debugInfo.visibleChunks = visibleChunks;
       debugInfo.visibleChunkMeshes = visibleMeshes;
-      debugInfo.renderDistanceChunks = CHUNK_RENDER_DISTANCE;
+      debugInfo.renderDistanceChunks = renderDistance;
     }
   }
 
@@ -919,8 +984,9 @@
       createTextureAtlas();
       scene = new THREE.Scene();
       scene.background = new THREE.Color(SKY_COLOR);
-      const cameraFar = CAMERA_FAR_CHUNKS * CHUNK_SIZE;
-      scene.fog = new THREE.Fog(SKY_FOG_COLOR, Math.max(24, cameraFar * 0.34), Math.max(48, cameraFar * 0.74));
+      const terrainFar = CAMERA_FAR_CHUNKS * CHUNK_SIZE;
+      const cameraFar = Math.max(terrainFar, CLOUD_FADE_END + 24);
+      scene.fog = new THREE.Fog(SKY_FOG_COLOR, Math.max(24, terrainFar * 0.34), Math.max(48, terrainFar * 0.74));
       camera = new THREE.PerspectiveCamera(72, 1, 0.05, cameraFar);
       light = new THREE.DirectionalLight(0xffffff, 1.3);
       light.position.set(0.35, 1, 0.45);
@@ -1077,6 +1143,7 @@
       color: 0xffffff,
       transparent: true,
       opacity: 0.72,
+      fog: false,
       depthWrite: false,
     });
     cloudPuffGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -1092,14 +1159,15 @@
       const cell = { key: '', group: new THREE.Group(), clouds: [] };
       for (let c = 0; c < CLOUDS_PER_CELL; c += 1) {
         const cloud = new THREE.Group();
+        const material = cloudMaterial.clone();
         const puffs = [];
         for (let p = 0; p < CLOUD_PUFFS_PER_CLOUD; p += 1) {
-          const puff = new THREE.Mesh(cloudPuffGeometry, cloudMaterial);
+          const puff = new THREE.Mesh(cloudPuffGeometry, material);
           cloud.add(puff);
           puffs.push(puff);
         }
         cell.group.add(cloud);
-        cell.clouds.push({ group: cloud, puffs });
+        cell.clouds.push({ group: cloud, material, puffs });
       }
       skyGroup.add(cell.group);
       cloudCells.push(cell);
@@ -1206,11 +1274,19 @@
     }
   }
 
-  function applyCloudProfile(cell, profile) {
+  function applyCloudProfile(cell, profile, player) {
     if (!cell) return;
+    const eyeY = player ? player.y + EYE_HEIGHT : 0;
     for (let i = 0; i < cell.clouds.length; i += 1) {
       const cloud = cell.clouds[i];
-      cloud.group.visible = cloud.weatherRoll < profile.density || i < profile.minClouds;
+      const weatherVisible = cloud.weatherRoll < profile.density || i < profile.minClouds;
+      const wx = cell.group.position.x + cloud.group.position.x - (player ? player.x : 0);
+      const wy = cloud.group.position.y - eyeY;
+      const wz = cell.group.position.z + cloud.group.position.z - (player ? player.z : 0);
+      const distance = Math.sqrt(wx * wx + wy * wy + wz * wz);
+      const fade = 1 - smoothstep((distance - CLOUD_FADE_START) / (CLOUD_FADE_END - CLOUD_FADE_START));
+      cloud.material.opacity = profile.opacity * Math.max(0, Math.min(1, fade));
+      cloud.group.visible = weatherVisible && cloud.material.opacity > 0.02;
     }
   }
 
@@ -1253,9 +1329,9 @@
       usedCells.add(cell);
       usedKeys.add(item.key);
       rebuildCloudCell(cell, item.cx, item.cz);
-      applyCloudProfile(cell, profile);
       cell.group.visible = true;
       cell.group.position.set(item.cx * CLOUD_CELL_SIZE - cloudDriftX, 0, item.cz * CLOUD_CELL_SIZE - cloudDriftZ);
+      applyCloudProfile(cell, profile, player);
     }
     for (const cell of cloudCells) {
       if (!usedCells.has(cell)) cell.group.visible = false;
@@ -1386,6 +1462,28 @@
     return new THREE.MeshBasicMaterial({ color });
   }
 
+  function createSleepZSprite() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#f4f7ff';
+    ctx.strokeStyle = '#1f2430';
+    ctx.lineWidth = 4;
+    ctx.font = 'bold 42px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeText('Z', 32, 32);
+    ctx.fillText('Z', 32, 32);
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.set(0.55, 2.85, 0);
+    sprite.scale.set(0.72, 0.72, 0.72);
+    return sprite;
+  }
+
   function createSimpleMobMesh(type) {
     const root = new THREE.Group();
     if (type === 'boar') {
@@ -1464,6 +1562,93 @@
       root.add(tail);
       return root;
     }
+    if (type === 'fox') {
+      const orange = mat(0xc96b2c);
+      const dark = mat(0x34251c);
+      const light = mat(0xf0d2a8);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.26, 0.28), orange);
+      body.position.set(0, 0.34, 0);
+      root.add(body);
+      const chest = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.22), light);
+      chest.position.set(0.22, 0.32, 0);
+      root.add(chest);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.24, 0.22), orange);
+      head.position.set(0.48, 0.43, 0);
+      root.add(head);
+      root.userData.head = head;
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, 0.18), orange);
+      tail.position.set(-0.52, 0.4, 0);
+      tail.rotation.z = -0.25;
+      root.add(tail);
+      const tailTip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.16, 0.16), light);
+      tailTip.position.set(-0.78, 0.46, 0);
+      root.add(tailTip);
+      for (const [x, z] of [[-0.22, -0.1], [-0.22, 0.1], [0.22, -0.1], [0.22, 0.1]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.24, 0.07), dark);
+        leg.position.set(x, 0.16, z);
+        root.add(leg);
+      }
+      return root;
+    }
+    if (type === 'bear' || type === 'polar_bear') {
+      const fur = mat(0x7b4d32);
+      const shade = mat(0x5a3523);
+      const dark = mat(0x27231f);
+      const snowFur = mat(0xe8e3d4);
+      const snowShade = mat(0xc9c3b5);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(3.24, 1.56, 1.38), fur);
+      body.position.set(0, 1.5, 0);
+      body.userData.brownMaterial = fur;
+      body.userData.snowMaterial = snowFur;
+      root.add(body);
+      const shoulder = new THREE.Mesh(new THREE.BoxGeometry(1.26, 1.26, 1.26), shade);
+      shoulder.position.set(1.02, 1.74, 0);
+      shoulder.userData.brownMaterial = shade;
+      shoulder.userData.snowMaterial = snowShade;
+      root.add(shoulder);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.9, 0.9), fur);
+      head.position.set(2.16, 1.86, 0);
+      head.userData.brownMaterial = fur;
+      head.userData.snowMaterial = snowFur;
+      root.add(head);
+      root.userData.head = head;
+      const nose = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.24, 0.36), dark);
+      nose.position.set(2.82, 1.8, 0);
+      root.add(nose);
+      const frontLegs = [];
+      for (const [x, z] of [[-1.02, -0.48], [-1.02, 0.48], [1.02, -0.48], [1.02, 0.48]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.08, 0.36), shade);
+        leg.position.set(x, 0.6, z);
+        leg.userData.brownMaterial = shade;
+        leg.userData.snowMaterial = snowShade;
+        root.add(leg);
+        if (x > 0) frontLegs.push(leg);
+      }
+      root.userData.frontLegs = frontLegs;
+      const digDust = new THREE.Group();
+      const dustMat = mat(0x7a5438);
+      for (let i = 0; i < 10; i += 1) {
+        const dust = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), dustMat);
+        dust.visible = false;
+        digDust.add(dust);
+      }
+      root.add(digDust);
+      root.userData.digDust = digDust;
+      const splash = new THREE.Group();
+      const splashMat = mat(0x7fc8ff);
+      for (let i = 0; i < 10; i += 1) {
+        const drop = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), splashMat);
+        drop.visible = false;
+        splash.add(drop);
+      }
+      root.add(splash);
+      root.userData.splash = splash;
+      const sleepZ = createSleepZSprite();
+      sleepZ.visible = false;
+      root.add(sleepZ);
+      root.userData.sleepZ = sleepZ;
+      return root;
+    }
     return null;
   }
 
@@ -1520,6 +1705,15 @@
     return root;
   }
 
+  function applyBearVariant(mesh, variant) {
+    if (!mesh || (variant !== 'snow' && variant !== 'brown')) return;
+    mesh.traverse((child) => {
+      if (!child.userData) return;
+      const material = variant === 'snow' ? child.userData.snowMaterial : child.userData.brownMaterial;
+      if (material) child.material = material;
+    });
+  }
+
   function disposeSheepMeshes() {
     for (const mesh of sheepMeshes.values()) scene.remove(mesh);
     sheepMeshes.clear();
@@ -1530,23 +1724,82 @@
     const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
     const live = new Set();
     const playerChunk = getPlayerChunk(state.player);
+    const renderDistance = getChunkRenderDistanceValue(state.worldMeta);
     for (const item of sheep) {
       live.add(item.id);
+      const type = item.type === 'polar_bear' ? 'bear' : (item.type || 'sheep');
       let mesh = sheepMeshes.get(item.id);
-      if (!mesh) {
-        mesh = createSheepMesh(item.type || 'sheep');
+      if (!mesh || (mesh.userData && mesh.userData.mobType !== type)) {
+        if (mesh) scene.remove(mesh);
+        mesh = createSheepMesh(type);
+        if (!mesh.userData) mesh.userData = {};
+        mesh.userData.mobType = type;
         sheepMeshes.set(item.id, mesh);
         scene.add(mesh);
       }
+      if (type === 'bear') applyBearVariant(mesh, item.variant || 'brown');
+      const mobScale = Number.isFinite(item.scale) ? Math.max(0.25, Math.min(1024, item.scale)) : 1;
+      mesh.scale.setScalar(mobScale);
       mesh.position.set(item.x, item.y, item.z);
       mesh.rotation.y = -(item.yaw || 0);
+      mesh.rotation.x = 0;
+      mesh.rotation.z = 0;
+      if (type === 'bear' && item.sleeping) {
+        mesh.rotation.y = -(item.yaw || 0);
+        mesh.rotation.x = Math.PI * 0.5;
+        mesh.position.y = item.y + 0.55;
+      }
       const head = mesh.userData && mesh.userData.head;
       if (head) head.rotation.z = item.eating ? -0.65 : 0;
+      const sleepZ = mesh.userData && mesh.userData.sleepZ;
+      if (sleepZ) {
+        sleepZ.visible = !!item.sleeping;
+        if (item.sleeping) {
+          const t = performance.now() * 0.001;
+          sleepZ.position.y = 2.85 + Math.sin(t * 2.2) * 0.18;
+          sleepZ.scale.setScalar(0.72 + Math.sin(t * 3.1) * 0.08);
+        }
+      }
+      if (type === 'bear') {
+        const t = performance.now() * 0.001;
+        const frontLegs = mesh.userData && mesh.userData.frontLegs ? mesh.userData.frontLegs : [];
+        for (let i = 0; i < frontLegs.length; i += 1) {
+          frontLegs[i].rotation.z = item.digging ? Math.sin(t * 12 + i * Math.PI) * 0.55 : 0;
+        }
+        const digDust = mesh.userData && mesh.userData.digDust;
+        if (digDust) {
+          for (let i = 0; i < digDust.children.length; i += 1) {
+            const dust = digDust.children[i];
+            dust.visible = !!item.digging;
+            if (item.digging) {
+              const phase = t * 5 + i * 0.7;
+              const burst = (phase % 1);
+              dust.position.set(1.65 + Math.sin(i * 2.1) * 0.55, 0.15 + burst * 0.55, Math.cos(i * 1.7) * 0.55);
+              dust.scale.setScalar(Math.max(0.35, 1 - burst));
+            }
+          }
+        }
+        const splash = mesh.userData && mesh.userData.splash;
+        const splashing = item.variant !== 'snow' && item.inWater && Math.hypot(item.vx || 0, item.vz || 0) > 0.05;
+        if (splash) {
+          for (let i = 0; i < splash.children.length; i += 1) {
+            const drop = splash.children[i];
+            drop.visible = splashing;
+            if (splashing) {
+              const phase = (t * 4.5 + i * 0.17) % 1;
+              const angle = i * 2.399;
+              const radius = 0.55 + phase * 0.75;
+              drop.position.set(Math.cos(angle) * radius, 0.12 + Math.sin(phase * Math.PI) * 0.45, Math.sin(angle) * radius);
+              drop.scale.setScalar(Math.max(0.3, 1 - phase * 0.55));
+            }
+          }
+        }
+      }
       const cx = Math.floor(item.x / CHUNK_SIZE);
       const cz = Math.floor(item.z / CHUNK_SIZE);
       const dx = cx - playerChunk.cx;
       const dz = cz - playerChunk.cz;
-      mesh.visible = dx * dx + dz * dz <= CHUNK_RENDER_DISTANCE * CHUNK_RENDER_DISTANCE;
+      mesh.visible = dx * dx + dz * dz <= renderDistance * renderDistance;
     }
     for (const [id, mesh] of sheepMeshes) {
       if (live.has(id)) continue;
@@ -1616,6 +1869,8 @@
   function rebuildAllChunks(state) {
     if (!scene || !window.THREE) return;
     disposeChunkMeshes();
+    meshRebuildQueue = [];
+    meshRebuildQueued.clear();
     const chunkKeys = getExistingChunkKeys(state.world);
     const totals = { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0 };
     for (const key of chunkKeys) {
@@ -1642,44 +1897,107 @@
     state.world.dirtyChunks.clear();
   }
 
-  function updateDirtyChunks(state) {
-    if (!scene || !window.THREE || !state.world.dirtyChunks.size) return;
-    const totals = debugInfo || { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0, textureTiles: atlasMeta ? atlasMeta.totalTiles : 0 };
-    const keys = Array.from(state.world.dirtyChunks).slice(0, CHUNK_MESH_REBUILD_BUDGET);
-    for (const key of keys) {
-      const parsed = parseChunkKey(key);
-      state.world.dirtyChunks.delete(key);
-      if (!parsed) continue;
-      const oldEntry = chunkMeshes.get(key);
-      let oldVertices = 0;
-      let oldTriangles = 0;
-      let oldMeshes = 0;
-      if (oldEntry && oldEntry.solid) {
-        oldVertices += oldEntry.solid.geometry.getAttribute('position').count;
-        oldTriangles += oldEntry.solid.geometry.index ? oldEntry.solid.geometry.index.count / 3 : 0;
-        oldMeshes += 1;
-      }
-      if (oldEntry && oldEntry.water) {
-        oldVertices += oldEntry.water.geometry.getAttribute('position').count;
-        oldTriangles += oldEntry.water.geometry.index ? oldEntry.water.geometry.index.count / 3 : 0;
-        oldMeshes += 1;
-      }
-      if (oldEntry && oldEntry.lava) {
-        oldVertices += oldEntry.lava.geometry.getAttribute('position').count;
-        oldTriangles += oldEntry.lava.geometry.index ? oldEntry.lava.geometry.index.count / 3 : 0;
-        oldMeshes += 1;
-      }
+  function meshStats(mesh) {
+    if (!mesh || !mesh.geometry) return { vertices: 0, triangles: 0, meshes: 0 };
+    return {
+      vertices: mesh.geometry.getAttribute('position').count,
+      triangles: mesh.geometry.index ? mesh.geometry.index.count / 3 : 0,
+      meshes: 1,
+    };
+  }
 
-      const solid = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'solid');
-      const water = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'water');
-      const lava = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'lava');
-      const nextMeshes = (solid.vertices > 0 ? 1 : 0) + (water.vertices > 0 ? 1 : 0) + (lava.vertices > 0 ? 1 : 0);
-      totals.vertices += solid.vertices + water.vertices + lava.vertices - oldVertices;
-      totals.triangles += solid.triangles + water.triangles + lava.triangles - oldTriangles;
-      totals.chunkMeshes += nextMeshes - oldMeshes;
+  function chunkModeFlags(world, key) {
+    const chunk = world && world.chunks ? world.chunks.get(key) : null;
+    const flags = { solid: false, water: false, lava: false };
+    if (!chunk || !chunk.blocks) return flags;
+    for (let i = 0; i < chunk.blocks.length; i += 1) {
+      const id = chunk.blocks[i];
+      if (id === BLOCK.AIR) continue;
+      if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) flags.water = true;
+      else if (id === BLOCK.LAVA) flags.lava = true;
+      else flags.solid = true;
+      if (flags.solid && flags.water && flags.lava) break;
     }
+    return flags;
+  }
+
+  function shouldQueueMeshMode(state, key, mode, flags) {
+    if (mode === 'solid') return true;
+    const entry = chunkMeshes.get(key);
+    if (entry && entry[mode]) return true;
+    return !!flags[mode];
+  }
+
+  function meshModePriority(mode) {
+    if (mode === 'solid') return 0;
+    if (mode === 'water') return 1;
+    return 2;
+  }
+
+  function compareMeshTasksForPlayer(state, a, b) {
+    const player = state && state.player ? state.player : { x: 0, y: 0, z: 0 };
+    const pcx = Math.floor(player.x / CHUNK_SIZE);
+    const pcy = Math.floor(player.y / CHUNK_SIZE);
+    const pcz = Math.floor(player.z / CHUNK_SIZE);
+    const adx = a.cx - pcx;
+    const adz = a.cz - pcz;
+    const bdx = b.cx - pcx;
+    const bdz = b.cz - pcz;
+    const distanceDelta = (adx * adx + adz * adz) - (bdx * bdx + bdz * bdz);
+    if (distanceDelta) return distanceDelta;
+    const verticalDelta = Math.abs(a.cy - pcy) - Math.abs(b.cy - pcy);
+    if (verticalDelta) return verticalDelta;
+    return meshModePriority(a.mode) - meshModePriority(b.mode);
+  }
+
+  function enqueueDirtyChunkMeshes(state) {
+    if (!state.world.dirtyChunks.size) return;
+    const modes = ['solid', 'water', 'lava'];
+    for (const key of state.world.dirtyChunks) {
+      const parsed = parseChunkKey(key);
+      if (!parsed) continue;
+      const flags = chunkModeFlags(state.world, key);
+      for (const mode of modes) {
+        if (!shouldQueueMeshMode(state, key, mode, flags)) continue;
+        const taskKey = `${key}:${mode}`;
+        if (meshRebuildQueued.has(taskKey)) continue;
+        meshRebuildQueued.add(taskKey);
+        meshRebuildQueue.push({ key, cx: parsed.cx, cy: parsed.cy, cz: parsed.cz, mode, taskKey });
+      }
+    }
+    state.world.dirtyChunks.clear();
+  }
+
+  function updateDirtyChunks(state) {
+    if (!scene || !window.THREE) return;
+    enqueueDirtyChunkMeshes(state);
+    if (!meshRebuildQueue.length) return;
+    const perf = state.perf || (state.perf = {});
+    const totals = debugInfo || { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0, textureTiles: atlasMeta ? atlasMeta.totalTiles : 0 };
+    const start = performance.now();
+    const budget = Math.max(0.5, CHUNK_MESH_REBUILD_TIME_BUDGET_MS || 3);
+    meshRebuildQueue.sort((a, b) => compareMeshTasksForPlayer(state, a, b));
+    do {
+      const task = meshRebuildQueue.shift();
+      if (!task) break;
+      meshRebuildQueued.delete(task.taskKey);
+      const oldEntry = chunkMeshes.get(task.key);
+      const oldStats = meshStats(oldEntry && oldEntry[task.mode]);
+      const next = setChunkMesh(state, task.cx, task.cy, task.cz, task.mode);
+      totals.vertices += next.vertices - oldStats.vertices;
+      totals.triangles += next.triangles - oldStats.triangles;
+      totals.chunkMeshes += (next.vertices > 0 ? 1 : 0) - oldStats.meshes;
+      if (performance.now() - start >= budget) break;
+    } while (meshRebuildQueue.length);
+
+    const chunkTaskPrefixes = new Set(meshRebuildQueue.map((task) => task.key));
+    for (const key of state.world.dirtyChunks) chunkTaskPrefixes.add(key);
+    totals.pendingDirtyChunks = chunkTaskPrefixes.size;
+    totals.pendingMeshTasks = meshRebuildQueue.length;
+    perf.meshMs = performance.now() - start;
+    perf.meshTasks = meshRebuildQueue.length;
+    perf.dirtyChunks = totals.pendingDirtyChunks;
     totals.textureTiles = atlasMeta ? atlasMeta.totalTiles : 0;
-    totals.pendingDirtyChunks = state.world.dirtyChunks.size;
     debugInfo = totals;
   }
 
@@ -1692,10 +2010,14 @@
     if (!renderer || !camera) return;
     const w = window.innerWidth;
     const h = window.innerHeight;
-    renderer.setSize(w, h, false);
-    camera.aspect = w / Math.max(1, h);
-    camera.updateProjectionMatrix();
-    if (overlayCanvas) {
+    if (w !== lastResizeW || h !== lastResizeH) {
+      renderer.setSize(w, h, false);
+      camera.aspect = w / Math.max(1, h);
+      camera.updateProjectionMatrix();
+      lastResizeW = w;
+      lastResizeH = h;
+    }
+    if (overlayCanvas && (overlayCanvas.width !== w || overlayCanvas.height !== h)) {
       overlayCanvas.width = w;
       overlayCanvas.height = h;
     }
@@ -1704,9 +2026,10 @@
   function render(state, overlayCtx, overlayCanvas) {
     if (!renderer || !scene || !camera) return;
     if (state.world.dirtyAll) rebuildAllChunks(state);
-    else if (state.world.dirtyChunks.size > 0) updateDirtyChunks(state);
+    else if (state.world.dirtyChunks.size > 0 || meshRebuildQueue.length > 0) updateDirtyChunks(state);
     const player = state.player;
-    camera.position.set(player.x, player.y + EYE_HEIGHT, player.z);
+    const playerScale = Number.isFinite(player.scale) ? Math.max(0.25, Math.min(1024, player.scale)) : 1;
+    camera.position.set(player.x, player.y + EYE_HEIGHT * playerScale, player.z);
     const cosPitch = Math.cos(player.pitch);
     const lookX = Math.sin(player.yaw) * cosPitch;
     const lookY = Math.sin(player.pitch);

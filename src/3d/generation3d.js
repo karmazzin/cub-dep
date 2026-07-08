@@ -4,13 +4,16 @@
   const { clearWorld3D, setBlock3D, getBlock3D, setStaticWater3D, setLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
   const {
     CHUNK_SIZE,
-    CHUNK_RENDER_DISTANCE,
     CHUNK_UNLOAD_DISTANCE,
     CHUNK_START_SYNC_RADIUS,
     CHUNK_WORKER_MAX_PENDING,
-    CHUNK_SYNC_GENERATE_BUDGET,
+    CHUNK_SYNC_GENERATE_TIME_BUDGET_MS,
+    CHUNK_SYNC_GENERATE_MAX_TIME_BUDGET_MS,
+    CHUNK_SYNC_FALLBACK_RADIUS,
     CHUNK_DECORATE_BUDGET,
     CHUNK_UNLOAD_COLUMN_BUDGET,
+    getChunkRenderDistanceValue,
+    isManualChunkRenderDistance,
   } = Game.constants3d;
 
   const WATER_LEVEL = 14;
@@ -22,6 +25,7 @@
   let chunkWorkerAvailable = true;
   let nextWorkerJobId = 1;
   let activeState = null;
+  const guaranteedVolcanicCache = new Map();
 
   function hash(seed) {
     let h = 2166136261;
@@ -91,14 +95,91 @@
 
   function lowlandBiome(seed, x, z) {
     const climate = climateAt(seed, x, z);
+    if (climate.heat < 0.26 && climate.moisture < 0.62) return 'snow_plains';
+    if (climate.heat < 0.38 && climate.moisture >= 0.48) return 'spruce_forest';
     const dry = climate.heat > 0.54 && climate.moisture < 0.48;
     if (dry && climate.moisture < 0.54 - climate.heat * 0.18) return 'desert';
     if (climate.moisture > 0.56 || (climate.moisture > 0.5 && climate.heat < 0.46)) return 'forest';
     return 'plains';
   }
 
+  function mountainForestInfluence(seed, x, z) {
+    let count = 0;
+    for (const [dx, dz] of BIOME_TRANSITION_OFFSETS) {
+      const sampleX = x + dx * 34;
+      const sampleZ = z + dz * 34;
+      if (mountainStrength(seed, sampleX, sampleZ) <= 0.52 && lowlandBiome(seed, sampleX, sampleZ) === 'forest') count += 1;
+    }
+    return count / BIOME_TRANSITION_OFFSETS.length;
+  }
+
+  function guaranteedVolcanicFeature(seed) {
+    if (guaranteedVolcanicCache.has(seed)) return guaranteedVolcanicCache.get(seed);
+    const worldSize = 2048;
+    const margin = 220;
+    let best = null;
+    for (let i = 0; i < 24; i += 1) {
+      const x = margin + Math.floor(noise2(seed + 2711, i, 0) * (worldSize - margin * 2));
+      const z = margin + Math.floor(noise2(seed + 2713, 0, i) * (worldSize - margin * 2));
+      const mountain = mountainStrength(seed, x, z);
+      const ridge = ridgeNoise(seed + 2715, x, z, 70);
+      const score = mountain * 0.82 + ridge * 0.18;
+      if (!best || score > best.score) best = { x, z, score, index: i };
+    }
+    const feature = best
+      ? {
+        x: best.x,
+        z: best.z,
+        radius: 42 + noise2(seed + 2717, best.index, 0) * 34,
+      }
+      : null;
+    guaranteedVolcanicCache.set(seed, feature);
+    return feature;
+  }
+
+  function volcanicInfo(seed, x, z) {
+    let best = null;
+    const guaranteed = guaranteedVolcanicFeature(seed);
+    if (guaranteed) {
+      const edgeNoise = (smoothNoise(seed + 2719, x / 24, z / 24) - 0.5) * 10;
+      const dist = Math.hypot(x - guaranteed.x, z - guaranteed.z) + edgeNoise;
+      if (dist <= guaranteed.radius + 28) {
+        const edge = guaranteed.radius - dist;
+        best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+      }
+    }
+    if (mountainStrength(seed, x, z) < 0.58) return best || { inVolcanic: false, fringe: false, edge: 99 };
+    const cellSize = 420;
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const cx = cellX + dx;
+        const cz = cellZ + dz;
+        if (noise2(seed + 2701, cx, cz) > 0.095) continue;
+        const centerX = cx * cellSize + Math.floor(cellSize * (0.24 + noise2(seed + 2703, cx, cz) * 0.52));
+        const centerZ = cz * cellSize + Math.floor(cellSize * (0.24 + noise2(seed + 2705, cx, cz) * 0.52));
+        if (mountainStrength(seed, centerX, centerZ) < 0.64) continue;
+        const radius = 30 + noise2(seed + 2707, cx, cz) * 42;
+        const edgeNoise = (smoothNoise(seed + 2709, x / 24, z / 24) - 0.5) * 10;
+        const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
+        if (dist > radius + 28) continue;
+        const edge = radius - dist;
+        if (!best || edge > best.edge) best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+      }
+    }
+    return best || { inVolcanic: false, fringe: false, edge: 99 };
+  }
+
   function baseLandBiome(seed, x, z) {
-    if (mountainStrength(seed, x, z) > 0.62) return 'mountains';
+    const mountain = mountainStrength(seed, x, z);
+    const volcanic = volcanicInfo(seed, x, z);
+    if (volcanic.inVolcanic) return 'volcanic';
+    if (mountain > 0.62) {
+      if (mountainForestInfluence(seed, x, z) > 0.18) return 'mountain_forest';
+      if (ridgeNoise(seed + 740, x, z, 54) > 0.72 && noise2(seed + 741, Math.floor(x / 18), Math.floor(z / 18)) > 0.48) return 'cliffs';
+      return 'mountains';
+    }
     return lowlandBiome(seed, x, z);
   }
 
@@ -111,6 +192,8 @@
   }
 
   function geyserValleyInfo(seed, x, z) {
+    const volcanic = volcanicInfo(seed, x, z);
+    if (!volcanic.inVolcanic && volcanic.fringe) return { inValley: true, edge: Math.max(1, 28 + volcanic.edge) };
     if (mountainStrength(seed, x, z) < 0.58) return { inValley: false, edge: 99 };
     const cellSize = 320;
     const cellX = Math.floor(x / cellSize);
@@ -136,7 +219,7 @@
   }
 
   function dryTransitionSurface(seed, x, z, biome) {
-    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers') return BLOCK.AIR;
+    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers' || biome === 'cliffs' || biome === 'volcanic' || biome === 'mountain_forest') return BLOCK.AIR;
     const desert = baseBiomeInfluence(seed, x, z, 'desert');
     const green = baseBiomeInfluence(seed, x, z, 'plains') + baseBiomeInfluence(seed, x, z, 'forest');
     const noise = smoothNoise(seed + 913, x / 5, z / 5);
@@ -332,6 +415,11 @@
     forest: 'Лес',
     desert: 'Пустыня',
     mountains: 'Горы',
+    cliffs: 'Скалы',
+    volcanic: 'Вулканический биом',
+    snow_plains: 'Снежная равнина',
+    spruce_forest: 'Хвойный лес',
+    mountain_forest: 'Горный лес',
     lake: 'Озеро',
     beach: 'Пляж',
     geysers: 'Долина гейзеров',
@@ -404,6 +492,546 @@
       }
     }
     return entrances;
+  }
+
+  const VILLAGE_COUNT = 4;
+  const VILLAGE_BLOCK_GENERATION_ENABLED = true;
+  const VILLAGE_PATHS_ENABLED = true;
+  const VILLAGE_BUILDINGS_ENABLED = true;
+  const VILLAGE_WORK_AREAS_ENABLED = true;
+  const VILLAGE_TERRAIN_FLATTEN_ENABLED = false;
+  const VILLAGE_MIN_SPAWN_DISTANCE = 220;
+  const VILLAGE_MIN_DISTANCE = 300;
+  const VILLAGE_MARGIN = 128;
+  const DECORATION_MIN_WRITE_BELOW = 3;
+  const DECORATION_MAX_WRITE_ABOVE = 10;
+  const VILLAGE_BUILDING_CLEAR_HEIGHT = 8;
+  const VILLAGE_BUILDING_FOUNDATION_DEPTH = 16;
+  const TREE_CROWN_RADIUS = 2;
+  const DECORATION_COLUMN_MAX_FAILURES = 3;
+  const VILLAGE_PROFESSIONS = [
+    'animal_farmer',
+    'crop_farmer',
+    'merchant',
+    'mason',
+    'builder',
+    'lumberjack',
+  ];
+  const VILLAGE_STYLES = [
+    { id: 'green', color: '#4f9f5f', roof: BLOCK.LEAF, wall: BLOCK.PLANK },
+    { id: 'blue', color: '#4f80c8', roof: BLOCK.SPRUCE_LEAF || BLOCK.LEAF, wall: BLOCK.WOOD },
+    { id: 'red', color: '#b65b48', roof: BLOCK.RED_EARTH || BLOCK.DIRT, wall: BLOCK.PLANK },
+    { id: 'gold', color: '#c6a348', roof: BLOCK.SAND, wall: BLOCK.STONE },
+  ];
+
+  function villageProfessionSet(seed, index) {
+    const professions = ['elder', 'guard'];
+    for (let i = 0; i < VILLAGE_PROFESSIONS.length; i += 1) {
+      const profession = VILLAGE_PROFESSIONS[i];
+      const mustHave = index === i % VILLAGE_COUNT;
+      if (mustHave || noise2(seed + 4101 + i * 17, index, i) < 0.58) professions.push(profession);
+    }
+    return professions;
+  }
+
+  function villageResidents(seed, index, professions) {
+    const residents = [];
+    residents.push({ id: `${index}-elder`, profession: 'elder' });
+    residents.push({ id: `${index}-guard`, profession: 'guard' });
+    const workerProfessions = professions.filter((profession) => profession !== 'elder' && profession !== 'guard');
+    for (let i = 0; residents.length < 12; i += 1) {
+      const profession = workerProfessions.length
+        ? workerProfessions[Math.floor(noise2(seed + 4201, index, i) * workerProfessions.length) % workerProfessions.length]
+        : 'guard';
+      residents.push({ id: `${index}-${residents.length}`, profession });
+    }
+    return residents;
+  }
+
+  function scoreVillageSite(seed, world, x, z, chosen) {
+    if (x < VILLAGE_MARGIN || z < VILLAGE_MARGIN || x > world.w - VILLAGE_MARGIN || z > world.d - VILLAGE_MARGIN) return null;
+    if (!farFromSpawn(world, x, z, VILLAGE_MIN_SPAWN_DISTANCE)) return null;
+    for (const village of chosen) {
+      if (Math.hypot(x - village.x, z - village.z) < VILLAGE_MIN_DISTANCE) return null;
+    }
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers') return null;
+
+    let minH = Infinity;
+    let maxH = -Infinity;
+    let forest = 0;
+    let plains = 0;
+    let desert = 0;
+    let waterNearby = 0;
+    for (let dz = -24; dz <= 24; dz += 12) {
+      for (let dx = -24; dx <= 24; dx += 12) {
+        const sx = Math.max(1, Math.min(world.w - 2, x + dx));
+        const sz = Math.max(1, Math.min(world.d - 2, z + dz));
+        const h = terrainHeight(seed, sx, sz);
+        minH = Math.min(minH, h);
+        maxH = Math.max(maxH, h);
+        const sampleBiome = biomeAt(seed, sx, sz);
+        if (sampleBiome === 'lake') waterNearby += 1;
+        else if (sampleBiome === 'forest') forest += 1;
+        else if (sampleBiome === 'plains') plains += 1;
+        else if (sampleBiome === 'desert') desert += 1;
+      }
+    }
+    const roughness = maxH - minH;
+    if (roughness > 7) return null;
+    const usefulMix = Math.min(1, (forest + plains + desert) / 12);
+    const biomeScore = biome === 'plains' ? 1 : (biome === 'forest' ? 0.82 : 0.68);
+    const waterScore = Math.min(0.16, waterNearby * 0.025);
+    const roughScore = Math.max(0, 1 - roughness / 8);
+    return biomeScore * 0.45 + roughScore * 0.42 + usefulMix * 0.18 + waterScore;
+  }
+
+  function fallbackVillageSiteScore(seed, world, x, z, chosen) {
+    if (x < VILLAGE_MARGIN || z < VILLAGE_MARGIN || x > world.w - VILLAGE_MARGIN || z > world.d - VILLAGE_MARGIN) return null;
+    if (!farFromSpawn(world, x, z, VILLAGE_MIN_SPAWN_DISTANCE * 0.72)) return null;
+    let distanceScore = 1;
+    for (const village of chosen) {
+      const distance = Math.hypot(x - village.x, z - village.z);
+      if (distance < VILLAGE_MIN_DISTANCE * 0.58) return null;
+      distanceScore = Math.min(distanceScore, Math.max(0, Math.min(1, (distance - VILLAGE_MIN_DISTANCE * 0.58) / (VILLAGE_MIN_DISTANCE * 0.34))));
+    }
+    const biome = biomeAt(seed, x, z);
+    const biomeScore = biome === 'plains' ? 1
+      : (biome === 'forest' ? 0.86
+        : (biome === 'desert' ? 0.72
+          : (biome === 'beach' ? 0.32
+            : (biome === 'mountains' ? 0.18 : 0.06))));
+    let minH = Infinity;
+    let maxH = -Infinity;
+    for (let dz = -30; dz <= 30; dz += 10) {
+      for (let dx = -30; dx <= 30; dx += 10) {
+        const sx = Math.max(1, Math.min(world.w - 2, x + dx));
+        const sz = Math.max(1, Math.min(world.d - 2, z + dz));
+        const h = terrainHeight(seed, sx, sz);
+        minH = Math.min(minH, h);
+        maxH = Math.max(maxH, h);
+      }
+    }
+    const roughness = maxH - minH;
+    const roughScore = Math.max(0, 1 - roughness / 18);
+    return biomeScore * 0.5 + roughScore * 0.38 + distanceScore * 0.22;
+  }
+
+  function villageCandidateInRegion(seed, world, index, region, chosen) {
+    let best = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const roll = index * 101 + attempt;
+      const x = Math.floor(region.minX + noise2(seed + 4001, roll, index) * Math.max(1, region.maxX - region.minX));
+      const z = Math.floor(region.minZ + noise2(seed + 4003, index, roll) * Math.max(1, region.maxZ - region.minZ));
+      const score = scoreVillageSite(seed, world, x, z, chosen);
+      if (score === null) continue;
+      if (!best || score > best.score) best = { x, z, score };
+    }
+    return best;
+  }
+
+  function fallbackVillageCandidateInRegion(seed, world, index, region, chosen) {
+    let best = null;
+    const step = 32;
+    let ordinal = 0;
+    for (let z = region.minZ; z <= region.maxZ; z += step) {
+      for (let x = region.minX; x <= region.maxX; x += step) {
+        const jitterX = Math.floor((noise2(seed + 4041, index, ordinal) - 0.5) * step * 0.7);
+        const jitterZ = Math.floor((noise2(seed + 4043, ordinal, index) - 0.5) * step * 0.7);
+        const sx = Math.floor(Math.max(region.minX, Math.min(region.maxX, x + jitterX)));
+        const sz = Math.floor(Math.max(region.minZ, Math.min(region.maxZ, z + jitterZ)));
+        const score = fallbackVillageSiteScore(seed, world, sx, sz, chosen);
+        if (score !== null && (!best || score > best.score)) best = { x: sx, z: sz, score, relaxed: true };
+        ordinal += 1;
+      }
+    }
+    return best;
+  }
+
+  function getVillages3D(state) {
+    const world = state && state.world;
+    if (!world || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return [];
+    if (world.villagesKey === `${state.worldMeta.seed || ''}:${world.w}:${world.d}` && Array.isArray(world.villages)) {
+      return world.villages;
+    }
+    const seed = worldSeed(state);
+    const halfW = world.w / 2;
+    const halfD = world.d / 2;
+    const regions = [
+      { minX: VILLAGE_MARGIN, minZ: VILLAGE_MARGIN, maxX: halfW - 48, maxZ: halfD - 48 },
+      { minX: halfW + 48, minZ: VILLAGE_MARGIN, maxX: world.w - VILLAGE_MARGIN, maxZ: halfD - 48 },
+      { minX: VILLAGE_MARGIN, minZ: halfD + 48, maxX: halfW - 48, maxZ: world.d - VILLAGE_MARGIN },
+      { minX: halfW + 48, minZ: halfD + 48, maxX: world.w - VILLAGE_MARGIN, maxZ: world.d - VILLAGE_MARGIN },
+    ];
+    const villages = [];
+    for (let i = 0; i < VILLAGE_COUNT; i += 1) {
+      let candidate = villageCandidateInRegion(seed, world, i, regions[i], villages);
+      if (!candidate) candidate = fallbackVillageCandidateInRegion(seed, world, i, regions[i], villages);
+      if (!candidate) continue;
+      const professions = villageProfessionSet(seed, i);
+      const style = VILLAGE_STYLES[i % VILLAGE_STYLES.length];
+      villages.push({
+        id: `village-${i}`,
+        name: `Деревня ${i + 1}`,
+        x: candidate.x,
+        y: terrainHeight(seed, candidate.x, candidate.z) + 1,
+        z: candidate.z,
+        radius: 42 + Math.floor(noise2(seed + 4301, i, 0) * 18),
+        styleId: style.id,
+        color: style.color,
+        professions,
+        residents: villageResidents(seed, i, professions),
+      });
+    }
+    world.villagesKey = `${state.worldMeta.seed || ''}:${world.w}:${world.d}`;
+    world.villages = villages;
+    return villages;
+  }
+
+  function getVillageRoadLinks3D(state) {
+    const villages = getVillages3D(state);
+    if (villages.length < 2) return [];
+    const connected = new Set([0]);
+    const links = [];
+    while (connected.size < villages.length) {
+      let best = null;
+      for (const from of connected) {
+        for (let to = 0; to < villages.length; to += 1) {
+          if (connected.has(to)) continue;
+          const a = villages[from];
+          const b = villages[to];
+          const distance = Math.hypot(a.x - b.x, a.z - b.z);
+          if (!best || distance < best.distance) best = { from, to, distance };
+        }
+      }
+      if (!best) break;
+      connected.add(best.to);
+      links.push(best);
+    }
+    let extra = null;
+    for (let from = 0; from < villages.length; from += 1) {
+      for (let to = from + 1; to < villages.length; to += 1) {
+        if (links.some((link) => (link.from === from && link.to === to) || (link.from === to && link.to === from))) continue;
+        const a = villages[from];
+        const b = villages[to];
+        const distance = Math.hypot(a.x - b.x, a.z - b.z);
+        if (!extra || distance < extra.distance) extra = { from, to, distance };
+      }
+    }
+    if (extra) links.push(extra);
+    return links.map((link) => ({
+      from: villages[link.from].id,
+      to: villages[link.to].id,
+      fromX: villages[link.from].x,
+      fromZ: villages[link.from].z,
+      toX: villages[link.to].x,
+      toZ: villages[link.to].z,
+      planned: true,
+    }));
+  }
+
+  function villageStyle(village) {
+    return VILLAGE_STYLES.find((style) => style.id === village.styleId) || VILLAGE_STYLES[0];
+  }
+
+  function villageHasProfession(village, profession) {
+    return village && Array.isArray(village.professions) && village.professions.includes(profession);
+  }
+
+  function villageRectContains(rect, lx, lz) {
+    return lx >= rect.x && lx < rect.x + rect.w && lz >= rect.z && lz < rect.z + rect.d;
+  }
+
+  function villageRectNear(rect, lx, lz, margin) {
+    return lx >= rect.x - margin && lx < rect.x + rect.w + margin && lz >= rect.z - margin && lz < rect.z + rect.d + margin;
+  }
+
+  function villageRects(village) {
+    const rects = [
+      { id: 'elder', kind: 'house', x: -5, z: -8, w: 10, d: 8, wall: 'plank', roof: 'style', door: 'south' },
+      { id: 'guard', kind: 'house', x: -21, z: -7, w: 7, d: 7, wall: 'stone', roof: 'style', door: 'east' },
+      { id: 'storage', kind: 'house', x: 12, z: -7, w: 8, d: 7, wall: 'wood', roof: 'style', door: 'west' },
+      { id: 'home-a', kind: 'house', x: -19, z: 11, w: 7, d: 7, wall: 'plank', roof: 'style', door: 'north' },
+      { id: 'home-b', kind: 'house', x: 11, z: 11, w: 7, d: 7, wall: 'plank', roof: 'style', door: 'north' },
+    ];
+    if (villageHasProfession(village, 'merchant')) rects.push({ id: 'shop', kind: 'house', x: 22, z: -2, w: 7, d: 7, wall: 'wood', roof: 'style', door: 'west' });
+    if (villageHasProfession(village, 'builder')) rects.push({ id: 'builder', kind: 'house', x: 21, z: 10, w: 8, d: 6, wall: 'stone', roof: 'style', door: 'west' });
+    return rects;
+  }
+
+  function villageWorkAreaAt(village, lx, lz) {
+    if (villageHasProfession(village, 'crop_farmer') && lx >= -31 && lx <= -22 && lz >= -2 && lz <= 19) return 'field';
+    if (villageHasProfession(village, 'animal_farmer') && lx >= -31 && lx <= -23 && lz >= -20 && lz <= -11) return 'pen';
+    if (villageHasProfession(village, 'mason') && lx >= 22 && lx <= 31 && lz >= -21 && lz <= -13) return 'quarry';
+    if (villageHasProfession(village, 'lumberjack') && lx >= 22 && lx <= 31 && lz >= 20 && lz <= 28) return 'woodpile';
+    return null;
+  }
+
+  function villageRoofOverhangAt(village, lx, lz) {
+    if (!VILLAGE_BUILDINGS_ENABLED) return null;
+    for (const rect of villageRects(village)) {
+      if (villageRectContains(rect, lx, lz)) continue;
+      if (villageRectNear(rect, lx, lz, 1)) return { kind: 'roof', rect, lx, lz };
+    }
+    return null;
+  }
+
+  function rectEntrancePoint(rect) {
+    const doorX = Math.floor(rect.w / 2);
+    const doorZ = Math.floor(rect.d / 2);
+    if (rect.door === 'south') return { x: rect.x + doorX, z: rect.z + rect.d, axis: 'z' };
+    if (rect.door === 'north') return { x: rect.x + doorX, z: rect.z - 1, axis: 'z' };
+    if (rect.door === 'east') return { x: rect.x + rect.w, z: rect.z + doorZ, axis: 'x' };
+    return { x: rect.x - 1, z: rect.z + doorZ, axis: 'x' };
+  }
+
+  function betweenInclusive(value, a, b) {
+    return value >= Math.min(a, b) && value <= Math.max(a, b);
+  }
+
+  function villageDoorPathAt(village, lx, lz) {
+    for (const rect of villageRects(village)) {
+      const entrance = rectEntrancePoint(rect);
+      if (entrance.axis === 'z') {
+        if (Math.abs(lx - entrance.x) <= 1 && betweenInclusive(lz, entrance.z, 0)) return true;
+      } else if (Math.abs(lz - entrance.z) <= 1 && betweenInclusive(lx, entrance.x, 0)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function villageCellAt(village, x, z) {
+    const lx = x - village.x;
+    const lz = z - village.z;
+    const dist = Math.hypot(lx, lz);
+    if (dist > village.radius) return null;
+
+    if (VILLAGE_BUILDINGS_ENABLED) {
+      for (const rect of villageRects(village)) {
+        if (villageRectContains(rect, lx, lz)) return { kind: 'building', rect, lx, lz };
+      }
+    }
+
+    if (VILLAGE_WORK_AREAS_ENABLED) {
+      const workArea = villageWorkAreaAt(village, lx, lz);
+      if (workArea) return { kind: workArea, lx, lz };
+    }
+
+    if (VILLAGE_PATHS_ENABLED && villageDoorPathAt(village, lx, lz)) return { kind: 'path', lx, lz };
+    if (VILLAGE_PATHS_ENABLED && Math.abs(lx) <= 2 && Math.abs(lz) <= village.radius - 8) return { kind: 'path', lx, lz };
+    if (VILLAGE_PATHS_ENABLED && Math.abs(lz) <= 2 && Math.abs(lx) <= village.radius - 8) return { kind: 'path', lx, lz };
+    if (VILLAGE_PATHS_ENABLED && dist <= 7) return { kind: 'plaza', lx, lz };
+    if (VILLAGE_BUILDINGS_ENABLED) {
+      const roof = villageRoofOverhangAt(village, lx, lz);
+      if (roof) return roof;
+    }
+    return null;
+  }
+
+  function findVillageForCell(state, x, z) {
+    const villages = getVillages3D(state);
+    return findVillageForCellInList(villages, x, z);
+  }
+
+  function findVillageForCellInList(villages, x, z) {
+    for (const village of villages) {
+      if (Math.hypot(x - village.x, z - village.z) <= village.radius) return village;
+    }
+    return null;
+  }
+
+  function findVillageGroundY(state, seed, x, z) {
+    return terrainHeight(seed, x, z);
+  }
+
+  function villageBuildingBaseY(state, seed, village, rect) {
+    if (!village.buildingBaseY) village.buildingBaseY = {};
+    if (Number.isFinite(village.buildingBaseY[rect.id])) return village.buildingBaseY[rect.id];
+    let maxY = -Infinity;
+    let samples = 0;
+    for (let dz = 0; dz < rect.d; dz += 1) {
+      for (let dx = 0; dx < rect.w; dx += 1) {
+        const x = village.x + rect.x + dx;
+        const z = village.z + rect.z + dz;
+        if (x < 1 || z < 1 || x >= state.world.w - 1 || z >= state.world.d - 1) continue;
+        const y = terrainHeight(seed, x, z);
+        maxY = Math.max(maxY, y);
+        samples += 1;
+      }
+    }
+    const targetY = samples ? maxY : terrainHeight(seed, village.x, village.z);
+    const baseY = Math.max(2, Math.min(state.world.h - 8, targetY));
+    village.buildingBaseY[rect.id] = baseY;
+    return baseY;
+  }
+
+  function clearVillageColumnSpace(state, x, baseY, z, height) {
+    for (let y = baseY + 1; y <= Math.min(state.world.h - 2, baseY + height); y += 1) {
+      setBlock3D(state, x, y, z, BLOCK.AIR);
+    }
+  }
+
+  function prepareVillageSurface(state, x, z, baseY, surfaceBlock, options = {}) {
+    const flatten = VILLAGE_TERRAIN_FLATTEN_ENABLED || options.flatten;
+    if (flatten) {
+      const foundationBlock = options.foundationBlock || BLOCK.DIRT;
+      const foundationDepth = options.foundationDepth || 4;
+      for (let y = Math.max(1, baseY - foundationDepth); y < baseY; y += 1) {
+        const block = getBlock3D(state, x, y, z);
+        if (block === BLOCK.AIR || block === BLOCK.WATER || block === BLOCK.HOT_WATER || block === BLOCK.LAVA) setBlock3D(state, x, y, z, foundationBlock);
+      }
+    }
+    setBlock3D(state, x, baseY, z, surfaceBlock);
+    setGrassLevel3D(state, x, baseY, z, 0, { skipModified: true });
+    if (flatten) clearVillageColumnSpace(state, x, baseY, z, options.clearHeight || 7);
+  }
+
+  function roofYForCell(rect, localX, localZ, baseY) {
+    const cx = Math.max(0, Math.min(rect.w - 1, localX));
+    const cz = Math.max(0, Math.min(rect.d - 1, localZ));
+    const distToSide = Math.min(cx, rect.w - 1 - cx, cz, rect.d - 1 - cz);
+    const ridge = rect.w >= rect.d
+      ? Math.abs(cz - Math.floor((rect.d - 1) / 2)) <= 1
+      : Math.abs(cx - Math.floor((rect.w - 1) / 2)) <= 1;
+    return baseY + 4 + Math.min(2, Math.max(0, distToSide)) + (ridge ? 1 : 0);
+  }
+
+  function wallBlockForRect(style, rect, localX, localZ) {
+    const corner = (localX === 0 || localX === rect.w - 1) && (localZ === 0 || localZ === rect.d - 1);
+    if (corner) return BLOCK.WOOD;
+    if (rect.wall === 'stone') return BLOCK.STONE;
+    if (rect.wall === 'wood') return BLOCK.WOOD;
+    return style.wall || BLOCK.PLANK;
+  }
+
+  function placeVillageRoofCell(state, village, rect, x, z, baseY, localX, localZ) {
+    const style = villageStyle(village);
+    const roofY = roofYForCell(rect, localX, localZ, baseY);
+    setBlock3D(state, x, roofY, z, style.roof || BLOCK.PLANK);
+    if ((localX < 0 || localX >= rect.w || localZ < 0 || localZ >= rect.d) && roofY > baseY + 4) {
+      setBlock3D(state, x, roofY - 1, z, style.roof || BLOCK.PLANK);
+    }
+  }
+
+  function buildingBlockForCell(state, village, cell, x, z, baseY) {
+    const rect = cell.rect;
+    const lx = cell.lx;
+    const lz = cell.lz;
+    const localX = lx - rect.x;
+    const localZ = lz - rect.z;
+    const edge = localX === 0 || localZ === 0 || localX === rect.w - 1 || localZ === rect.d - 1;
+    const doorX = Math.floor(rect.w / 2);
+    const doorZ = Math.floor(rect.d / 2);
+    const isDoor = (rect.door === 'south' && localZ === rect.d - 1 && localX === doorX)
+      || (rect.door === 'north' && localZ === 0 && localX === doorX)
+      || (rect.door === 'east' && localX === rect.w - 1 && localZ === doorZ)
+      || (rect.door === 'west' && localX === 0 && localZ === doorZ);
+    const style = villageStyle(village);
+    const wallBlock = wallBlockForRect(style, rect, localX, localZ);
+    const roofBlock = style.roof || BLOCK.PLANK;
+    const roofY = roofYForCell(rect, localX, localZ, baseY);
+    if (isDoor) {
+      setBlock3D(state, x, baseY + 1, z, BLOCK.AIR);
+      setBlock3D(state, x, baseY + 2, z, BLOCK.AIR);
+      setBlock3D(state, x, baseY + 3, z, edge ? wallBlock : BLOCK.AIR);
+      setBlock3D(state, x, roofY, z, roofBlock);
+      return;
+    }
+    if (edge) {
+      for (let y = baseY + 1; y <= baseY + 3; y += 1) setBlock3D(state, x, y, z, wallBlock);
+      const windowLine = (localX === Math.floor(rect.w / 2) || localZ === Math.floor(rect.d / 2)) && !isDoor;
+      if (windowLine && rect.w >= 7 && rect.d >= 6) setBlock3D(state, x, baseY + 2, z, BLOCK.AIR);
+    } else {
+      for (let y = baseY + 1; y <= baseY + 3; y += 1) setBlock3D(state, x, y, z, BLOCK.AIR);
+      if (rect.id === 'storage' && localX === 2 && localZ === 2) {
+        setBlock3D(state, x, baseY + 1, z, BLOCK.CHEST);
+        markStructureChestLoot(state, x, baseY + 1, z, 'village_storage');
+      }
+      if (rect.id.startsWith('home') && localX === 2 && localZ === 2) setBlock3D(state, x, baseY + 1, z, BLOCK.PILLOW);
+      if (rect.id === 'shop' && localX === 2 && localZ === 3) {
+        setBlock3D(state, x, baseY + 1, z, BLOCK.CHEST);
+        markStructureChestLoot(state, x, baseY + 1, z, 'village_shop');
+      }
+    }
+    setBlock3D(state, x, roofY, z, roofBlock);
+  }
+
+  function placeVillageBuildingCell(state, village, cell, x, z, baseY) {
+    const floorBlock = cell.rect.id === 'guard' || cell.rect.id === 'builder' ? BLOCK.STONE : BLOCK.PLANK;
+    prepareVillageSurface(state, x, z, baseY, floorBlock, {
+      flatten: true,
+      clearHeight: VILLAGE_BUILDING_CLEAR_HEIGHT,
+      foundationDepth: VILLAGE_BUILDING_FOUNDATION_DEPTH,
+      foundationBlock: floorBlock === BLOCK.STONE ? BLOCK.STONE : BLOCK.DIRT,
+    });
+    buildingBlockForCell(state, village, cell, x, z, baseY);
+  }
+
+  function placeVillageRoofOverhangCell(state, village, cell, x, z, baseY) {
+    const localX = cell.lx - cell.rect.x;
+    const localZ = cell.lz - cell.rect.z;
+    placeVillageRoofCell(state, village, cell.rect, x, z, baseY, localX, localZ);
+  }
+
+  function placeVillageWorkCell(state, village, cell, x, z, baseY) {
+    if (cell.kind === 'field') {
+      const row = Math.abs(cell.lx + 26) % 3;
+      const edge = cell.lx === -31 || cell.lx === -22 || cell.lz === -2 || cell.lz === 19;
+      prepareVillageSurface(state, x, z, baseY, edge ? BLOCK.PATH : (row === 0 ? BLOCK.PATH : BLOCK.DIRT));
+      if (!edge && row !== 0 && ((cell.lx + cell.lz) & 3) === 0) setBlock3D(state, x, baseY + 1, z, BLOCK.DRY_BUSH);
+      return;
+    }
+    if (cell.kind === 'pen') {
+      const border = cell.lx === -31 || cell.lx === -23 || cell.lz === -20 || cell.lz === -11;
+      prepareVillageSurface(state, x, z, baseY, border ? BLOCK.PATH : BLOCK.DIRT);
+      if (border) setBlock3D(state, x, baseY + 1, z, BLOCK.WOOD);
+      return;
+    }
+    if (cell.kind === 'quarry') {
+      const pit = cell.lx > 24 && cell.lx < 30 && cell.lz > -20 && cell.lz < -14;
+      prepareVillageSurface(state, x, z, baseY, pit ? BLOCK.STONE : BLOCK.PATH);
+      if (pit && (cell.lx + cell.lz) % 4 === 0) setBlock3D(state, x, baseY + 1, z, BLOCK.STONE);
+      return;
+    }
+    if (cell.kind === 'woodpile') {
+      prepareVillageSurface(state, x, z, baseY, BLOCK.PATH);
+      if (cell.lz % 3 === 0 && Math.abs(cell.lx) % 2 === 0) {
+        setBlock3D(state, x, baseY + 1, z, BLOCK.WOOD);
+        if (Math.abs(cell.lx) % 4 === 0) setBlock3D(state, x, baseY + 2, z, BLOCK.WOOD);
+      }
+      return;
+    }
+  }
+
+  function placeVillageCell(state, seed, village, cell, x, z) {
+    if (cell.kind === 'building') {
+      const baseY = villageBuildingBaseY(state, seed, village, cell.rect);
+      placeVillageBuildingCell(state, village, cell, x, z, baseY);
+      return true;
+    }
+    if (cell.kind === 'roof') {
+      const baseY = villageBuildingBaseY(state, seed, village, cell.rect);
+      placeVillageRoofOverhangCell(state, village, cell, x, z, baseY);
+      return true;
+    }
+    const baseY = Math.max(2, Math.min(state.world.h - 8, findVillageGroundY(state, seed, x, z)));
+    if (cell.kind === 'path' || cell.kind === 'plaza') {
+      prepareVillageSurface(state, x, z, baseY, BLOCK.PATH);
+      return true;
+    }
+    placeVillageWorkCell(state, village, cell, x, z, baseY);
+    return true;
+  }
+
+  function decorateVillageCellAt(state, seed, x, z, village = null) {
+    const player = state && state.player;
+    if (player && Math.hypot((player.x || 0) - (x + 0.5), (player.z || 0) - (z + 0.5)) < 4.5) return true;
+    village = village || findVillageForCell(state, x, z);
+    if (!village) return false;
+    const cell = villageCellAt(village, x, z);
+    if (!cell) return true;
+    return placeVillageCell(state, seed, village, cell, x, z);
   }
 
   function portalRuinCount(seed) {
@@ -533,6 +1161,22 @@
   }
 
   function surfaceLiquidAt(seed, x, y, z, h, world) {
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'volcanic') {
+      const volcanicLava = basinLiquidAt(seed, x, y, z, h, world, {
+        block: BLOCK.LAVA,
+        cellSize: 18,
+        salt: 1721,
+        chanceSalt: 1723,
+        radiusSalt: 1725,
+        chance: 0.22,
+        minRadius: 2.1,
+        radiusRange: 3.4,
+        minHeight: WATER_LEVEL + 3,
+        spawnDistance: 18,
+      });
+      if (volcanicLava !== BLOCK.AIR) return volcanicLava;
+    }
     const lava = basinLiquidAt(seed, x, y, z, h, world, {
       block: BLOCK.LAVA,
       cellSize: 32,
@@ -807,7 +1451,19 @@
         }
         return y >= groundH - 4 ? BLOCK.SAND : BLOCK.STONE;
       }
-      if (biome === 'mountains' || biome === 'geysers') {
+      if (biome === 'volcanic') {
+        if (y >= groundH - 4) return BLOCK.BLACKSTONE;
+        return BLOCK.STONE;
+      }
+      if (biome === 'cliffs') {
+        return BLOCK.STONE;
+      }
+      if (biome === 'snow_plains' || biome === 'spruce_forest') {
+        if (y === groundH) return BLOCK.SNOW;
+        if (y >= groundH - 3) return BLOCK.DIRT;
+        return BLOCK.STONE;
+      }
+      if (biome === 'mountains' || biome === 'geysers' || biome === 'mountain_forest') {
         if (y === groundH && y >= SNOW_LEVEL) return BLOCK.SNOW;
         if (y >= groundH - 1 && y >= DRY_MOUNTAIN_LEVEL) return BLOCK.RED_EARTH;
         if (y >= groundH - 2 && y < DRY_MOUNTAIN_LEVEL) return BLOCK.DIRT;
@@ -828,10 +1484,373 @@
     return BLOCK.AIR;
   }
 
+  function getSurfaceSpawnY3D(state, x, z) {
+    const world = state && state.world;
+    if (!world) return 2;
+    const seed = worldSeed(state);
+    const sx = Math.max(1, Math.min(world.w - 2, Math.floor(x)));
+    const sz = Math.max(1, Math.min(world.d - 2, Math.floor(z)));
+    for (let y = world.h - 2; y >= 1; y -= 1) {
+      const id = terrainBlockAt(seed, sx, y, sz, world);
+      if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA) {
+        return Math.min(world.h + 4, y + 2);
+      }
+    }
+    return Math.min(world.h + 4, terrainHeight(seed, sx, sz) + 2);
+  }
+
+  function normalizeSpawnBiome(value) {
+    const id = String(value || 'any').trim();
+    return id === 'plains' || id === 'forest' || id === 'desert' || id === 'mountains' || id === 'cliffs' || id === 'volcanic' || id === 'snow_plains' || id === 'spruce_forest' || id === 'mountain_forest' || id === 'beach' || id === 'geysers'
+      ? id
+      : 'any';
+  }
+
+  function selectedSpawnBiome(state) {
+    const meta = state && state.worldMeta ? state.worldMeta : null;
+    if (meta && meta.spawnBiomeSeedSearch) return 'any';
+    return normalizeSpawnBiome(meta && meta.spawnBiome);
+  }
+
+  function spawnTentCandidatesForSpawn(spawnX, spawnZ) {
+    return [
+      { x0: spawnX - SPAWN_TENT_CENTER, z0: spawnZ + 3, door: 'north' },
+      { x0: spawnX + 3, z0: spawnZ - SPAWN_TENT_CENTER, door: 'west' },
+      { x0: spawnX - SPAWN_TENT_SIZE - 2, z0: spawnZ - SPAWN_TENT_CENTER, door: 'east' },
+      { x0: spawnX - SPAWN_TENT_CENTER, z0: spawnZ - SPAWN_TENT_SIZE - 2, door: 'south' },
+    ];
+  }
+
+  function hasSpawnTentSite(state, seed, spawnX, spawnZ) {
+    return spawnTentCandidatesForSpawn(spawnX, spawnZ)
+      .some((candidate) => canPlaceSpawnTent(state, seed, candidate.x0, candidate.z0) !== null);
+  }
+
+  function scoreSpawnSite(state, seed, world, x, z, targetBiome = 'any') {
+    if (!world || x < 8 || z < 8 || x >= world.w - 8 || z >= world.d - 8) return null;
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'lake') return null;
+    const wantedBiome = normalizeSpawnBiome(targetBiome);
+    if (wantedBiome !== 'any' && biome !== wantedBiome) return null;
+    let minH = Infinity;
+    let maxH = -Infinity;
+    for (let dz = -2; dz <= 2; dz += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        const h = terrainHeight(seed, x + dx, z + dz);
+        minH = Math.min(minH, h);
+        maxH = Math.max(maxH, h);
+      }
+    }
+    const roughness = maxH - minH;
+    const roughScore = Math.max(0, 1 - roughness / 7);
+    const tentScore = hasSpawnTentSite(state, seed, x, z) ? 1 : (wantedBiome === 'any' ? 0.35 : 0);
+    if (wantedBiome !== 'any' && tentScore <= 0) return null;
+    let biomeScore = 0.34;
+    if (wantedBiome !== 'any') biomeScore = 1;
+    else if (biome === 'plains') biomeScore = 1;
+    else if (biome === 'forest') biomeScore = 0.92;
+    else if (biome === 'spruce_forest') biomeScore = 0.9;
+    else if (biome === 'snow_plains') biomeScore = 0.82;
+    else if (biome === 'beach') biomeScore = 0.78;
+    else if (biome === 'desert') biomeScore = 0.72;
+    else if (biome === 'mountain_forest') biomeScore = 0.5;
+    else if (biome === 'mountains' || biome === 'cliffs') biomeScore = 0.46;
+    return biomeScore * 0.46 + roughScore * 0.36 + tentScore * 0.18;
+  }
+
+  function findWorldSpawn3D(state, seed, options = {}) {
+    const world = state && state.world;
+    const centerX = Math.floor((world && world.w ? world.w : 0) / 2);
+    const centerZ = Math.floor((world && world.d ? world.d : 0) / 2);
+    const targetBiome = options.anyBiome ? 'any' : selectedSpawnBiome(state);
+    const maxRadius = Math.max(384, Math.ceil(Math.max(world && world.w ? world.w : 0, world && world.d ? world.d : 0) / 2) - 12);
+    let best = null;
+    for (let radius = 0; radius <= maxRadius; radius += 4) {
+      for (let dz = -radius; dz <= radius; dz += 4) {
+        for (let dx = -radius; dx <= radius; dx += 4) {
+          if (radius > 0 && Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
+          const x = centerX + dx;
+          const z = centerZ + dz;
+          const score = scoreSpawnSite(state, seed, world, x, z, targetBiome);
+          if (score === null) continue;
+          const distancePenalty = Math.min(0.28, Math.hypot(dx, dz) / 420);
+          const value = score - distancePenalty;
+          if (!best || value > best.value) best = { x, z, value };
+        }
+      }
+      if (best && radius >= (targetBiome === 'any' ? 16 : 32)) return best;
+    }
+    if (!best && targetBiome !== 'any') {
+      const previous = state.worldMeta.spawnBiome;
+      state.worldMeta.spawnBiome = 'any';
+      best = findWorldSpawn3D(state, seed);
+      state.worldMeta.spawnBiome = previous;
+    }
+    return best || { x: centerX, z: centerZ };
+  }
+
+  function seedHasDefaultSpawnBiome3D(seedText, spawnBiome) {
+    const targetBiome = normalizeSpawnBiome(spawnBiome);
+    if (targetBiome === 'any') return true;
+    const constants = Game.constants3d || {};
+    const world = {
+      w: constants.WORLD_W || 2048,
+      h: constants.WORLD_H || 128,
+      d: constants.WORLD_D || 2048,
+    };
+    const seed = hash(String(seedText || ''));
+    const state = {
+      world,
+      worldMeta: {
+        seed: String(seedText || ''),
+        spawnBiome: 'any',
+        spawnBiomeSeedSearch: true,
+      },
+    };
+    const spawn = findWorldSpawn3D(state, seed, { anyBiome: true });
+    return biomeAt(seed, spawn.x, spawn.z) === targetBiome
+      && hasSpawnTentSite(state, seed, spawn.x, spawn.z);
+  }
+
+  function isReplaceableForTent(id) {
+    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA
+      || id === BLOCK.DRY_BUSH || id === BLOCK.ALGAE || id === BLOCK.TALL_ALGAE;
+  }
+
+  const SPAWN_TENT_SIZE = 9;
+  const SPAWN_TENT_MAX = SPAWN_TENT_SIZE - 1;
+  const SPAWN_TENT_CENTER = Math.floor(SPAWN_TENT_SIZE / 2);
+  const SPAWN_TENT_HEIGHT = 7;
+
+  function canPlaceSpawnTent(state, seed, x0, z0) {
+    const world = state && state.world;
+    if (!world || x0 < 2 || z0 < 2 || x0 + SPAWN_TENT_MAX >= world.w - 2 || z0 + SPAWN_TENT_MAX >= world.d - 2) return null;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let z = z0; z <= z0 + SPAWN_TENT_MAX; z += 1) {
+      for (let x = x0; x <= x0 + SPAWN_TENT_MAX; x += 1) {
+        if (biomeAt(seed, x, z) === 'lake') return null;
+        const y = terrainHeight(seed, x, z);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    if (maxY - minY > 6 || maxY + SPAWN_TENT_HEIGHT >= world.h) return null;
+    return maxY;
+  }
+
+  function clearTentVolume(state, x0, baseY, z0) {
+    for (let z = z0; z <= z0 + SPAWN_TENT_MAX; z += 1) {
+      for (let x = x0; x <= x0 + SPAWN_TENT_MAX; x += 1) {
+        for (let y = Math.max(1, baseY - 4); y < baseY; y += 1) {
+          if (isReplaceableForTent(getBlock3D(state, x, y, z))) setBlock3D(state, x, y, z, BLOCK.DIRT);
+        }
+        for (let y = baseY + 1; y <= baseY + SPAWN_TENT_HEIGHT; y += 1) {
+          if (getBlock3D(state, x, y, z) !== BLOCK.AIR) setBlock3D(state, x, y, z, BLOCK.AIR);
+        }
+      }
+    }
+  }
+
+  function markStructureChestLoot(state, x, y, z, lootTable) {
+    if (!state || !state.world || !lootTable) return;
+    if (!state.world.chests) state.world.chests = {};
+    state.world.chests[`${x},${y},${z}`] = { lootTable };
+  }
+
+  function spawnTentLootTableForBiome(biome) {
+    if (biome === 'forest') return 'spawn_tent_forest';
+    if (biome === 'desert') return 'spawn_tent_desert';
+    if (biome === 'mountains') return 'spawn_tent_mountains';
+    if (biome === 'cliffs') return 'spawn_tent_cliffs';
+    if (biome === 'volcanic') return 'spawn_tent_volcanic';
+    if (biome === 'snow_plains') return 'spawn_tent_snow_plains';
+    if (biome === 'spruce_forest') return 'spawn_tent_spruce_forest';
+    if (biome === 'mountain_forest') return 'spawn_tent_mountain_forest';
+    if (biome === 'beach') return 'spawn_tent_beach';
+    if (biome === 'lake') return 'spawn_tent_lake';
+    if (biome === 'geysers') return 'spawn_tent_geysers';
+    return 'spawn_tent_plains';
+  }
+
+  function spawnTentStyleForBiome(biome) {
+    return { biome: biome || 'plains', floor: BLOCK.PLANK, wall: BLOCK.WOOL, roof: BLOCK.WOOL };
+  }
+
+  function placeTentStepBlock(state, x, y, z) {
+    for (let yy = Math.max(1, y - 3); yy < y; yy += 1) {
+      if (isReplaceableForTent(getBlock3D(state, x, yy, z))) setBlock3D(state, x, yy, z, BLOCK.DIRT);
+    }
+    setBlock3D(state, x, y, z, BLOCK.PLANK);
+    for (let yy = y + 1; yy <= y + 3; yy += 1) {
+      if (getBlock3D(state, x, yy, z) !== BLOCK.AIR) setBlock3D(state, x, yy, z, BLOCK.AIR);
+    }
+  }
+
+  function placeTentEntranceStep(state, x0, baseY, z0, door) {
+    if (door === 'north' || door === 'south') {
+      const nearZ = door === 'north' ? z0 - 1 : z0 + SPAWN_TENT_SIZE;
+      const farZ = door === 'north' ? z0 - 2 : z0 + SPAWN_TENT_SIZE + 1;
+      for (const [z, y] of [[nearZ, baseY], [farZ, baseY - 1]]) {
+        for (let x = x0 + SPAWN_TENT_CENTER - 2; x <= x0 + SPAWN_TENT_CENTER + 2; x += 1) placeTentStepBlock(state, x, y, z);
+      }
+      return;
+    }
+    const nearX = door === 'west' ? x0 - 1 : x0 + SPAWN_TENT_SIZE;
+    const farX = door === 'west' ? x0 - 2 : x0 + SPAWN_TENT_SIZE + 1;
+    for (const [x, y] of [[nearX, baseY], [farX, baseY - 1]]) {
+      for (let z = z0 + SPAWN_TENT_CENTER - 2; z <= z0 + SPAWN_TENT_CENTER + 2; z += 1) placeTentStepBlock(state, x, y, z);
+    }
+  }
+
+  function clearTentDoor(state, x0, baseY, z0, door) {
+    if (door === 'north' || door === 'south') {
+      const start = door === 'north' ? z0 : z0 + SPAWN_TENT_MAX;
+      const end = door === 'north' ? z0 + 2 : z0 + SPAWN_TENT_MAX - 2;
+      for (let zz = start; door === 'north' ? zz <= end : zz >= end; zz += (door === 'north' ? 1 : -1)) {
+        for (let x = x0 + SPAWN_TENT_CENTER - 1; x <= x0 + SPAWN_TENT_CENTER + 1; x += 1) {
+          for (let y = baseY + 1; y <= baseY + 2; y += 1) setBlock3D(state, x, y, zz, BLOCK.AIR);
+        }
+      }
+      return;
+    }
+    const start = door === 'west' ? x0 : x0 + SPAWN_TENT_MAX;
+    const end = door === 'west' ? x0 + 2 : x0 + SPAWN_TENT_MAX - 2;
+    for (let xx = start; door === 'west' ? xx <= end : xx >= end; xx += (door === 'west' ? 1 : -1)) {
+      for (let z = z0 + SPAWN_TENT_CENTER - 1; z <= z0 + SPAWN_TENT_CENTER + 1; z += 1) {
+        for (let y = baseY + 1; y <= baseY + 2; y += 1) setBlock3D(state, xx, y, z, BLOCK.AIR);
+      }
+    }
+  }
+
+  function tentInteriorPositions(x0, z0, door) {
+    const chest = { x: x0 + 6, z: z0 + 2 };
+    const bedWool = [{ x: x0 + 2, z: z0 + 6 }, { x: x0 + 3, z: z0 + 6 }];
+    const pillow = { x: x0 + 4, z: z0 + 6 };
+    const planks = [
+      { x: x0 + 2, z: z0 + 5 },
+      { x: x0 + 6, z: z0 + 5 },
+      { x: x0 + 6, z: z0 + 6 },
+      { x: x0 + 2, z: z0 + 2 },
+      { x: x0 + 2, z: z0 + 3 },
+    ];
+    if (door === 'south') {
+      chest.z = z0 + 6;
+      bedWool[0].z = z0 + 2;
+      bedWool[1].z = z0 + 2;
+      pillow.z = z0 + 2;
+      planks[0].z = z0 + 5;
+      planks[1].z = z0 + 5;
+      planks[2].z = z0 + 2;
+      planks[3].z = z0 + 6;
+      planks[4].x = x0 + 3;
+      planks[4].z = z0 + 6;
+    } else if (door === 'east') {
+      chest.x = x0 + 2;
+      chest.z = z0 + SPAWN_TENT_CENTER;
+      bedWool[0].x = x0 + 2;
+      bedWool[0].z = z0 + 6;
+      bedWool[1].x = x0 + 3;
+      bedWool[1].z = z0 + 6;
+      pillow.x = x0 + 4;
+      pillow.z = z0 + 6;
+      planks[0].x = x0 + 3;
+      planks[0].z = z0 + 2;
+      planks[1].x = x0 + 6;
+      planks[1].z = z0 + 2;
+      planks[2].x = x0 + 6;
+      planks[2].z = z0 + 6;
+      planks[3].x = x0 + 2;
+      planks[3].z = z0 + 3;
+      planks[4].x = x0 + 6;
+      planks[4].z = z0 + 5;
+    } else if (door === 'west') {
+      chest.x = x0 + 6;
+      chest.z = z0 + SPAWN_TENT_CENTER;
+      bedWool[0].x = x0 + 4;
+      bedWool[0].z = z0 + 6;
+      bedWool[1].x = x0 + 5;
+      bedWool[1].z = z0 + 6;
+      pillow.x = x0 + 6;
+      pillow.z = z0 + 6;
+      planks[0].x = x0 + 5;
+      planks[0].z = z0 + 2;
+      planks[1].x = x0 + 2;
+      planks[1].z = z0 + 2;
+      planks[2].x = x0 + 2;
+      planks[2].z = z0 + 6;
+      planks[3].x = x0 + 6;
+      planks[3].z = z0 + 2;
+      planks[4].x = x0 + 5;
+      planks[4].z = z0 + 3;
+    }
+    return { chest, bedWool, pillow, planks };
+  }
+
+  function placeTentShell(state, x0, baseY, z0, style) {
+    for (let z = z0; z <= z0 + SPAWN_TENT_MAX; z += 1) {
+      for (let x = x0; x <= x0 + SPAWN_TENT_MAX; x += 1) setBlock3D(state, x, baseY, z, style.floor);
+    }
+    for (let z = z0; z <= z0 + SPAWN_TENT_MAX; z += 1) {
+      for (let y = baseY + 1; y <= baseY + 2; y += 1) {
+        setBlock3D(state, x0, y, z, style.wall);
+        setBlock3D(state, x0 + SPAWN_TENT_MAX, y, z, style.wall);
+      }
+      for (const sideX of [x0 + 1, x0 + 7]) {
+        setBlock3D(state, sideX, baseY + 3, z, style.wall);
+        setBlock3D(state, sideX, baseY + 4, z, style.roof);
+      }
+      for (const sideX of [x0 + 2, x0 + 6]) setBlock3D(state, sideX, baseY + 5, z, style.roof);
+      for (const sideX of [x0 + 3, x0 + 5]) setBlock3D(state, sideX, baseY + 6, z, style.roof);
+      setBlock3D(state, x0 + SPAWN_TENT_CENTER, baseY + 7, z, style.roof);
+    }
+    for (const z of [z0, z0 + SPAWN_TENT_MAX]) {
+      for (let x = x0 + 1; x <= x0 + SPAWN_TENT_MAX - 1; x += 1) {
+        const dist = Math.abs((x - x0) - SPAWN_TENT_CENTER);
+        const maxY = baseY + Math.max(2, SPAWN_TENT_HEIGHT - dist);
+        for (let y = baseY + 1; y <= maxY; y += 1) setBlock3D(state, x, y, z, y >= baseY + 5 ? style.roof : style.wall);
+      }
+    }
+  }
+
+  function placeSpawnTent3D(state, spawnX, spawnZ) {
+    const meta = state && state.worldMeta;
+    if (!meta || (meta.mode !== 'survival' && meta.mode !== 'creative')) return false;
+    const seed = worldSeed(state);
+    const candidates = spawnTentCandidatesForSpawn(spawnX, spawnZ);
+    let site = null;
+    for (const candidate of candidates) {
+      const baseY = canPlaceSpawnTent(state, seed, candidate.x0, candidate.z0);
+      if (baseY !== null) {
+        site = { ...candidate, baseY };
+        break;
+      }
+    }
+    if (!site) return false;
+    const { x0, z0, baseY, door } = site;
+    const spawnBiome = biomeAt(seed, spawnX, spawnZ);
+    const style = spawnTentStyleForBiome(spawnBiome);
+    clearTentVolume(state, x0, baseY, z0);
+    placeTentShell(state, x0, baseY, z0, style);
+    clearTentDoor(state, x0, baseY, z0, door);
+    placeTentEntranceStep(state, x0, baseY, z0, door);
+    clearTentDoor(state, x0, baseY, z0, door);
+    const interior = tentInteriorPositions(x0, z0, door);
+    for (const wool of interior.bedWool) setBlock3D(state, wool.x, baseY + 1, wool.z, BLOCK.WOOL);
+    setBlock3D(state, interior.pillow.x, baseY + 1, interior.pillow.z, BLOCK.PILLOW);
+    for (const plank of interior.planks) setBlock3D(state, plank.x, baseY + 1, plank.z, BLOCK.PLANK);
+    const chestX = interior.chest.x;
+    const chestY = baseY + 1;
+    const chestZ = interior.chest.z;
+    setBlock3D(state, chestX, chestY, chestZ, BLOCK.CHEST);
+    markStructureChestLoot(state, chestX, chestY, chestZ, spawnTentLootTableForBiome(spawnBiome));
+    return true;
+  }
+
   function hasInitialGrass(seed, x, y, z, world) {
     const biome = biomeAt(seed, x, z);
     return y === terrainHeight(seed, x, z)
-      && (biome === 'plains' || biome === 'forest')
+      && (biome === 'plains' || biome === 'forest' || biome === 'spruce_forest')
       && dryTransitionSurface(seed, x, z, biome) === BLOCK.AIR
       && terrainBlockAt(seed, x, y + 1, z, world) === BLOCK.AIR;
   }
@@ -867,6 +1886,28 @@
     };
   }
 
+  function estimateSurfaceChunkRange(seed, cx, cz, counts) {
+    const minX = cx * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE;
+    const maxX = Math.min(minX + CHUNK_SIZE - 1, counts.x * CHUNK_SIZE - 1);
+    const maxZ = Math.min(minZ + CHUNK_SIZE - 1, counts.z * CHUNK_SIZE - 1);
+    const samples = [
+      [minX + Math.floor((maxX - minX) / 2), minZ + Math.floor((maxZ - minZ) / 2)],
+      [minX, minZ],
+      [maxX, minZ],
+      [minX, maxZ],
+      [maxX, maxZ],
+    ];
+    let minCy = counts.y - 1;
+    let maxCy = 0;
+    for (const [x, z] of samples) {
+      const cy = Math.max(0, Math.min(counts.y - 1, Math.floor(terrainHeight(seed, x, z) / CHUNK_SIZE)));
+      minCy = Math.min(minCy, cy);
+      maxCy = Math.max(maxCy, cy);
+    }
+    return { minCy, maxCy, centerCy: Math.floor((minCy + maxCy) / 2) };
+  }
+
   function ensureChunkLoading(state) {
     const world = state && state.world;
     if (!world.chunkLoading) {
@@ -883,7 +1924,8 @@
   }
 
   function initChunkWorker(state) {
-    if (!chunkWorkerAvailable || chunkWorker || typeof Worker === 'undefined') return false;
+    if (chunkWorker) return true;
+    if (!chunkWorkerAvailable || typeof Worker === 'undefined') return false;
     try {
       chunkWorker = new Worker('./src/3d/chunkWorker3d.js');
       chunkWorker.onmessage = (event) => {
@@ -932,12 +1974,19 @@
     return !!((state.world.generatedChunks && state.world.generatedChunks.has(key)) || (state.world.modifiedChunks && state.world.modifiedChunks.has(key)));
   }
 
-  function queueTerrainChunk3D(state, cx, cy, cz) {
+  function queueTerrainChunk3D(state, cx, cy, cz, mandatory = false) {
     if (hasTerrainChunk(state, cx, cy, cz)) return false;
     const loading = ensureChunkLoading(state);
     const key = chunkKey(cx, cy, cz);
-    if (loading.queued.has(key) || loading.pendingKeys.has(key) || loading.loadingSaved.has(key)) return false;
-    loading.queue.push({ cx, cy, cz, key });
+    if (loading.queued.has(key)) {
+      if (mandatory) {
+        const job = loading.queue.find((item) => item.key === key);
+        if (job) job.mandatory = true;
+      }
+      return false;
+    }
+    if (loading.pendingKeys.has(key) || loading.loadingSaved.has(key)) return false;
+    loading.queue.push({ cx, cy, cz, key, mandatory });
     loading.queued.add(key);
     return true;
   }
@@ -965,39 +2014,81 @@
   function queueChunksAroundPlayer3D(state, radius) {
     const counts = chunkCounts(state.world);
     const loading = ensureChunkLoading(state);
+    const seed = worldSeed(state);
+    const manualDistance = isManualChunkRenderDistance(state.worldMeta);
+    const usingSyncFallback = !chunkWorker && (!chunkWorkerAvailable || typeof Worker === 'undefined');
+    const effectiveRadius = usingSyncFallback && !manualDistance ? Math.min(radius, CHUNK_SYNC_FALLBACK_RADIUS || radius) : radius;
     const pcx = Math.floor(state.player.x / CHUNK_SIZE);
+    const pcy = Math.max(0, Math.min(counts.y - 1, Math.floor(state.player.y / CHUNK_SIZE)));
     const pcz = Math.floor(state.player.z / CHUNK_SIZE);
-    const candidates = [];
-    for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
-      for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {
-        const dx = cx - pcx;
-        const dz = cz - pcz;
-        const distanceSq = dx * dx + dz * dz;
-        if (distanceSq > radius * radius) continue;
-        for (let cy = 0; cy < counts.y; cy += 1) {
-          candidates.push({ cx, cy, cz, distanceSq });
-        }
-      }
-    }
-    candidates.sort((a, b) => a.distanceSq - b.distanceSq || a.cy - b.cy);
-    let queued = 0;
-    for (const item of candidates) {
-      if (queueTerrainChunk3D(state, item.cx, item.cy, item.cz)) queued += 1;
-    }
-    loading.queue = loading.queue.filter((job) => {
-      const dx = job.cx - pcx;
-      const dz = job.cz - pcz;
-      const keep = dx * dx + dz * dz <= CHUNK_UNLOAD_DISTANCE * CHUNK_UNLOAD_DISTANCE;
-      if (!keep) loading.queued.delete(job.key);
-      return keep;
-    });
-    loading.queue.sort((a, b) => {
+    const surfaceRangeCache = new Map();
+    const surfaceChunkRange = (cx, cz) => {
+      const key = `${cx},${cz}`;
+      if (surfaceRangeCache.has(key)) return surfaceRangeCache.get(key);
+      const value = estimateSurfaceChunkRange(seed, cx, cz, counts);
+      surfaceRangeCache.set(key, value);
+      return value;
+    };
+    const shouldQueueVerticalChunk = (cx, cy, cz) => {
+      if (!usingSyncFallback || manualDistance) return true;
+      const surface = surfaceChunkRange(cx, cz);
+      if (Math.abs(cy - pcy) <= 1) return true;
+      return cy >= Math.max(0, surface.minCy - 2) && cy <= Math.min(counts.y - 1, surface.maxCy + 2);
+    };
+    const verticalPriorityFor = (cx, cy, cz) => {
+      const surface = surfaceChunkRange(cx, cz);
+      const surfaceDistance = cy < surface.minCy ? surface.minCy - cy : (cy > surface.maxCy ? cy - surface.maxCy : 0);
+      return Math.min(Math.abs(cy - pcy), surfaceDistance);
+    };
+    const compareTerrainJobs = (a, b) => {
+      if (!!a.mandatory !== !!b.mandatory) return a.mandatory ? -1 : 1;
       const adx = a.cx - pcx;
       const adz = a.cz - pcz;
       const bdx = b.cx - pcx;
       const bdz = b.cz - pcz;
-      return (adx * adx + adz * adz) - (bdx * bdx + bdz * bdz) || a.cy - b.cy;
+      const distanceDelta = (adx * adx + adz * adz) - (bdx * bdx + bdz * bdz);
+      const playerYDelta = Math.abs(a.cy - pcy) - Math.abs(b.cy - pcy);
+      const verticalDelta = verticalPriorityFor(a.cx, a.cy, a.cz) - verticalPriorityFor(b.cx, b.cy, b.cz);
+      if (!usingSyncFallback) return distanceDelta || verticalDelta || playerYDelta;
+      return verticalDelta || distanceDelta || playerYDelta;
+    };
+    const queueKey = `${currentStorageWorldId(state)}:${seed}:${pcx}:${pcz}:${effectiveRadius}:${chunkWorker ? 'worker' : 'sync'}:${manualDistance ? 'manual' : 'auto'}`;
+    if (loading.lastQueueKey === queueKey && loading.queue.length > 0) {
+      loading.queue.sort(compareTerrainJobs);
+      state.world.lastQueuedChunks = loading.queue.length;
+      return 0;
+    }
+    loading.lastQueueKey = queueKey;
+    const candidates = [];
+    for (let cz = Math.max(0, pcz - effectiveRadius); cz < Math.min(counts.z, pcz + effectiveRadius + 1); cz += 1) {
+      for (let cx = Math.max(0, pcx - effectiveRadius); cx < Math.min(counts.x, pcx + effectiveRadius + 1); cx += 1) {
+        const dx = cx - pcx;
+        const dz = cz - pcz;
+        const distanceSq = dx * dx + dz * dz;
+        if (distanceSq > effectiveRadius * effectiveRadius) continue;
+        for (let cy = 0; cy < counts.y; cy += 1) {
+          if (!shouldQueueVerticalChunk(cx, cy, cz)) continue;
+          const verticalPriority = verticalPriorityFor(cx, cy, cz);
+          candidates.push({ cx, cy, cz, distanceSq, verticalPriority, mandatory: manualDistance });
+        }
+      }
+    }
+    candidates.sort(compareTerrainJobs);
+    let queued = 0;
+    for (const item of candidates) {
+      if (queueTerrainChunk3D(state, item.cx, item.cy, item.cz, item.mandatory)) queued += 1;
+    }
+    loading.queue = loading.queue.filter((job) => {
+      const dx = job.cx - pcx;
+      const dz = job.cz - pcz;
+      const keepRadius = manualDistance
+        ? effectiveRadius + 1
+        : (usingSyncFallback ? effectiveRadius : CHUNK_UNLOAD_DISTANCE);
+      const keep = dx * dx + dz * dz <= keepRadius * keepRadius && shouldQueueVerticalChunk(job.cx, job.cy, job.cz);
+      if (!keep) loading.queued.delete(job.key);
+      return keep;
     });
+    loading.queue.sort(compareTerrainJobs);
     return queued;
   }
 
@@ -1007,7 +2098,7 @@
     nextWorkerJobId += 1;
     loading.pendingIds.set(id, {
       key: job.key,
-        worldId: currentStorageWorldId(state),
+      worldId: currentStorageWorldId(state),
       seed,
     });
     loading.pendingKeys.add(job.key);
@@ -1021,6 +2112,89 @@
       cy: job.cy,
       cz: job.cz,
     });
+  }
+
+  function beginSyncTerrainJob(state, job) {
+    const bounds = chunkBounds(state.world, job.cx, job.cy, job.cz);
+    if (!bounds) return null;
+    const size = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+    const fluidLevel = new Uint8Array(size);
+    fluidLevel.fill(255);
+    return {
+      cx: job.cx,
+      cy: job.cy,
+      cz: job.cz,
+      key: job.key,
+      bounds,
+      blocks: new Uint16Array(size),
+      fluidLevel,
+      grassLevel: new Uint8Array(size),
+      x: bounds.minX,
+      y: bounds.minY,
+      z: bounds.minZ,
+    };
+  }
+
+  function syncLocalIndex(job, x, y, z) {
+    return (x - job.bounds.minX) + CHUNK_SIZE * ((z - job.bounds.minZ) + CHUNK_SIZE * (y - job.bounds.minY));
+  }
+
+  function processSyncTerrainJob(state, seed, loading, budgetMs) {
+    const start = performance.now();
+    let completed = 0;
+    while (performance.now() - start < budgetMs) {
+      if (!loading.syncJob) {
+        while (loading.queue.length > 0 && !loading.syncJob) {
+          const next = loading.queue.shift();
+          loading.queued.delete(next.key);
+          if (hasTerrainChunk(state, next.cx, next.cy, next.cz)) continue;
+          if (loadSavedChunkJob(state, next)) {
+            completed += 1;
+            continue;
+          }
+          loading.syncJob = beginSyncTerrainJob(state, next);
+        }
+        if (!loading.syncJob) break;
+      }
+
+      const job = loading.syncJob;
+      const block = terrainBlockAt(seed, job.x, job.y, job.z, state.world);
+      const index = syncLocalIndex(job, job.x, job.y, job.z);
+      job.blocks[index] = block;
+      if (block === BLOCK.WATER) job.fluidLevel[index] = 8;
+      else if (block === BLOCK.LAVA) job.fluidLevel[index] = 0;
+      else if (block === BLOCK.DIRT && hasInitialGrass(seed, job.x, job.y, job.z, state.world)) job.grassLevel[index] = 1;
+
+      job.x += 1;
+      if (job.x >= job.bounds.maxX) {
+        job.x = job.bounds.minX;
+        job.z += 1;
+        if (job.z >= job.bounds.maxZ) {
+          job.z = job.bounds.minZ;
+          job.y += 1;
+        }
+      }
+      if (job.y >= job.bounds.maxY) {
+        installGeneratedChunk3D(state, job.cx, job.cy, job.cz, job.blocks, job.fluidLevel, job.grassLevel);
+        state.world.dirtyChunks.add(job.key);
+        loading.syncJob = null;
+        completed += 1;
+      }
+    }
+    state.world.lastSyncChunkProgress = loading.syncJob
+      ? Math.max(0, Math.min(1, (loading.syncJob.y - loading.syncJob.bounds.minY) / Math.max(1, loading.syncJob.bounds.maxY - loading.syncJob.bounds.minY)))
+      : 0;
+    return completed;
+  }
+
+  function syncTerrainBudgetMs(state) {
+    const base = Math.max(0.5, CHUNK_SYNC_GENERATE_TIME_BUDGET_MS || 3);
+    const maxBudget = Math.max(base, CHUNK_SYNC_GENERATE_MAX_TIME_BUDGET_MS || base);
+    const fps = state && state.ui ? state.ui.fps : 0;
+    if (!Number.isFinite(fps) || fps <= 0) return base;
+    if (fps >= 85) return maxBudget;
+    if (fps >= 65) return Math.min(maxBudget, base * 1.5);
+    return base;
   }
 
   function processTerrainQueue3D(state, seed) {
@@ -1045,20 +2219,9 @@
       return processed;
     }
 
-    while (loading.queue.length > 0 && processed < CHUNK_SYNC_GENERATE_BUDGET) {
-      const job = loading.queue.shift();
-      loading.queued.delete(job.key);
-      if (loadSavedChunkJob(state, job)) {
-        processed += 1;
-        continue;
-      }
-      if (generateTerrainChunk3D(state, seed, job.cx, job.cy, job.cz)) {
-        state.world.dirtyChunks.add(job.key);
-        processed += 1;
-      }
-    }
+    processed += processSyncTerrainJob(state, seed, loading, syncTerrainBudgetMs(state));
     state.world.lastQueuedChunks = loading.queue.length;
-    state.world.lastPendingChunks = 0;
+    state.world.lastPendingChunks = loading.syncJob ? 1 : 0;
     return processed;
   }
 
@@ -1132,6 +2295,57 @@
     return true;
   }
 
+  function isSurfaceColumnGenerated(state, seed, cx, cz, counts) {
+    const world = state && state.world;
+    if (!world || !world.generatedChunks || cx < 0 || cz < 0 || cx >= counts.x || cz >= counts.z) return false;
+    const range = decorationChunkRange(state, seed, cx, cz, counts);
+    for (let cy = range.minCy; cy <= range.maxCy; cy += 1) {
+      if (!world.generatedChunks.has(chunkKey(cx, cy, cz))) return false;
+    }
+    return true;
+  }
+
+  function decorationChunkRange(state, seed, cx, cz, counts) {
+    const world = state && state.world;
+    const cacheKey = `${seed}:${cx},${cz}`;
+    if (world.decorationChunkRangeCache && world.decorationChunkRangeCache.has(cacheKey)) {
+      return world.decorationChunkRangeCache.get(cacheKey);
+    }
+    if (!world.decorationChunkRangeCache) world.decorationChunkRangeCache = new Map();
+    const minX = cx * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE;
+    const maxX = Math.min(world.w, minX + CHUNK_SIZE);
+    const maxZ = Math.min(world.d, minZ + CHUNK_SIZE);
+    let minY = world.h - 1;
+    let maxY = 0;
+    for (let z = minZ; z < maxZ; z += 1) {
+      for (let x = minX; x < maxX; x += 1) {
+        const y = terrainHeight(seed, x, z);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    const range = {
+      minCy: Math.max(0, Math.floor((minY - DECORATION_MIN_WRITE_BELOW) / CHUNK_SIZE)),
+      maxCy: Math.min(counts.y - 1, Math.floor((maxY + DECORATION_MAX_WRITE_ABOVE) / CHUNK_SIZE)),
+    };
+    world.decorationChunkRangeCache.set(cacheKey, range);
+    return range;
+  }
+
+  function isSurfaceDecorationReady(state, seed, cx, cz, counts) {
+    if (!isSurfaceColumnGenerated(state, seed, cx, cz, counts)) return false;
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        if (nx < 0 || nz < 0 || nx >= counts.x || nz >= counts.z) continue;
+        if (!isSurfaceColumnGenerated(state, seed, nx, nz, counts)) return false;
+      }
+    }
+    return true;
+  }
+
   function isDecorationReady(world, cx, cz, counts) {
     if (!isTerrainColumnGenerated(world, cx, cz, counts)) return false;
     for (let dz = -1; dz <= 1; dz += 1) {
@@ -1145,14 +2359,23 @@
     return true;
   }
 
-  function canPlaceTree(state, x, groundY, z, height) {
+  function canPlaceTree(state, x, groundY, z, height, groundBlocks = null) {
     const world = state.world;
     if (x < 3 || x >= world.w - 3 || z < 3 || z >= world.d - 3) return false;
+    const localX = x % CHUNK_SIZE;
+    const localZ = z % CHUNK_SIZE;
+    if (localX < TREE_CROWN_RADIUS || localX >= CHUNK_SIZE - TREE_CROWN_RADIUS) return false;
+    if (localZ < TREE_CROWN_RADIUS || localZ >= CHUNK_SIZE - TREE_CROWN_RADIUS) return false;
     if (groundY + height + 3 >= world.h) return false;
     const spawnX = Math.floor(world.w / 2);
     const spawnZ = Math.floor(world.d / 2);
     if (Math.hypot(x - spawnX, z - spawnZ) < 8) return false;
-    if (getBlock3D(state, x, groundY, z) !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) return false;
+    const ground = getBlock3D(state, x, groundY, z);
+    if (Array.isArray(groundBlocks)) {
+      if (!groundBlocks.includes(ground)) return false;
+    } else if (ground !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) {
+      return false;
+    }
     for (let y = groundY + 1; y <= groundY + height + 3; y += 1) {
       for (let zz = z - 2; zz <= z + 2; zz += 1) {
         for (let xx = x - 2; xx <= x + 2; xx += 1) {
@@ -1163,11 +2386,13 @@
     return true;
   }
 
-  function placeTree(state, seed, x, groundY, z) {
+  function placeTree(state, seed, x, groundY, z, options = {}) {
     const height = 4 + Math.floor(noise2(seed + 511, x, z) * 3);
-    if (!canPlaceTree(state, x, groundY, z, height)) return false;
+    if (!canPlaceTree(state, x, groundY, z, height, options.groundBlocks || null)) return false;
+    const woodBlock = options.wood || BLOCK.WOOD;
+    const leafBlock = options.leaf || BLOCK.LEAF;
     for (let y = groundY + 1; y <= groundY + height; y += 1) {
-      setBlock3D(state, x, y, z, BLOCK.WOOD);
+      setBlock3D(state, x, y, z, woodBlock);
     }
     const crownY = groundY + height;
     for (let yy = crownY - 1; yy <= crownY + 2; yy += 1) {
@@ -1178,7 +2403,26 @@
           const dz = Math.abs(zz - z);
           const corner = dx === layerRadius && dz === layerRadius;
           if (corner && noise2(seed + 907, xx, zz + yy) < 0.42) continue;
-          if (getBlock3D(state, xx, yy, zz) === BLOCK.AIR) setBlock3D(state, xx, yy, zz, BLOCK.LEAF);
+          if (getBlock3D(state, xx, yy, zz) === BLOCK.AIR) setBlock3D(state, xx, yy, zz, leafBlock);
+        }
+      }
+    }
+    return true;
+  }
+
+  function placeSpruceTree(state, seed, x, groundY, z) {
+    const height = 5 + Math.floor(noise2(seed + 531, x, z) * 4);
+    if (!canPlaceTree(state, x, groundY, z, height, [BLOCK.DIRT, BLOCK.SNOW])) return false;
+    for (let y = groundY + 1; y <= groundY + height; y += 1) setBlock3D(state, x, y, z, BLOCK.SPRUCE_WOOD);
+    for (let yy = groundY + 2; yy <= groundY + height + 2; yy += 1) {
+      const fromTop = groundY + height + 2 - yy;
+      const layerRadius = fromTop <= 1 ? 1 : (fromTop <= 3 ? 2 : 1);
+      for (let zz = z - layerRadius; zz <= z + layerRadius; zz += 1) {
+        for (let xx = x - layerRadius; xx <= x + layerRadius; xx += 1) {
+          const dx = Math.abs(xx - x);
+          const dz = Math.abs(zz - z);
+          if (dx === layerRadius && dz === layerRadius && noise2(seed + 931, xx, zz + yy) < 0.38) continue;
+          if (getBlock3D(state, xx, yy, zz) === BLOCK.AIR) setBlock3D(state, xx, yy, zz, BLOCK.SPRUCE_LEAF);
         }
       }
     }
@@ -1215,7 +2459,7 @@
   function placeGeyser(state, x, groundY, z) {
     if (groundY < 4 || groundY + 2 >= state.world.h) return false;
     const ground = getBlock3D(state, x, groundY, z);
-    if (ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW) return false;
+    if (ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW && ground !== BLOCK.BLACKSTONE) return false;
     if (getBlock3D(state, x, groundY + 1, z) !== BLOCK.AIR) return false;
     for (let dz = -1; dz <= 1; dz += 1) {
       for (let dx = -1; dx <= 1; dx += 1) {
@@ -1239,6 +2483,122 @@
     return true;
   }
 
+  function bearInfoForBiome(biome) {
+    if (biome === 'snow_plains' || biome === 'spruce_forest') return { variant: 'snow', sleeping: true };
+    if (biome === 'forest' || biome === 'mountain_forest') return { variant: 'brown', sleeping: false };
+    return null;
+  }
+
+  function canPlaceBearDen(state, x, groundY, z, options = {}) {
+    const world = state.world;
+    if (x < 4 || x >= world.w - 4 || z < 4 || z >= world.d - 4) return false;
+    if (groundY < 3 || groundY + 4 >= world.h) return false;
+    if (!options.allowNearSpawn && !farFromSpawn(world, x, z, 24)) return false;
+    if (!options.loose) {
+      const ground = getBlock3D(state, x, groundY, z);
+      if (ground !== BLOCK.DIRT && ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW) return false;
+      for (let dz = -1; dz <= 1; dz += 1) {
+        for (let dx = -2; dx <= 2; dx += 1) {
+          const gx = x + dx;
+          const gz = z + dz;
+          const base = getBlock3D(state, gx, groundY, gz);
+          if (base !== BLOCK.DIRT && base !== BLOCK.STONE && base !== BLOCK.RED_EARTH && base !== BLOCK.SNOW) return false;
+          for (let y = groundY + 1; y <= groundY + 4; y += 1) {
+            const id = getBlock3D(state, gx, y, gz);
+            if (id !== BLOCK.AIR && id !== BLOCK.LEAF && id !== BLOCK.SPRUCE_LEAF && id !== BLOCK.SNOW && id !== BLOCK.DRY_BUSH) return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  function placeBearDen(state, x, groundY, z, biome, options = {}) {
+    if (!canPlaceBearDen(state, x, groundY, z, options)) return null;
+    const snowy = biome === 'snow_plains' || biome === 'spruce_forest';
+    const wall = snowy ? BLOCK.SNOW : (biome === 'mountain_forest' ? BLOCK.STONE : BLOCK.DIRT);
+    const floorY = Math.max(1, groundY - 2);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        const px = x + dx;
+        const pz = z + dz;
+        setBlock3D(state, px, floorY, pz, snowy ? BLOCK.SNOW : BLOCK.DIRT);
+        for (let y = floorY + 1; y <= floorY + 4; y += 1) setBlock3D(state, px, y, pz, BLOCK.AIR);
+      }
+    }
+    for (let dx = -2; dx <= 2; dx += 1) {
+      setBlock3D(state, x + dx, floorY + 1, z - 2, wall);
+      setBlock3D(state, x + dx, floorY + 2, z - 2, wall);
+      setBlock3D(state, x + dx, floorY + 3, z - 2, wall);
+      setBlock3D(state, x + dx, floorY + 1, z + 2, wall);
+      setBlock3D(state, x + dx, floorY + 2, z + 2, wall);
+      setBlock3D(state, x + dx, floorY + 3, z + 2, wall);
+    }
+    for (let dz = -2; dz <= 2; dz += 1) {
+      setBlock3D(state, x - 3, floorY + 1, z + dz, wall);
+      setBlock3D(state, x - 3, floorY + 2, z + dz, wall);
+      setBlock3D(state, x - 3, floorY + 3, z + dz, wall);
+    }
+    for (let dx = -3; dx <= 2; dx += 1) {
+      for (let dz = -2; dz <= 2; dz += 1) {
+        if (Math.abs(dz) === 2 || dx === -3 || dx <= 0) setBlock3D(state, x + dx, floorY + 4, z + dz, wall);
+      }
+    }
+    for (let dx = -1; dx <= 3; dx += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        setBlock3D(state, x + dx, groundY, z + dz, BLOCK.AIR);
+        if (groundY + 1 < state.world.h) setBlock3D(state, x + dx, groundY + 1, z + dz, BLOCK.AIR);
+      }
+    }
+    for (let dx = 1; dx <= 3; dx += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        if (groundY + 2 < state.world.h) setBlock3D(state, x + dx, groundY + 2, z + dz, BLOCK.AIR);
+        if (groundY + 3 < state.world.h) setBlock3D(state, x + dx, groundY + 3, z + dz, BLOCK.AIR);
+      }
+    }
+    registerBearDen(state, x, floorY + 1, z, biome);
+    return { x, y: floorY + 1, z, yaw: 0 };
+  }
+
+  function registerBearDen(state, x, y, z, biome) {
+    if (!state || !state.world) return;
+    const key = `${x},${y},${z}`;
+    if (!Array.isArray(state.world.bearDens)) state.world.bearDens = [];
+    if (state.world.bearDens.some((den) => den && den.key === key)) return;
+    state.world.bearDens.push({ key, x, y, z, biome: biome || 'forest' });
+  }
+
+  function getBearDens3D(state) {
+    return state && state.world && Array.isArray(state.world.bearDens) ? state.world.bearDens : [];
+  }
+
+  function createBearDenAt3D(state, centerX, centerZ, options = {}) {
+    if (!state || !state.world) return null;
+    const seed = worldSeed(state);
+    for (let radius = 0; radius <= 8; radius += 1) {
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          const x = centerX + dx;
+          const z = centerZ + dz;
+          if (x < 4 || x >= state.world.w - 4 || z < 4 || z >= state.world.d - 4) continue;
+          const biome = biomeAt(seed, x, z);
+          if (biome === 'lake' || biome === 'beach' || biome === 'geysers' || biome === 'volcanic') continue;
+          for (let y = state.world.h - 2; y >= 1; y -= 1) {
+            if (getBlock3D(state, x, y, z) === BLOCK.AIR) continue;
+            const den = placeBearDen(state, x, y, z, biome, {
+              allowNearSpawn: options.allowNearSpawn !== false,
+              loose: !!options.loose,
+            });
+            if (den) return den;
+            break;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   function canPlaceGroundMob(state, type, x, groundY, z) {
     const world = state.world;
     if (x < 2 || x >= world.w - 2 || z < 2 || z >= world.d - 2) return false;
@@ -1249,6 +2609,9 @@
     if (type === 'turtle' && ground !== BLOCK.SAND) return false;
     if (type === 'snake' && ground !== BLOCK.SAND && ground !== BLOCK.RED_EARTH) return false;
     if (type === 'goat' && ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW && ground !== BLOCK.DIRT) return false;
+    if (type === 'fox' && ground !== BLOCK.DIRT && ground !== BLOCK.SNOW) return false;
+    if (type === 'polar_bear' && ground !== BLOCK.SNOW && ground !== BLOCK.DIRT) return false;
+    if (type === 'bear' && ground !== BLOCK.SNOW && ground !== BLOCK.DIRT && ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH) return false;
     return getBlock3D(state, x, groundY + 1, z) === BLOCK.AIR && getBlock3D(state, x, groundY + 2, z) === BLOCK.AIR;
   }
 
@@ -1282,13 +2645,23 @@
     if (biome === 'beach') return { type: 'turtle', chance: 0.075, cellSize: 18 };
     if (biome === 'desert') return { type: 'snake', chance: 0.07, cellSize: 20 };
     if (biome === 'mountains') return { type: 'goat', chance: 0.075, cellSize: 22 };
+    if (biome === 'cliffs') return { type: 'goat', chance: 0.07, cellSize: 22 };
+    if (biome === 'mountain_forest') return { type: 'goat', chance: 0.08, cellSize: 20 };
+    if (biome === 'spruce_forest') return { type: 'fox', chance: 0.075, cellSize: 20 };
     if (biome === 'lake') return { type: 'fish', chance: 0.2, cellSize: 16 };
     return null;
   }
 
+  function bearDecorationForBiome(biome) {
+    const bear = bearInfoForBiome(biome);
+    if (!bear) return null;
+    const chance = biome === 'mountain_forest' ? 0.09 : (biome === 'forest' ? 0.035 : 0.045);
+    return { type: 'bear', chance, cellSize: 28, bear };
+  }
+
   function mobForPosition(seed, x, z) {
     const biome = biomeAt(seed, x, z);
-    if (biome === 'geysers') return null;
+    if (biome === 'geysers' || biome === 'volcanic') return null;
     const forest = baseBiomeInfluence(seed, x, z, 'forest');
     const plains = baseBiomeInfluence(seed, x, z, 'plains');
     const desert = baseBiomeInfluence(seed, x, z, 'desert');
@@ -1297,7 +2670,14 @@
     if (biome === 'forest' && plains > 0.18 && roll < plains * 0.45) return { type: 'sheep', chance: 0.075, cellSize: 18 };
     if (biome === 'beach' && desert > 0.22 && roll < desert * 0.32) return { type: 'snake', chance: 0.05, cellSize: 20 };
     if (biome === 'desert' && plains + forest > 0.22 && roll < (plains + forest) * 0.18) return { type: 'sheep', chance: 0.045, cellSize: 18 };
+    if (biome === 'mountain_forest' && roll < 0.45) return { type: 'boar', chance: 0.075, cellSize: 20 };
     return mobForBiome(biome);
+  }
+
+  function bearDecorationForPosition(seed, x, z) {
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'geysers' || biome === 'volcanic') return null;
+    return bearDecorationForBiome(biome);
   }
 
   function findFishPlace(state, centerX, centerZ) {
@@ -1319,6 +2699,7 @@
   function generateMobsForColumn(state, seed, cx, cz, bounds) {
     if (!state.entities) state.entities = {};
     if (!Array.isArray(state.entities.sheep)) state.entities.sheep = [];
+    const villages = getVillages3D(state);
 
     const cellSize = 16;
     const minCellX = Math.floor(bounds.minX / cellSize);
@@ -1330,6 +2711,7 @@
       for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
         const sampleX = cellX * cellSize + Math.floor(cellSize * 0.5);
         const sampleZ = cellZ * cellSize + Math.floor(cellSize * 0.5);
+        if (findVillageForCellInList(villages, sampleX, sampleZ)) continue;
         const info = mobForPosition(seed, sampleX, sampleZ);
         if (!info) continue;
         if (noise2(seed + 2301, cellX, cellZ) > info.chance) continue;
@@ -1354,18 +2736,90 @@
     }
   }
 
+  function generateBearDecorationsForColumn(state, seed, cx, cz, bounds) {
+    if (!state.entities) state.entities = {};
+    if (!Array.isArray(state.entities.sheep)) state.entities.sheep = [];
+    const cellSize = 28;
+    const minCellX = Math.floor(bounds.minX / cellSize);
+    const maxCellX = Math.floor((bounds.maxX - 1) / cellSize);
+    const minCellZ = Math.floor(bounds.minZ / cellSize);
+    const maxCellZ = Math.floor((bounds.maxZ - 1) / cellSize);
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+        const sampleX = cellX * cellSize + Math.floor(cellSize * 0.5);
+        const sampleZ = cellZ * cellSize + Math.floor(cellSize * 0.5);
+        const info = bearDecorationForPosition(seed, sampleX, sampleZ);
+        if (!info) continue;
+        if (noise2(seed + 3401, cellX, cellZ) > info.chance) continue;
+        const x = cellX * cellSize + Math.floor(5 + noise2(seed + 3403, cellX, cellZ) * (cellSize - 10));
+        const z = cellZ * cellSize + Math.floor(5 + noise2(seed + 3405, cellX, cellZ) * (cellSize - 10));
+        if (x < bounds.minX || x >= bounds.maxX || z < bounds.minZ || z >= bounds.maxZ) continue;
+        const biome = biomeAt(seed, x, z);
+        const bear = bearInfoForBiome(biome);
+        if (!bear) continue;
+        const id = `bear-den-${cellX}-${cellZ}`;
+        if (hasMob(state, id)) continue;
+        let groundY = 0;
+        for (let y = state.world.h - 2; y >= 1; y -= 1) {
+          if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
+            groundY = y;
+            break;
+          }
+        }
+        const den = placeBearDen(state, x, groundY, z, biome);
+        if (!den || !Game.entities3d || !Game.entities3d.spawnMob3D) continue;
+        Game.entities3d.spawnMob3D(state, 'bear', den.x, den.y, den.z, id, {
+          variant: bear.variant,
+          sleeping: bear.sleeping,
+          denTask: bear.sleeping ? '' : 'leave_den',
+          denTarget: { x: den.x + 2, y: den.y + 2, z: den.z },
+          yaw: den.yaw,
+        });
+      }
+    }
+  }
+
   function treeChanceAt(seed, x, z, biome) {
-    if (biome === 'lake' || biome === 'beach' || biome === 'desert' || biome === 'mountains' || biome === 'geysers') return 0;
+    if (biome === 'lake' || biome === 'beach' || biome === 'desert' || biome === 'mountains' || biome === 'geysers' || biome === 'cliffs' || biome === 'volcanic') return 0;
+    if (biome === 'mountain_forest') return 0.42;
+    if (biome === 'spruce_forest') return 0.032;
+    if (biome === 'snow_plains') return 0.018;
     const forest = baseBiomeInfluence(seed, x, z, 'forest', 22);
     const desert = baseBiomeInfluence(seed, x, z, 'desert', 20);
     if (desert > 0.18) return 0;
     return 0.003 + forest * 0.082;
   }
 
+  function treeCandidateCellSize(biome) {
+    if (biome === 'mountain_forest') return 2;
+    if (biome === 'spruce_forest') return 5;
+    if (biome === 'snow_plains') return 8;
+    return 5;
+  }
+
+  function shouldTryTreeAt(seed, x, z, biome, chance) {
+    if (chance <= 0) return false;
+    const cellSize = treeCandidateCellSize(biome);
+    const cellX = Math.floor(x / cellSize);
+    const cellZ = Math.floor(z / cellSize);
+    const targetX = cellX * cellSize + Math.floor(noise2(seed + 315, cellX, cellZ) * cellSize);
+    const targetZ = cellZ * cellSize + Math.floor(noise2(seed + 317, cellX, cellZ) * cellSize);
+    if (x !== targetX || z !== targetZ) return false;
+    const probability = Math.min(0.96, chance * cellSize * cellSize);
+    return noise2(seed + 303, x, z) <= probability;
+  }
+
   function desertDecorationStrength(seed, x, z, biome) {
-    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers') return 0;
+    if (biome === 'lake' || biome === 'beach' || biome === 'mountains' || biome === 'geysers' || biome === 'cliffs' || biome === 'volcanic' || biome === 'mountain_forest' || biome === 'snow_plains' || biome === 'spruce_forest') return 0;
     if (biome === 'desert') return Math.max(0.55, baseBiomeInfluence(seed, x, z, 'desert'));
     return Math.max(0, baseBiomeInfluence(seed, x, z, 'desert') - 0.16);
+  }
+
+  function flushSuppressedDirtyChunks(state) {
+    const world = state && state.world;
+    if (!world || !world.dirtyChunks || !world.suppressedDirtyChunks) return;
+    for (const key of world.suppressedDirtyChunks) world.dirtyChunks.add(key);
+    world.suppressedDirtyChunks.clear();
   }
 
   function decorateColumn3D(state, seed, cx, cz) {
@@ -1374,7 +2828,6 @@
     if (!world.decoratedColumns) world.decoratedColumns = new Set();
     const key = columnKey(cx, cz);
     if (world.decoratedColumns.has(key)) return false;
-    if (!isDecorationReady(world, cx, cz, counts)) return false;
 
     const bounds = {
       minX: cx * CHUNK_SIZE,
@@ -1382,12 +2835,45 @@
       maxX: Math.min(world.w, (cx + 1) * CHUNK_SIZE),
       maxZ: Math.min(world.d, (cz + 1) * CHUNK_SIZE),
     };
+    const villages = VILLAGE_BLOCK_GENERATION_ENABLED ? getVillages3D(state) : [];
+    const hasVillageInColumn = VILLAGE_BLOCK_GENERATION_ENABLED && villages.some((village) => (
+      village.x + village.radius >= bounds.minX
+      && village.x - village.radius < bounds.maxX
+      && village.z + village.radius >= bounds.minZ
+      && village.z - village.radius < bounds.maxZ
+    ));
+    if (hasVillageInColumn) {
+      if (!isDecorationReady(world, cx, cz, counts)) return false;
+    } else if (!isSurfaceDecorationReady(state, seed, cx, cz, counts)) {
+      return false;
+    }
 
     world.suppressChunkModification = (world.suppressChunkModification || 0) + 1;
+    if (hasVillageInColumn) world.suppressChunkDirty = (world.suppressChunkDirty || 0) + 1;
+    if (hasVillageInColumn) {
+      if (!world.suppressedDirtyChunks) world.suppressedDirtyChunks = new Set();
+      else world.suppressedDirtyChunks.clear();
+    }
     try {
       for (let x = Math.max(4, bounds.minX); x < Math.min(world.w - 4, bounds.maxX); x += 1) {
         for (let z = Math.max(4, bounds.minZ); z < Math.min(world.d - 4, bounds.maxZ); z += 1) {
           const biome = biomeAt(seed, x, z);
+          const village = VILLAGE_BLOCK_GENERATION_ENABLED ? findVillageForCellInList(villages, x, z) : null;
+          if (village) {
+            decorateVillageCellAt(state, seed, x, z, village);
+            continue;
+          }
+          const treeChance = treeChanceAt(seed, x, z, biome);
+          const tryTree = shouldTryTreeAt(seed, x, z, biome, treeChance);
+          const desertDecor = desertDecorationStrength(seed, x, z, biome);
+          const tryCactus = desertDecor > 0 && noise2(seed + 305, x, z) <= 0.0014 * desertDecor;
+          const tryDryBush = desertDecor > 0 && !tryCactus && noise2(seed + 306, x, z) <= 0.013 * desertDecor;
+          const tryAlgae = biome === 'lake' && noise2(seed + 307, x, z) <= 0.008;
+          const tryGeyser = (biome === 'geysers' && noise2(seed + 309, x, z) <= 0.012)
+            || (biome === 'volcanic' && noise2(seed + 310, x, z) <= 0.045)
+            || (biome === 'mountains' && noise2(seed + 308, x, z) <= 0.0018);
+          if (!tryTree && !tryCactus && !tryDryBush && !tryAlgae && !tryGeyser) continue;
+
           let groundY = 0;
           for (let y = world.h - 2; y >= 1; y -= 1) {
             if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
@@ -1395,33 +2881,35 @@
               break;
             }
           }
-          const treeChance = treeChanceAt(seed, x, z, biome);
-          const desertDecor = desertDecorationStrength(seed, x, z, biome);
-          if (treeChance > 0 && noise2(seed + 303, x, z) <= treeChance) {
-            placeTree(state, seed, x, groundY, z);
-          } else if (desertDecor > 0) {
-            if (noise2(seed + 305, x, z) <= 0.0014 * desertDecor) placeCactus(state, seed, x, groundY, z);
-            else if (noise2(seed + 306, x, z) <= 0.013 * desertDecor) placeDryBush(state, x, groundY, z);
-          } else if (biome === 'lake') {
-            if (noise2(seed + 307, x, z) <= 0.008) placeAlgae(state, seed, x, groundY, z);
-          } else if (biome === 'geysers') {
-            if (noise2(seed + 309, x, z) <= 0.012) placeGeyser(state, x, groundY, z);
-          } else if (biome === 'mountains') {
-            if (noise2(seed + 308, x, z) <= 0.0018) placeGeyser(state, x, groundY, z);
-          }
+          if (tryTree) {
+            if (biome === 'spruce_forest' || biome === 'snow_plains') {
+              placeSpruceTree(state, seed, x, groundY, z);
+            } else if (biome === 'mountain_forest') {
+              placeTree(state, seed, x, groundY, z, { groundBlocks: [BLOCK.STONE, BLOCK.RED_EARTH, BLOCK.DIRT, BLOCK.SNOW] });
+            } else {
+              placeTree(state, seed, x, groundY, z);
+            }
+          } else if (tryCactus) placeCactus(state, seed, x, groundY, z);
+          else if (tryDryBush) placeDryBush(state, x, groundY, z);
+          else if (tryAlgae) placeAlgae(state, seed, x, groundY, z);
+          else if (tryGeyser) placeGeyser(state, x, groundY, z);
         }
       }
+      generateBearDecorationsForColumn(state, seed, cx, cz, bounds);
     } finally {
       world.suppressChunkModification -= 1;
+      if (hasVillageInColumn) world.suppressChunkDirty -= 1;
     }
 
     generateMobsForColumn(state, seed, cx, cz, bounds);
     world.decoratedColumns.add(key);
+    if (hasVillageInColumn) flushSuppressedDirtyChunks(state);
     return true;
   }
 
   function decorateReadyColumnsAround(state, seed, pcx, pcz, radius, budget = CHUNK_DECORATE_BUDGET) {
     const counts = chunkCounts(state.world);
+    const world = state.world;
     let decorated = 0;
     const candidates = [];
     for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
@@ -1436,7 +2924,26 @@
     candidates.sort((a, b) => a.distanceSq - b.distanceSq);
     for (const item of candidates) {
       if (decorated >= budget) break;
-      if (decorateColumn3D(state, seed, item.cx, item.cz)) decorated += 1;
+      const key = columnKey(item.cx, item.cz);
+      const failures = world.decorationFailedColumns && world.decorationFailedColumns.get(key);
+      if (failures && failures >= DECORATION_COLUMN_MAX_FAILURES) continue;
+      try {
+        if (decorateColumn3D(state, seed, item.cx, item.cz)) {
+          if (world.decorationFailedColumns) world.decorationFailedColumns.delete(key);
+          decorated += 1;
+        }
+      } catch (error) {
+        const nextFailures = (failures || 0) + 1;
+        if (!world.decorationFailedColumns) world.decorationFailedColumns = new Map();
+        world.decorationFailedColumns.set(key, nextFailures);
+        world.lastGenerationError = {
+          type: 'decorate',
+          column: key,
+          failures: nextFailures,
+          message: error && error.message ? error.message : String(error),
+        };
+        console.error('[CubicDepths] decorate column failed', { cx: item.cx, cz: item.cz, failures: nextFailures }, error);
+      }
     }
     state.world.lastDecoratedColumns = decorated;
     return decorated;
@@ -1538,16 +3045,38 @@
     return true;
   }
 
-  function ensureChunksAroundPlayer3D(state, radius = CHUNK_RENDER_DISTANCE) {
+  function ensureChunksAroundPlayer3D(state, radius = null) {
     if (!state || !state.world || !state.player) return 0;
+    const effectiveRadius = Number.isFinite(radius) ? radius : getChunkRenderDistanceValue(state.worldMeta);
+    const manualDistance = isManualChunkRenderDistance(state.worldMeta);
     const seed = worldSeed(state);
     const pcx = Math.floor(state.player.x / CHUNK_SIZE);
     const pcz = Math.floor(state.player.z / CHUNK_SIZE);
+    const perf = state.perf || (state.perf = {});
     let generated = 0;
-    queueChunksAroundPlayer3D(state, radius);
+    let t0 = performance.now();
+    activeState = state;
+    initChunkWorker(state);
+    queueChunksAroundPlayer3D(state, effectiveRadius);
+    perf.queueMs = performance.now() - t0;
+    t0 = performance.now();
     generated += processTerrainQueue3D(state, seed);
-    if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, radius);
-    unloadDistantChunks3D(state);
+    perf.terrainMs = performance.now() - t0;
+    t0 = performance.now();
+    if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, effectiveRadius);
+    perf.decorateMs = performance.now() - t0;
+    t0 = performance.now();
+    unloadDistantChunks3D(state, manualDistance ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE);
+    perf.unloadMs = performance.now() - t0;
+    const loading = state.world.chunkLoading;
+    perf.terrainQueue = loading ? loading.queue.length : 0;
+    perf.terrainPending = loading ? loading.pendingIds.size + loading.loadingSaved.size + (loading.syncJob ? 1 : 0) : 0;
+    perf.worker = chunkWorker ? 'on' : 'off';
+    perf.syncProgress = state.world.lastSyncChunkProgress || 0;
+    perf.dirtyChunks = state.world.dirtyChunks ? state.world.dirtyChunks.size : 0;
+    perf.generationError = state.world.lastGenerationError || null;
+    perf.renderDistanceChunks = effectiveRadius;
+    perf.renderDistanceMode = manualDistance ? 'manual' : 'auto';
     return generated;
   }
 
@@ -1573,28 +3102,25 @@
       state.player.z = Math.max(0.5, Math.min(world.d - 0.5, savedPlayer.z));
       if (Number.isFinite(savedPlayer.yaw)) state.player.yaw = savedPlayer.yaw;
       if (Number.isFinite(savedPlayer.pitch)) state.player.pitch = savedPlayer.pitch;
+      if (Number.isFinite(savedPlayer.scale)) state.player.scale = savedPlayer.scale;
+      if (Number.isFinite(savedPlayer.targetScale)) state.player.targetScale = savedPlayer.targetScale;
+      else if (Number.isFinite(savedPlayer.scale)) state.player.targetScale = savedPlayer.scale;
+    } else {
+      const spawn = findWorldSpawn3D(state, seed);
+      state.player.x = spawn.x + 0.5;
+      state.player.y = getSurfaceSpawnY3D(state, spawn.x, spawn.z);
+      state.player.z = spawn.z + 0.5;
     }
 
     generateChunksAroundPlayerSync3D(state, seed, CHUNK_START_SYNC_RADIUS);
 
     if (!hasSavedPlayer) {
-      const spawnX = Math.floor(world.w / 2);
-      const spawnZ = Math.floor(world.d / 2);
-      let spawnY = world.h - 2;
-      for (let y = world.h - 2; y >= 1; y -= 1) {
-        if (getBlock3D(state, spawnX, y, spawnZ) !== BLOCK.AIR) {
-          spawnY = y + 2;
-          break;
-        }
-      }
-      state.player.x = spawnX + 0.5;
-      state.player.y = spawnY;
-      state.player.z = spawnZ + 0.5;
+      placeSpawnTent3D(state, Math.floor(state.player.x), Math.floor(state.player.z));
     }
     state.player.vx = 0;
     state.player.vy = 0;
     state.player.vz = 0;
-    ensureChunksAroundPlayer3D(state, CHUNK_RENDER_DISTANCE);
+    ensureChunksAroundPlayer3D(state, getChunkRenderDistanceValue(state.worldMeta));
     state.world.dirtyAll = false;
   }
 
@@ -1606,8 +3132,14 @@
     saveAllModifiedChunks3D,
     saveModifiedChunks3D,
     getBiomeAt3D,
+    seedHasDefaultSpawnBiome3D,
     getCaveEntrancesInArea3D,
     getPortalRuins3D,
+    getVillages3D,
+    getVillageRoadLinks3D,
+    getSurfaceSpawnY3D,
+    createBearDenAt3D,
+    getBearDens3D,
     dimensionWorldId,
     currentStorageWorldId,
     BIOME_LABELS,

@@ -15,9 +15,12 @@
       placePressed: false,
       repairPressed: false,
       previewPressed: false,
+      lootTablePressed: false,
       jumpPressed: false,
       flyTogglePressed: false,
       boostTogglePressed: false,
+      scaleUpPressed: false,
+      scaleDownPressed: false,
       mobileMoveX: 0,
       mobileMoveY: 0,
       mobileJump: false,
@@ -65,7 +68,12 @@
     window.addEventListener('keydown', (event) => {
       if (event.code === 'KeyR' && !input.keys.KeyR) input.repairPressed = true;
       if (event.code === 'KeyP' && !input.keys.KeyP) input.previewPressed = true;
+      if (event.code === 'KeyT' && !input.keys.KeyT) input.lootTablePressed = true;
       if (event.code === 'KeyF' && !input.keys.KeyF) input.flyTogglePressed = true;
+      const scaleShortcutState = getState && getState();
+      const scaleShortcutAllowed = !scaleShortcutState || !scaleShortcutState.pause || !scaleShortcutState.pause.open;
+      if (scaleShortcutAllowed && (event.code === 'NumpadAdd' || event.code === 'Equal') && !input.keys[event.code]) input.scaleUpPressed = true;
+      if (scaleShortcutAllowed && (event.code === 'NumpadSubtract' || event.code === 'Minus') && !input.keys[event.code]) input.scaleDownPressed = true;
       if (event.code === 'Space' && !input.keys.Space) {
         const now = performance.now();
         input.jumpPressed = true;
@@ -237,17 +245,23 @@
         placePressed: input.placePressed,
         repairPressed: input.repairPressed,
         previewPressed: input.previewPressed,
+        lootTablePressed: input.lootTablePressed,
         jumpPressed: input.jumpPressed,
         flyTogglePressed: input.flyTogglePressed,
         boostTogglePressed: input.boostTogglePressed,
+        scaleUpPressed: input.scaleUpPressed,
+        scaleDownPressed: input.scaleDownPressed,
       };
       input.breakPressed = false;
       input.placePressed = false;
       input.repairPressed = false;
       input.previewPressed = false;
+      input.lootTablePressed = false;
       input.jumpPressed = false;
       input.flyTogglePressed = false;
       input.boostTogglePressed = false;
+      input.scaleUpPressed = false;
+      input.scaleDownPressed = false;
       return actions;
     }
 
@@ -262,9 +276,12 @@
       input.placePressed = false;
       input.repairPressed = false;
       input.previewPressed = false;
+      input.lootTablePressed = false;
       input.jumpPressed = false;
       input.flyTogglePressed = false;
       input.boostTogglePressed = false;
+      input.scaleUpPressed = false;
+      input.scaleDownPressed = false;
       input.primaryDown = false;
       input.mobileMoveX = 0;
       input.mobileMoveY = 0;

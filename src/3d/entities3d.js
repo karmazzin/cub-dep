@@ -2,6 +2,9 @@
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
   const { getBlock3D, setBlock3D, getGrassLevel3D, setGrassLevel3D, inBounds3D, isSolidBlock3D } = Game.world3d;
+  const MIN_SCALE = 0.25;
+  const MAX_SCALE = 1024;
+  const SCALE_SPEED = Math.log(2) * 4;
 
   const MOB_CONFIG = {
     sheep: { health: 4, radius: 0.34, height: 0.86, speed: 0.85, panicSpeed: 1.35, gravity: 18, stepJump: 6.6, hitJump: 4.2, eatsGrass: true },
@@ -10,15 +13,64 @@
     snake: { health: 3, radius: 0.38, height: 0.25, speed: 0.72, panicSpeed: 1.15, gravity: 18, stepJump: 2.0, hitJump: 1.2, pauseScale: 0.8 },
     goat: { health: 4, radius: 0.34, height: 0.82, speed: 1.05, panicSpeed: 1.8, gravity: 18, stepJump: 8.2, hitJump: 4.4, maxStepUp: 2 },
     fish: { health: 2, radius: 0.25, height: 0.25, speed: 0.62, panicSpeed: 1.25, hitJump: 0.8, waterMob: true },
+    fox: { health: 3, radius: 0.32, height: 0.46, speed: 1.18, panicSpeed: 2.05, gravity: 18, stepJump: 5.8, hitJump: 3.4, pauseScale: 0.7 },
+    bear: { health: 12, radius: 1.44, height: 2.7, speed: 0.62, panicSpeed: 1.05, gravity: 18, stepJump: 6.8, hitJump: 3.8, pauseScale: 1.45, maxStepUp: 2 },
+    polar_bear: { health: 12, radius: 1.44, height: 2.7, speed: 0.62, panicSpeed: 1.05, gravity: 18, stepJump: 6.8, hitJump: 3.8, pauseScale: 1.45, maxStepUp: 2 },
   };
 
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function mobScale(mob) {
+    const scale = Number(mob && mob.scale);
+    return Number.isFinite(scale) ? clamp(scale, MIN_SCALE, MAX_SCALE) : 1;
+  }
+
   function mobConfig(mob) {
+    const base = MOB_CONFIG[mob && mob.type] || MOB_CONFIG.sheep;
+    const scale = mobScale(mob);
+    if (scale === 1) return base;
+    const config = {
+      ...base,
+      radius: base.radius * scale,
+      height: base.height * scale,
+    };
+    if (Number.isFinite(base.speed)) config.speed = base.speed * scale;
+    if (Number.isFinite(base.panicSpeed)) config.panicSpeed = base.panicSpeed * scale;
+    if (Number.isFinite(base.stepJump)) config.stepJump = base.stepJump * Math.sqrt(scale);
+    if (Number.isFinite(base.hitJump)) config.hitJump = base.hitJump * Math.sqrt(scale);
+    return config;
+  }
+
+  function baseMobConfig(mob) {
     return MOB_CONFIG[mob && mob.type] || MOB_CONFIG.sheep;
+  }
+
+  function updateMobScale(mob, dt) {
+    if (!mob) return;
+    const current = mobScale(mob);
+    const target = Number.isFinite(mob.targetScale) ? clamp(mob.targetScale, MIN_SCALE, MAX_SCALE) : current;
+    if (Math.abs(current - target) <= 0.001) {
+      mob.scale = target;
+      mob.targetScale = target;
+      return;
+    }
+    const currentLog = Math.log(current);
+    const targetLog = Math.log(target);
+    const step = SCALE_SPEED * dt;
+    mob.scale = Math.exp(currentLog + Math.sign(targetLog - currentLog) * Math.min(Math.abs(targetLog - currentLog), step));
+    mob.targetScale = target;
   }
 
   function initMob(mob) {
     if (!mob.type) mob.type = 'sheep';
-    const config = mobConfig(mob);
+    if (mob.type === 'polar_bear') {
+      mob.type = 'bear';
+      if (!mob.variant) mob.variant = 'snow';
+    }
+    if (mob.type === 'bear' && !mob.variant) mob.variant = 'brown';
+    const config = baseMobConfig(mob);
     if (!Number.isFinite(mob.vx)) mob.vx = 0;
     if (!Number.isFinite(mob.vy)) mob.vy = 0;
     if (!Number.isFinite(mob.vz)) mob.vz = 0;
@@ -28,8 +80,11 @@
     if (!Number.isFinite(mob.eatTimer)) mob.eatTimer = 0;
     if (!Number.isFinite(mob.jumpCooldown)) mob.jumpCooldown = 0;
     if (!Number.isFinite(mob.panicTimer)) mob.panicTimer = 0;
+    if (!Number.isFinite(mob.scale)) mob.scale = 1;
+    if (!Number.isFinite(mob.targetScale)) mob.targetScale = mob.scale;
     if (!Number.isFinite(mob.health)) mob.health = config.health;
     if (typeof mob.eating !== 'boolean') mob.eating = false;
+    if (typeof mob.sleeping !== 'boolean') mob.sleeping = false;
     if (typeof mob.onGround !== 'boolean') mob.onGround = false;
   }
 
@@ -37,7 +92,12 @@
     return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
   }
 
-  function isBlockingMob(id) {
+  function bearCanEnterWater(mob) {
+    return mob && mob.type === 'bear' && mob.variant !== 'snow';
+  }
+
+  function isBlockingMob(mob, id) {
+    if (bearCanEnterWater(mob) && id === BLOCK.WATER) return false;
     return isSolidBlock3D(id) || isFluidBlock(id);
   }
 
@@ -46,6 +106,7 @@
     const config = mobConfig(mob);
     const radius = config.radius;
     const height = config.height;
+    if (!world || x - radius < 0 || x + radius >= world.w || y < 0 || y + height >= world.h || z - radius < 0 || z + radius >= world.d) return true;
     const minX = Math.floor(x - radius);
     const maxX = Math.floor(x + radius);
     const minY = Math.floor(y);
@@ -56,7 +117,7 @@
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           if (!inBounds3D(world, xx, yy, zz)) return true;
-          if (isBlockingMob(getBlock3D(state, xx, yy, zz))) return true;
+          if (isBlockingMob(mob, getBlock3D(state, xx, yy, zz))) return true;
         }
       }
     }
@@ -103,7 +164,9 @@
     const baseY = Math.floor(mob.y);
     const blockX = Math.floor(x);
     const blockZ = Math.floor(z);
-    if (isFluidBlock(getBlock3D(state, blockX, baseY, blockZ))) return null;
+    const footBlock = getBlock3D(state, blockX, baseY, blockZ);
+    if (bearCanEnterWater(mob) && footBlock === BLOCK.WATER && canOccupyAt(state, mob, x, baseY, z)) return baseY;
+    if (isFluidBlock(footBlock)) return null;
     if (canOccupyAt(state, mob, x, baseY, z) && hasSafeSupport(state, blockX, baseY - 1, blockZ)) return baseY;
     if (canOccupyAt(state, mob, x, baseY - 1, z) && hasSafeSupport(state, blockX, baseY - 2, blockZ)) return baseY - 1;
     if (canOccupyAt(state, mob, x, baseY + 1, z) && hasSafeSupport(state, blockX, baseY, blockZ)) return baseY + 1;
@@ -172,6 +235,161 @@
     if (found) mob.pauseTimer = Math.random() < 0.34 ? (0.6 + Math.random() * 1.8) * (config.pauseScale || 1) : mob.pauseTimer;
   }
 
+  function findNearestTree(state, mob, radius = 36) {
+    const woodIds = new Set([BLOCK.WOOD, BLOCK.SPRUCE_WOOD]);
+    const mx = Math.floor(mob.x);
+    const my = Math.floor(mob.y);
+    const mz = Math.floor(mob.z);
+    let best = null;
+    for (let dz = -radius; dz <= radius; dz += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const distSq = dx * dx + dz * dz;
+        if (distSq > radius * radius) continue;
+        const x = mx + dx;
+        const z = mz + dz;
+        for (let y = Math.min(state.world.h - 2, my + 8); y >= Math.max(1, my - 5); y -= 1) {
+          if (!woodIds.has(getBlock3D(state, x, y, z))) continue;
+          if (!best || distSq < best.distSq) best = { x, y, z, distSq };
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  function updateBearDenTask(state, mob, dt) {
+    if (mob.type !== 'bear' || !mob.denTask || mob.denTask === 'done') return false;
+    mob.sleeping = false;
+    mob.eating = false;
+    mob.panicTimer = 0;
+    mob.inWater = getBlock3D(state, Math.floor(mob.x), Math.floor(mob.y), Math.floor(mob.z)) === BLOCK.WATER;
+    mob.digging = false;
+
+    function startDigging() {
+      mob.denTask = 'digging';
+      mob.digTimer = 3.2;
+      mob.digging = true;
+      mob.vx = 0;
+      mob.vz = 0;
+      const frontX = Math.floor(mob.x + Math.cos(mob.yaw || 0) * 3);
+      const frontZ = Math.floor(mob.z + Math.sin(mob.yaw || 0) * 3);
+      const madeDen = Game.generation3d && Game.generation3d.createBearDenAt3D
+        ? Game.generation3d.createBearDenAt3D(state, frontX, frontZ, { allowNearSpawn: true, loose: true })
+        : null;
+      if (madeDen) {
+        mob.denMade = madeDen;
+        mob.denTarget = { x: madeDen.x, y: madeDen.y, z: madeDen.z };
+        mob.yaw = Number.isFinite(madeDen.yaw) ? madeDen.yaw : mob.yaw;
+      }
+      mob.denStuckTimer = 0;
+      return true;
+    }
+
+    function stepTowardTarget(target, speedScale = 1) {
+      if (!target) return false;
+      const dx = target.x + 0.5 - mob.x;
+      const dz = target.z + 0.5 - mob.z;
+      mob.yaw = Math.atan2(dz, dx);
+      const step = getSafeStep(state, mob, mob.yaw);
+      if (!step) {
+        mob.denStuckTimer = (mob.denStuckTimer || 0) + dt;
+        mob.vx = 0;
+        mob.vz = 0;
+        mob.vy -= mobConfig(mob).gravity * dt;
+        mob.onGround = false;
+        if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
+        if (mob.vy <= 0) moveAxis(state, mob, 'y', mob.vy * dt);
+        return false;
+      }
+      mob.denStuckTimer = 0;
+      const speed = mobConfig(mob).speed * speedScale;
+      mob.vx = Math.cos(mob.yaw) * speed;
+      mob.vz = Math.sin(mob.yaw) * speed;
+      if (bearCanEnterWater(mob) && mob.inWater) mob.vy = Math.max(-0.08, Math.min(0.08, mob.vy || 0));
+      else mob.vy -= mobConfig(mob).gravity * dt;
+      mob.onGround = false;
+      if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
+      moveAxis(state, mob, 'x', mob.vx * dt);
+      moveAxis(state, mob, 'z', mob.vz * dt);
+      if (mob.vy <= 0) moveAxis(state, mob, 'y', mob.vy * dt);
+      return true;
+    }
+
+    if (mob.denTask === 'dig_here') {
+      return startDigging();
+    }
+
+    if (mob.denTask === 'find_tree') {
+      const tree = findNearestTree(state, mob);
+      if (!tree) {
+        mob.denTarget = { x: Math.floor(mob.x) + Math.round(Math.cos(mob.yaw || 0) * 2), y: Math.floor(mob.y), z: Math.floor(mob.z) + Math.round(Math.sin(mob.yaw || 0) * 2) };
+        return startDigging();
+      }
+      mob.denTarget = tree;
+      mob.denTask = 'walk_to_tree';
+    }
+
+    if (mob.denTask === 'walk_to_tree') {
+      const target = mob.denTarget;
+      if (!target) {
+        mob.denTask = 'find_tree';
+        return true;
+      }
+      const dx = target.x + 0.5 - mob.x;
+      const dz = target.z + 0.5 - mob.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= 3.2) {
+        mob.yaw = Math.atan2(dz, dx);
+        return startDigging();
+      }
+      stepTowardTarget(target, 1.15);
+      if ((mob.denStuckTimer || 0) > 1.2) return startDigging();
+      return true;
+    }
+
+    if (mob.denTask === 'leave_den') {
+      const target = mob.denTarget;
+      if (!target) {
+        mob.denTask = 'done';
+        return false;
+      }
+      const dx = target.x + 0.5 - mob.x;
+      const dz = target.z + 0.5 - mob.z;
+      if (Math.hypot(dx, dz) <= 1.2 || (mob.denStuckTimer || 0) > 2.5) {
+        mob.denTask = 'done';
+        mob.denTarget = null;
+        mob.denStuckTimer = 0;
+        return false;
+      }
+      stepTowardTarget(target, 1.05);
+      return true;
+    }
+
+    if (mob.denTask === 'digging') {
+      mob.digging = true;
+      mob.digTimer = Math.max(0, (mob.digTimer || 0) - dt);
+      mob.vx = 0;
+      mob.vz = 0;
+      if (mob.denTarget) mob.yaw = Math.atan2(mob.denTarget.z + 0.5 - mob.z, mob.denTarget.x + 0.5 - mob.x);
+      if (mob.digTimer <= 0) {
+        const madeDen = mob.denMade || null;
+        mob.denTask = 'done';
+        mob.digging = false;
+        mob.denMade = null;
+        if (madeDen) {
+          mob.x = madeDen.x + 0.5;
+          mob.y = madeDen.y;
+          mob.z = madeDen.z + 0.5;
+          if (Number.isFinite(madeDen.yaw)) mob.yaw = madeDen.yaw;
+          if (mob.variant === 'snow') mob.sleeping = true;
+        }
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   function updateFish(state, fish, dt) {
     initMob(fish);
     const config = mobConfig(fish);
@@ -205,6 +423,17 @@
   function updateGroundMob(state, mob, dt) {
     initMob(mob);
     const config = mobConfig(mob);
+    mob.inWater = getBlock3D(state, Math.floor(mob.x), Math.floor(mob.y), Math.floor(mob.z)) === BLOCK.WATER;
+    if (mob.sleeping) {
+      mob.vx = 0;
+      mob.vy = 0;
+      mob.vz = 0;
+      mob.eating = false;
+      mob.pauseTimer = Math.max(mob.pauseTimer || 0, 1);
+      mob.panicTimer = 0;
+      return;
+    }
+    if (updateBearDenTask(state, mob, dt)) return;
     mob.eatCooldown = Math.max(0, mob.eatCooldown - dt);
     mob.jumpCooldown = Math.max(0, mob.jumpCooldown - dt);
     mob.panicTimer = Math.max(0, mob.panicTimer - dt);
@@ -233,7 +462,8 @@
     mob.vx = Math.cos(mob.yaw) * speed;
     mob.vz = Math.sin(mob.yaw) * speed;
 
-    mob.vy -= config.gravity * dt;
+    if (bearCanEnterWater(mob) && mob.inWater) mob.vy = Math.max(-0.08, Math.min(0.08, mob.vy || 0));
+    else mob.vy -= config.gravity * dt;
     mob.onGround = false;
     if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
     const movedX = moveAxis(state, mob, 'x', mob.vx * dt);
@@ -246,6 +476,7 @@
   }
 
   function updateMob(state, mob, dt) {
+    updateMobScale(mob, dt);
     if (mobConfig(mob).waterMob) updateFish(state, mob, dt);
     else updateGroundMob(state, mob, dt);
   }
@@ -257,6 +488,23 @@
     if (index < 0) return { hit: false, dead: false };
     const target = mobs[index];
     initMob(target);
+    if (target.sleeping) {
+      target.sleeping = false;
+      if (target.variant === 'snow') {
+        target.denTask = 'done';
+        target.digging = false;
+        target.denMade = null;
+        target.denTarget = null;
+      }
+      target.eating = false;
+      target.eatTimer = 0;
+      target.pauseTimer = 0.8;
+      target.panicTimer = 0;
+      target.walkTimer = 0.8 + Math.random() * 0.8;
+      target.vx = 0;
+      target.vz = 0;
+      return { hit: true, dead: false, woke: true };
+    }
     target.health -= amount;
     if (target.health <= 0) {
       mobs.splice(index, 1);
@@ -273,7 +521,7 @@
     return { hit: true, dead: false };
   }
 
-  function spawnMob3D(state, type, x, y, z, id = null) {
+  function spawnMob3D(state, type, x, y, z, id = null, options = {}) {
     if (!state || !state.world || !state.entities) return false;
     const mob = {
       id: id || `${type}-spawn-${Date.now().toString(36)}-${Math.floor(Math.random() * 100000).toString(36)}`,
@@ -283,6 +531,11 @@
       z: z + 0.5,
       yaw: Math.random() * Math.PI * 2,
     };
+    if (options && options.variant) mob.variant = options.variant;
+    if (options && options.sleeping) mob.sleeping = true;
+    if (options && options.denTask) mob.denTask = options.denTask;
+    if (options && options.denTarget) mob.denTarget = { ...options.denTarget };
+    if (Number.isFinite(options && options.yaw)) mob.yaw = options.yaw;
     initMob(mob);
     if (mobConfig(mob).waterMob) {
       if (getBlock3D(state, x, y, z) !== BLOCK.WATER) return false;

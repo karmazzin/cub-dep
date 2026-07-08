@@ -183,6 +183,7 @@
       waterSources: snapshot.waterSources || [],
       lavaSources: snapshot.lavaSources || [],
       blockDamage: snapshot.blockDamage || {},
+      chests: snapshot.chests || {},
       updatedAt: Date.now(),
     };
     try {
@@ -213,6 +214,7 @@
         waterSources: record.waterSources || [],
         lavaSources: record.lavaSources || [],
         blockDamage: record.blockDamage || {},
+        chests: record.chests || {},
       };
     } catch (error) {
       return null;
