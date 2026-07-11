@@ -80,6 +80,8 @@
     if (!Number.isFinite(mob.eatTimer)) mob.eatTimer = 0;
     if (!Number.isFinite(mob.jumpCooldown)) mob.jumpCooldown = 0;
     if (!Number.isFinite(mob.panicTimer)) mob.panicTimer = 0;
+    if (!Number.isFinite(mob.hostileTimer)) mob.hostileTimer = 0;
+    if (!Number.isFinite(mob.attackCooldown)) mob.attackCooldown = 0;
     if (!Number.isFinite(mob.scale)) mob.scale = 1;
     if (!Number.isFinite(mob.targetScale)) mob.targetScale = mob.scale;
     if (!Number.isFinite(mob.health)) mob.health = config.health;
@@ -434,6 +436,9 @@
       return;
     }
     if (updateBearDenTask(state, mob, dt)) return;
+    mob.hostileTimer = Math.max(0, (mob.hostileTimer || 0) - dt);
+    mob.attackCooldown = Math.max(0, (mob.attackCooldown || 0) - dt);
+    if (updateHostileMob(state, mob, dt)) return;
     mob.eatCooldown = Math.max(0, mob.eatCooldown - dt);
     mob.jumpCooldown = Math.max(0, mob.jumpCooldown - dt);
     mob.panicTimer = Math.max(0, mob.panicTimer - dt);
@@ -475,6 +480,64 @@
     }
   }
 
+  function hostileStats(mob) {
+    if (!mob) return null;
+    if (mob.type === 'snake') return { damage: 8, range: 1.25, cooldown: 1.45, chase: 7, speed: 1.05, always: true, label: 'змея' };
+    if (mob.type === 'boar') return { damage: 12, range: 1.45, cooldown: 1.7, chase: 12, speed: 1.35, label: 'кабан' };
+    if (mob.type === 'bear') return { damage: 25, range: 2.25, cooldown: 1.5, chase: 18, speed: 1.18, label: 'медведь' };
+    if (mob.type === 'goat') return { damage: 10, range: 1.45, cooldown: 1.8, chase: 10, speed: 1.35, label: 'горный козел' };
+    return null;
+  }
+
+  function updateHostileMob(state, mob, dt) {
+    const stats = hostileStats(mob);
+    const player = state && state.player;
+    if (!state || !state.worldMeta || state.worldMeta.mode !== 'survival') return false;
+    if (!stats || !player || mob.eating || mob.digging) return false;
+    const dx = player.x - mob.x;
+    const dy = player.y - mob.y;
+    const dz = player.z - mob.z;
+    const flatDist = Math.hypot(dx, dz);
+    const verticalOk = Math.abs(dy) <= Math.max(2.4, mobConfig(mob).height + 0.8);
+    const active = stats.always ? flatDist <= stats.chase && verticalOk : (mob.hostileTimer || 0) > 0 && flatDist <= stats.chase * 1.7 && verticalOk;
+    if (!active) return false;
+
+    mob.sleeping = false;
+    mob.eating = false;
+    mob.panicTimer = 0;
+    mob.pauseTimer = 0;
+    mob.walkTimer = Math.max(mob.walkTimer || 0, 0.25);
+    mob.yaw = Math.atan2(dz, dx);
+    if (flatDist <= stats.range && mob.attackCooldown <= 0) {
+      if (Game.player3d && Game.player3d.applyPlayerDamage3D) {
+        Game.player3d.applyPlayerDamage3D(state, stats.damage, stats.label, { cooldown: 0.45 });
+      }
+      mob.attackCooldown = stats.cooldown;
+      mob.vx = 0;
+      mob.vz = 0;
+      return true;
+    }
+
+    const step = getSafeStep(state, mob, mob.yaw);
+    const config = mobConfig(mob);
+    if (step && step.y > Math.floor(mob.y)) tryStepJump(mob);
+    const speed = step ? Math.max(config.speed, stats.speed) : 0;
+    mob.vx = Math.cos(mob.yaw) * speed;
+    mob.vz = Math.sin(mob.yaw) * speed;
+    if (bearCanEnterWater(mob) && mob.inWater) mob.vy = Math.max(-0.08, Math.min(0.08, mob.vy || 0));
+    else mob.vy -= config.gravity * dt;
+    mob.onGround = false;
+    if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    const movedX = moveAxis(state, mob, 'x', mob.vx * dt);
+    const movedZ = moveAxis(state, mob, 'z', mob.vz * dt);
+    if (mob.vy <= 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    if (!step || !movedX || !movedZ) {
+      mob.yaw += Math.PI * (0.5 + Math.random() * 0.35);
+      mob.walkTimer = 0.45 + Math.random() * 0.5;
+    }
+    return true;
+  }
+
   function updateMob(state, mob, dt) {
     updateMobScale(mob, dt);
     if (mobConfig(mob).waterMob) updateFish(state, mob, dt);
@@ -500,6 +563,7 @@
       target.eatTimer = 0;
       target.pauseTimer = 0.8;
       target.panicTimer = 0;
+      if (target.type === 'bear') target.hostileTimer = 18;
       target.walkTimer = 0.8 + Math.random() * 0.8;
       target.vx = 0;
       target.vz = 0;
@@ -515,7 +579,12 @@
     target.eating = false;
     target.eatTimer = 0;
     target.pauseTimer = 0;
-    target.panicTimer = 1.4;
+    if (hostileStats(target) && target.type !== 'snake') {
+      target.hostileTimer = target.type === 'bear' ? 18 : 10;
+      target.panicTimer = 0;
+    } else {
+      target.panicTimer = 1.4;
+    }
     target.walkTimer = 0.6 + Math.random() * 0.8;
     hopFromHit(target);
     return { hit: true, dead: false };

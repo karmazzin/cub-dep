@@ -224,7 +224,9 @@
       if (world.lavaSources) world.lavaSources.delete(key);
     }
     if (world.blockDamage) delete world.blockDamage[key];
-    if (previousId === BLOCK.CHEST && id !== BLOCK.CHEST && world.chests) delete world.chests[key];
+    const previousChest = previousId === BLOCK.CHEST || previousId === BLOCK.STONE_CHEST;
+    const nextChest = id === BLOCK.CHEST || id === BLOCK.STONE_CHEST;
+    if (previousChest && !nextChest && world.chests) delete world.chests[key];
     markChunkDirty3D(state, x, y, z);
     markChunkDirty3D(state, x, y - 1, z);
     markChunkModified3D(state, x, y, z);

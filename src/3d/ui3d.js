@@ -8,7 +8,7 @@
       : null;
     if (!stack || stack.id === Game.blocks.BLOCK.AIR) return 'Пусто';
     if (Game.inventory3d && Game.inventory3d.getStackLabel) return Game.inventory3d.getStackLabel(stack);
-    return (labels && labels[stack.id]) || 'Блок';
+    return (labels && labels[stack.id]) || `ID ${stack.id}`;
   }
 
   function getHotbarMetrics(canvas, count) {
@@ -149,6 +149,7 @@
 
   function drawItemIcon(ctx, id, x, y, slot) {
     const eggTypes = Game.interaction3d && Game.interaction3d.SPAWN_EGG_TYPES;
+    const botEggRoles = Game.interaction3d && Game.interaction3d.BOT_SPAWN_EGG_ROLES;
     const item = Game.interaction3d && Game.interaction3d.ITEM;
     const colors = Game.blocks && Game.blocks.BLOCK_COLORS;
     const block = Game.blocks && Game.blocks.BLOCK;
@@ -156,11 +157,24 @@
       drawSpawnEggIcon(ctx, x, y, slot, eggTypes[id]);
       return;
     }
-    if (item && (id === item.SHRINK_POTION || id === item.GROW_POTION)) {
-      drawPotionIcon(ctx, x, y, slot, id === item.SHRINK_POTION ? '#74c0fc' : '#f783ac', id === item.SHRINK_POTION ? '-' : '+');
+    if (botEggRoles && botEggRoles[id]) {
+      drawSpawnEggIcon(ctx, x, y, slot, `bot_${botEggRoles[id]}`, botEggLabel(botEggRoles[id]));
+      return;
+    }
+    if (item && id === item.PAPER) {
+      drawPaperIcon(ctx, x, y, slot, false);
+      return;
+    }
+    if (item && id === item.NOTE) {
+      drawPaperIcon(ctx, x, y, slot, true);
+      return;
+    }
+    if (item && id === item.MAP) {
+      drawMapIcon(ctx, x, y, slot);
       return;
     }
     if (item && id === item.FILLED_CHEST && block) id = block.CHEST;
+    if (item && id === item.FILLED_STONE_CHEST && block) id = block.STONE_CHEST;
     if (!Number.isFinite(id) || !block || id === block.AIR) return;
     const iconSize = Math.max(16, Math.floor(slot * 0.68));
     const iconX = x + Math.round((slot - iconSize) / 2);
@@ -181,77 +195,82 @@
       snake: ['#c4a23f', '#6d7f2f', '#2f2a19'],
       goat: ['#b4afa0', '#ece5d4', '#5f594f'],
       fish: ['#4fa0b8', '#a7e1e4', '#23516a'],
+      bot_builder: ['#c98b45', '#f3d08a', '#5f3b20'],
+      bot_explorer: ['#4f7db8', '#9ac5f2', '#223a61'],
+      bot_digger: ['#7a5b3a', '#c0a070', '#3a2a18'],
+      bot_hunter: ['#7d4a4a', '#d08b80', '#3a1e1e'],
+      bot_gatherer: ['#4f8d53', '#a9d67a', '#24442a'],
+      bot_miner: ['#6f6f78', '#d4d6df', '#303038'],
+      bot_blaster: ['#8f3c2e', '#f0a45a', '#2a1712'],
     };
     return palette[type] || palette.sheep;
   }
 
-  function drawPotionIcon(ctx, x, y, slot, color, sign) {
-    const cx = x + slot / 2;
-    const top = y + slot * 0.12;
-    const w = slot * 0.42;
-    const h = slot * 0.68;
+  function drawPaperIcon(ctx, x, y, slot, marked) {
+    const w = slot * 0.48;
+    const h = slot * 0.62;
+    const px = x + (slot - w) * 0.5;
+    const py = y + (slot - h) * 0.5;
     ctx.save();
-    ctx.lineWidth = Math.max(2, slot * 0.04);
-
-    const corkW = w * 0.28;
-    const corkH = h * 0.12;
-    ctx.fillStyle = '#9a6a3a';
-    ctx.strokeStyle = '#4e3420';
-    ctx.fillRect(cx - corkW / 2, top, corkW, corkH);
-    ctx.strokeRect(cx - corkW / 2, top, corkW, corkH);
-
-    const neckW = w * 0.34;
-    const neckH = h * 0.24;
-    ctx.fillStyle = 'rgba(224,248,255,0.78)';
-    ctx.strokeStyle = 'rgba(214,246,255,0.95)';
-    ctx.fillRect(cx - neckW / 2, top + corkH, neckW, neckH);
-    ctx.strokeRect(cx - neckW / 2, top + corkH, neckW, neckH);
-
-    const bx = cx - w * 0.5;
-    const by = top + corkH + neckH * 0.74;
-    const bh = h * 0.64;
-    const r = Math.max(4, slot * 0.12);
-    ctx.beginPath();
-    ctx.moveTo(bx + r, by);
-    ctx.lineTo(bx + w - r, by);
-    ctx.quadraticCurveTo(bx + w, by, bx + w, by + r);
-    ctx.lineTo(bx + w, by + bh - r);
-    ctx.quadraticCurveTo(bx + w, by + bh, bx + w - r, by + bh);
-    ctx.lineTo(bx + r, by + bh);
-    ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - r);
-    ctx.lineTo(bx, by + r);
-    ctx.quadraticCurveTo(bx, by, bx + r, by);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(229,249,255,0.58)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(215,247,255,0.98)';
-    ctx.stroke();
-
-    ctx.save();
-    ctx.clip();
-    ctx.fillStyle = color;
-    ctx.fillRect(bx + w * 0.08, by + bh * 0.38, w * 0.84, bh * 0.48);
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    ctx.beginPath();
-    ctx.ellipse(cx, by + bh * 0.38, w * 0.42, bh * 0.09, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillRect(bx + w * 0.22, by + bh * 0.18, w * 0.12, bh * 0.38);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = 'rgba(0,0,0,0.36)';
-    ctx.lineWidth = Math.max(1.5, slot * 0.035);
-    ctx.font = `bold ${Math.max(14, Math.floor(slot * 0.34))}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.strokeText(sign, cx, by + bh * 0.64);
-    ctx.fillText(sign, cx, by + bh * 0.64);
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#3a2d1f';
+    ctx.fillRect(Math.round(px + slot * 0.05), Math.round(py + slot * 0.05), Math.round(w), Math.round(h));
+    ctx.fillStyle = '#f0e6c8';
+    ctx.fillRect(Math.round(px), Math.round(py), Math.round(w), Math.round(h));
+    ctx.fillStyle = '#d1bf92';
+    ctx.fillRect(Math.round(px + w * 0.72), Math.round(py), Math.round(w * 0.28), Math.round(h * 0.22));
+    ctx.fillStyle = '#b39a6a';
+    for (let i = 0; i < 4; i += 1) {
+      ctx.fillRect(Math.round(px + w * 0.16), Math.round(py + h * (0.24 + i * 0.15)), Math.round(w * 0.64), Math.max(1, Math.floor(slot * 0.035)));
+    }
+    if (marked) {
+      ctx.fillStyle = '#7a5130';
+      ctx.fillRect(Math.round(px + w * 0.18), Math.round(py + h * 0.72), Math.round(w * 0.24), Math.max(2, Math.floor(slot * 0.05)));
+      ctx.fillRect(Math.round(px + w * 0.18), Math.round(py + h * 0.64), Math.max(2, Math.floor(slot * 0.05)), Math.round(h * 0.12));
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = Math.max(1, Math.floor(slot * 0.04));
+    ctx.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(w) - 1, Math.round(h) - 1);
     ctx.restore();
   }
 
-  function drawSpawnEggIcon(ctx, x, y, slot, type) {
+  function drawMapIcon(ctx, x, y, slot) {
+    const w = slot * 0.58;
+    const h = slot * 0.58;
+    const px = x + (slot - w) * 0.5;
+    const py = y + (slot - h) * 0.5;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#3a2d1f';
+    ctx.fillRect(Math.round(px + slot * 0.05), Math.round(py + slot * 0.05), Math.round(w), Math.round(h));
+    ctx.fillStyle = '#e7d7a8';
+    ctx.fillRect(Math.round(px), Math.round(py), Math.round(w), Math.round(h));
+    ctx.fillStyle = '#7fb36a';
+    ctx.fillRect(Math.round(px + w * 0.12), Math.round(py + h * 0.14), Math.round(w * 0.32), Math.round(h * 0.26));
+    ctx.fillStyle = '#5d8fbd';
+    ctx.fillRect(Math.round(px + w * 0.46), Math.round(py + h * 0.18), Math.round(w * 0.32), Math.round(h * 0.22));
+    ctx.fillStyle = '#c6a45c';
+    ctx.fillRect(Math.round(px + w * 0.18), Math.round(py + h * 0.48), Math.round(w * 0.56), Math.round(h * 0.18));
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = Math.max(1, Math.floor(slot * 0.04));
+    ctx.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(w) - 1, Math.round(h) - 1);
+    ctx.restore();
+  }
+
+  function botEggLabel(role) {
+    const labels = {
+      builder: 'Строитель',
+      explorer: 'Исследователь',
+      digger: 'Копатель',
+      hunter: 'Охотник',
+      gatherer: 'Собиратель',
+      miner: 'Шахтер',
+      blaster: 'Взрыватель',
+    };
+    return labels[role] || 'Бот';
+  }
+
+  function drawSpawnEggIcon(ctx, x, y, slot, type, label = '') {
     const [base, spot, dark] = spawnEggColors(type);
     const cx = x + slot * 0.5;
     const cy = y + slot * 0.55;
@@ -273,6 +292,27 @@
     ctx.fillRect(Math.round(cx - w * 0.42), Math.round(cy + h * 0.12), Math.round(w * 0.84), 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.32)';
     ctx.strokeRect(Math.round(cx - w * 0.5) + 0.5, Math.round(cy - h * 0.32) + 0.5, Math.round(w) - 1, Math.round(h * 0.64) - 1);
+    if (label) {
+      let fontSize = Math.max(6, Math.floor(slot * 0.16));
+      const maxLabelW = Math.max(slot * 0.62, slot - 4);
+      ctx.font = `bold ${fontSize}px Arial`;
+      while (fontSize > 5 && ctx.measureText(label).width > maxLabelW - 4) {
+        fontSize -= 1;
+        ctx.font = `bold ${fontSize}px Arial`;
+      }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const labelW = Math.min(maxLabelW, Math.max(slot * 0.42, ctx.measureText(label).width + 5));
+      const labelH = Math.max(9, fontSize + 3);
+      const labelX = cx - labelW * 0.5;
+      const labelY = y + slot - labelH - 2;
+      ctx.fillStyle = 'rgba(12,12,12,0.74)';
+      ctx.fillRect(Math.round(labelX), Math.round(labelY), Math.round(labelW), Math.round(labelH));
+      ctx.strokeStyle = 'rgba(255,255,255,0.36)';
+      ctx.strokeRect(Math.round(labelX) + 0.5, Math.round(labelY) + 0.5, Math.round(labelW) - 1, Math.round(labelH) - 1);
+      ctx.fillStyle = '#fff7d6';
+      ctx.fillText(label, cx, labelY + labelH * 0.55);
+    }
     ctx.restore();
   }
 
@@ -660,10 +700,42 @@
     }
   }
 
+  function drawHealthBar(ctx, canvas, state, top) {
+    if (!state || !state.worldMeta || state.worldMeta.mode !== 'survival' || !state.player) return top;
+    const player = state.player;
+    const maxHealth = Number.isFinite(player.maxHealth) && player.maxHealth > 0 ? player.maxHealth : 100;
+    const health = Math.max(0, Math.min(maxHealth, Number.isFinite(player.health) ? player.health : maxHealth));
+    const mobile = isMobileHud(canvas);
+    const width = mobile ? 132 : 174;
+    const height = 22;
+    const x = 18;
+    const y = top;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,12,16,0.62)';
+    ctx.fillRect(x, y, width, height);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(x + 8, y + 8, width - 16, 7);
+    ctx.fillStyle = health <= maxHealth * 0.28 ? '#ff6a4a' : '#d94a42';
+    ctx.fillRect(x + 8, y + 8, (width - 16) * (health / maxHealth), 7);
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+    ctx.fillStyle = '#fff8e8';
+    ctx.font = mobile ? '11px Arial' : '12px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`HP ${Math.round(health)}/${Math.round(maxHealth)}`, x + width / 2, y + height / 2);
+    ctx.restore();
+    return y + height + 6;
+  }
+
   function drawUI3D(ctx, canvas, state) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.save();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (state.player && state.player.damageFlash > 0) {
+      ctx.fillStyle = `rgba(180, 24, 18, ${Math.min(0.24, state.player.damageFlash * 0.75)})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
     const rawScale = state && state.player && Number.isFinite(state.player.scale) ? state.player.scale : 1;
@@ -715,7 +787,8 @@
       ctx.fillStyle = '#d8e6dc';
       ctx.fillText(perfText, 30, 61, perfWidth - 18);
     }
-    drawEducationPanel(ctx, canvas, state, mobile ? 52 : 78);
+    const survivalPanelBottom = drawHealthBar(ctx, canvas, state, mobile ? 52 : 78);
+    drawEducationPanel(ctx, canvas, state, survivalPanelBottom);
 
     drawHotbar(ctx, canvas, state);
     drawMobileControls(ctx, canvas, state);

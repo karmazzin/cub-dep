@@ -1612,6 +1612,10 @@
       && hasSpawnTentSite(state, seed, spawn.x, spawn.z);
   }
 
+  function getWorldSpawn3D(state) {
+    return findWorldSpawn3D(state, worldSeed(state));
+  }
+
   function isReplaceableForTent(id) {
     return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA
       || id === BLOCK.DRY_BUSH || id === BLOCK.ALGAE || id === BLOCK.TALL_ALGAE;
@@ -1656,6 +1660,283 @@
     if (!state || !state.world || !lootTable) return;
     if (!state.world.chests) state.world.chests = {};
     state.world.chests[`${x},${y},${z}`] = { lootTable };
+  }
+
+  const BLASTER_MINER_SAFE_CODE = 'если пришел с миром - забирай';
+  const BLASTER_MINER_NOTE_TEXT = 'пароль от сейфа: "если пришел с миром - забирай"';
+
+  function noteStack(text, readOnly) {
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    if (!item || !Number.isFinite(item.NOTE)) return null;
+    const data = Game.inventory3d && Game.inventory3d.createNoteData
+      ? Game.inventory3d.createNoteData(text, readOnly)
+      : { text: String(text || ''), readOnly: !!readOnly };
+    return { id: item.NOTE, count: 1, data };
+  }
+
+  function emptyChestSlots() {
+    return Array.from({ length: 36 }, () => null);
+  }
+
+  function dynamiteIds() {
+    const config = Game.interaction3d && Game.interaction3d.DYNAMITE_CONFIG;
+    return Object.keys(config || {}).map(Number).filter((id) => Number.isFinite(id)).sort((a, b) => a - b);
+  }
+
+  function blasterMinerSafeSlots() {
+    const slots = emptyChestSlots();
+    const ids = dynamiteIds();
+    ids.forEach((id, index) => {
+      slots[index] = { id, count: 1 };
+    });
+    if (ids.length) slots[ids.length] = { id: BLOCK.TNT_REMOTE, count: ids.length };
+    return slots;
+  }
+
+  function setStructureChest(state, x, y, z, slots, extra = {}) {
+    if (!state || !state.world) return;
+    if (!state.world.chests) state.world.chests = {};
+    state.world.chests[`${x},${y},${z}`] = {
+      slots,
+      lootGenerated: true,
+      ...extra,
+    };
+  }
+
+  function registerBlasterMinerHouse(state, house) {
+    if (!state || !state.world || !house) return;
+    if (!Array.isArray(state.world.blasterMinerHouses)) state.world.blasterMinerHouses = [];
+    const existing = state.world.blasterMinerHouses.find((item) => item && item.key === house.key);
+    if (existing) Object.assign(existing, house);
+    else state.world.blasterMinerHouses.push(house);
+  }
+
+  function blasterMinerHouseCandidates(state) {
+    const world = state && state.world;
+    if (!world || !state.worldMeta) return [];
+    const seed = worldSeed(state);
+    const count = 2 + Math.floor(noise2(seed + 5601, 0, 0) * 3);
+    const candidates = [];
+    const margin = Math.min(180, Math.max(36, Math.floor(Math.min(world.w, world.d) * 0.12)));
+    for (let i = 0; i < count; i += 1) {
+      const angle = (i / count) * Math.PI * 2 + noise2(seed + 5603, i, 0) * 0.8;
+      const radius = Math.min(world.w, world.d) * (0.28 + noise2(seed + 5605, i, 0) * 0.28);
+      let x = Math.round(world.w * 0.5 + Math.cos(angle) * radius);
+      let z = Math.round(world.d * 0.5 + Math.sin(angle) * radius);
+      x = Math.max(margin, Math.min(world.w - margin, x));
+      z = Math.max(margin, Math.min(world.d - margin, z));
+      if (!farFromSpawn(world, x, z, 72)) {
+        x = Math.max(margin, Math.min(world.w - margin, x + (x < world.w / 2 ? 72 : -72)));
+        z = Math.max(margin, Math.min(world.d - margin, z + (z < world.d / 2 ? 72 : -72)));
+      }
+      const cave = nearestCaveFeature(state, x, z, 260);
+      if (cave) {
+        x = Math.round((x * 2 + cave.x) / 3);
+        z = Math.round((z * 2 + cave.z) / 3);
+      }
+      candidates.push({
+        key: `blaster-miner-house-${i}`,
+        type: 'blaster_miner_house',
+        x,
+        z,
+        cave: cave ? { x: cave.endX, y: cave.endY, z: cave.endZ } : null,
+        generated: false,
+      });
+    }
+    return candidates;
+  }
+
+  function nearestCaveFeature(state, x, z, radius) {
+    const world = state && state.world;
+    if (!world) return null;
+    const entrances = getCaveEntrancesInArea3D(state, x - radius, z - radius, x + radius, z + radius)
+      .filter((item) => item && item.type === 'through');
+    let best = null;
+    for (const entrance of entrances) {
+      const dist = Math.hypot(entrance.x - x, entrance.z - z);
+      if (!best || dist < best.dist) best = { entrance, dist };
+    }
+    return best ? best.entrance : null;
+  }
+
+  function surfaceYForStructure(state, x, z) {
+    if (!state || !state.world) return 24;
+    for (let y = state.world.h - 2; y >= 1; y -= 1) {
+      const id = getBlock3D(state, x, y, z);
+      if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA) return y;
+    }
+    return Math.max(5, Math.min(state.world.h - 8, terrainHeight(worldSeed(state), x, z)));
+  }
+
+  function fillBox(state, minX, minY, minZ, maxX, maxY, maxZ, id) {
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let z = minZ; z <= maxZ; z += 1) {
+        for (let x = minX; x <= maxX; x += 1) setBlock3D(state, x, y, z, id);
+      }
+    }
+  }
+
+  function clearBox(state, minX, minY, minZ, maxX, maxY, maxZ) {
+    fillBox(state, minX, minY, minZ, maxX, maxY, maxZ, BLOCK.AIR);
+  }
+
+  function carveTunnelLine(state, from, to) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz)));
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      const x = Math.round(from.x + dx * t);
+      const y = Math.round(from.y + dy * t);
+      const z = Math.round(from.z + dz * t);
+      clearBox(state, x - 1, y, z - 1, x + 1, y + 2, z + 1);
+      if (y - 1 >= 1) {
+        for (let sx = x - 1; sx <= x + 1; sx += 1) {
+          for (let sz = z - 1; sz <= z + 1; sz += 1) {
+            if (getBlock3D(state, sx, y - 1, sz) === BLOCK.AIR) setBlock3D(state, sx, y - 1, sz, BLOCK.STONE);
+          }
+        }
+      }
+    }
+  }
+
+  function buildAbandonedHouseShell(state, x, baseY, z) {
+    clearBox(state, x - 4, baseY, z - 4, x + 4, baseY + 6, z + 4);
+    fillBox(state, x - 4, baseY - 1, z - 4, x + 4, baseY - 1, z + 4, BLOCK.STONE);
+    fillBox(state, x - 3, baseY, z - 3, x + 3, baseY, z + 3, BLOCK.PLANK);
+    for (let y = baseY + 1; y <= baseY + 3; y += 1) {
+      for (let xx = x - 3; xx <= x + 3; xx += 1) {
+        setBlock3D(state, xx, y, z - 3, BLOCK.WOOD);
+        setBlock3D(state, xx, y, z + 3, BLOCK.WOOD);
+      }
+      for (let zz = z - 2; zz <= z + 2; zz += 1) {
+        setBlock3D(state, x - 3, y, zz, BLOCK.WOOD);
+        setBlock3D(state, x + 3, y, zz, BLOCK.WOOD);
+      }
+    }
+    clearBox(state, x - 1, baseY + 1, z - 3, x + 1, baseY + 2, z - 3);
+    clearBox(state, x - 3, baseY + 2, z, x - 3, baseY + 2, z + 1);
+    clearBox(state, x + 3, baseY + 2, z - 1, x + 3, baseY + 2, z);
+    for (let dx = -4; dx <= 4; dx += 1) {
+      const roofY = baseY + 4 + Math.max(0, 3 - Math.abs(dx)) % 2;
+      for (let zz = z - 4; zz <= z + 4; zz += 1) setBlock3D(state, x + dx, roofY, zz, dx % 2 === 0 ? BLOCK.PLANK : BLOCK.WOOD);
+    }
+    setBlock3D(state, x + 2, baseY + 1, z + 1, BLOCK.COBWEB);
+    setBlock3D(state, x - 2, baseY + 1, z + 2, BLOCK.MOSS);
+  }
+
+  function buildBlasterMinerInterior(state, x, baseY, z) {
+    const slots = emptyChestSlots();
+    slots[0] = noteStack(BLASTER_MINER_NOTE_TEXT, true);
+    setBlock3D(state, x + 2, baseY + 1, z + 2, BLOCK.CHEST);
+    setStructureChest(state, x + 2, baseY + 1, z + 2, slots);
+  }
+
+  function buildStairToBasement(state, x, baseY, z) {
+    let sx = x - 1;
+    let sy = baseY;
+    const sz = z + 1;
+    for (let i = 0; i < 8; i += 1) {
+      sx += 1;
+      sy -= 1;
+      clearBox(state, sx - 1, sy, sz - 1, sx + 1, sy + 2, sz + 1);
+      fillBox(state, sx - 1, sy - 1, sz - 1, sx + 1, sy - 1, sz + 1, BLOCK.STONE);
+    }
+    return { x: sx, y: sy, z: sz };
+  }
+
+  function buildBlasterMinerBasementAndSafe(state, entry, caveTarget) {
+    const bx = entry.x + 4;
+    const by = Math.max(4, entry.y);
+    const bz = entry.z;
+    clearBox(state, bx - 3, by, bz - 3, bx + 3, by + 3, bz + 3);
+    fillBox(state, bx - 4, by - 1, bz - 4, bx + 4, by - 1, bz + 4, BLOCK.STONE);
+    for (let x = bx - 4; x <= bx + 4; x += 1) {
+      for (let z = bz - 4; z <= bz + 4; z += 1) {
+        if (Math.abs(x - bx) === 4 || Math.abs(z - bz) === 4) {
+          setBlock3D(state, x, by, z, BLOCK.STONE);
+          setBlock3D(state, x, by + 1, z, BLOCK.STONE);
+          setBlock3D(state, x, by + 2, z, BLOCK.STONE);
+        }
+        setBlock3D(state, x, by + 4, z, BLOCK.STONE);
+      }
+    }
+    const safe = { x: bx + 1, y: by + 4, z: bz - 1 };
+    setBlock3D(state, safe.x, safe.y, safe.z, BLOCK.STONE_CHEST);
+    setBlock3D(state, safe.x, safe.y - 1, safe.z, BLOCK.AIR);
+    setStructureChest(state, safe.x, safe.y, safe.z, blasterMinerSafeSlots(), { code: BLASTER_MINER_SAFE_CODE });
+    carveTunnelLine(state, { x: bx + 3, y: by, z: bz }, caveTarget || { x: bx + 42, y: Math.max(5, by - 8), z: bz + 18 });
+    return { basement: { x: bx, y: by, z: bz }, safe };
+  }
+
+  function createBlasterMinerHouseAt3D(state, centerX, centerZ, options = {}) {
+    if (!state || !state.world) return null;
+    const world = state.world;
+    const x = Math.max(8, Math.min(world.w - 9, Math.round(centerX)));
+    const z = Math.max(8, Math.min(world.d - 9, Math.round(centerZ)));
+    const groundY = Number.isFinite(options.groundY) ? options.groundY : surfaceYForStructure(state, x, z);
+    if (!options.allowNearSpawn && !farFromSpawn(world, x, z, 56)) return null;
+    const baseY = Math.max(8, Math.min(world.h - 12, groundY + 1));
+    buildAbandonedHouseShell(state, x, baseY, z);
+    buildBlasterMinerInterior(state, x, baseY, z);
+    const stairEnd = buildStairToBasement(state, x, baseY, z);
+    const cave = options.cave || nearestCaveFeature(state, x, z, 260);
+    const caveTarget = cave ? { x: cave.endX || cave.x, y: cave.endY || Math.max(5, baseY - 18), z: cave.endZ || cave.z } : null;
+    const underground = buildBlasterMinerBasementAndSafe(state, stairEnd, caveTarget);
+    const key = options.key || `blaster-miner-house-${x}-${z}`;
+    const house = {
+      key,
+      type: 'blaster_miner_house',
+      x,
+      y: baseY,
+      z,
+      generated: true,
+      noteChest: { x: x + 2, y: baseY + 1, z: z + 2 },
+      safeChest: underground.safe,
+      basement: underground.basement,
+      cave: caveTarget,
+    };
+    registerBlasterMinerHouse(state, house);
+    return house;
+  }
+
+  function getBlasterMinerHouses3D(state) {
+    const generated = state && state.world && Array.isArray(state.world.blasterMinerHouses) ? state.world.blasterMinerHouses : [];
+    const byKey = new Map();
+    for (const candidate of blasterMinerHouseCandidates(state)) byKey.set(candidate.key, candidate);
+    for (const house of generated) byKey.set(house.key, house);
+    return Array.from(byKey.values());
+  }
+
+  function generateBlasterMinerHousesForColumn(state, bounds) {
+    if (!state || !state.world || state.worldMeta && state.worldMeta.currentDimension === 'underground') return;
+    const generated = state.world.blasterMinerHouses || [];
+    for (const candidate of blasterMinerHouseCandidates(state)) {
+      if (generated.some((house) => house && house.key === candidate.key && house.generated)) continue;
+      if (candidate.x < bounds.minX || candidate.x >= bounds.maxX || candidate.z < bounds.minZ || candidate.z >= bounds.maxZ) continue;
+      createBlasterMinerHouseAt3D(state, candidate.x, candidate.z, {
+        key: candidate.key,
+        cave: candidate.cave,
+      });
+    }
+  }
+
+  function ensureBlasterMinerHousesAroundPlayer3D(state, radius = 40) {
+    if (!state || !state.world || !state.player || state.worldMeta && state.worldMeta.currentDimension === 'underground') return 0;
+    const generated = state.world.blasterMinerHouses || [];
+    let created = 0;
+    for (const candidate of blasterMinerHouseCandidates(state)) {
+      if (generated.some((house) => house && house.key === candidate.key && house.generated)) continue;
+      if (Math.hypot(candidate.x - state.player.x, candidate.z - state.player.z) > radius) continue;
+      const house = createBlasterMinerHouseAt3D(state, candidate.x, candidate.z, {
+        key: candidate.key,
+        cave: candidate.cave,
+        allowNearSpawn: true,
+      });
+      if (house) created += 1;
+    }
+    return created;
   }
 
   function spawnTentLootTableForBiome(biome) {
@@ -2855,6 +3136,7 @@
       else world.suppressedDirtyChunks.clear();
     }
     try {
+      generateBlasterMinerHousesForColumn(state, bounds);
       for (let x = Math.max(4, bounds.minX); x < Math.min(world.w - 4, bounds.maxX); x += 1) {
         for (let z = Math.max(4, bounds.minZ); z < Math.min(world.d - 4, bounds.maxZ); z += 1) {
           const biome = biomeAt(seed, x, z);
@@ -3064,6 +3346,7 @@
     perf.terrainMs = performance.now() - t0;
     t0 = performance.now();
     if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, effectiveRadius);
+    if (currentDimension(state) !== 'underground') generated += ensureBlasterMinerHousesAroundPlayer3D(state);
     perf.decorateMs = performance.now() - t0;
     t0 = performance.now();
     unloadDistantChunks3D(state, manualDistance ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE);
@@ -3105,6 +3388,8 @@
       if (Number.isFinite(savedPlayer.scale)) state.player.scale = savedPlayer.scale;
       if (Number.isFinite(savedPlayer.targetScale)) state.player.targetScale = savedPlayer.targetScale;
       else if (Number.isFinite(savedPlayer.scale)) state.player.targetScale = savedPlayer.scale;
+      if (Number.isFinite(savedPlayer.maxHealth)) state.player.maxHealth = Math.max(1, savedPlayer.maxHealth);
+      if (Number.isFinite(savedPlayer.health)) state.player.health = Math.max(1, Math.min(state.player.maxHealth || 100, savedPlayer.health));
     } else {
       const spawn = findWorldSpawn3D(state, seed);
       state.player.x = spawn.x + 0.5;
@@ -3132,6 +3417,7 @@
     saveAllModifiedChunks3D,
     saveModifiedChunks3D,
     getBiomeAt3D,
+    getWorldSpawn3D,
     seedHasDefaultSpawnBiome3D,
     getCaveEntrancesInArea3D,
     getPortalRuins3D,
@@ -3140,6 +3426,9 @@
     getSurfaceSpawnY3D,
     createBearDenAt3D,
     getBearDens3D,
+    createBlasterMinerHouseAt3D,
+    getBlasterMinerHouses3D,
+    ensureBlasterMinerHousesAroundPlayer3D,
     dimensionWorldId,
     currentStorageWorldId,
     BIOME_LABELS,

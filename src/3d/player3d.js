@@ -14,6 +14,8 @@
   const MIN_COLLISION_HEIGHT = 0.22;
   const MAX_COLLISION_RADIUS = 8;
   const MAX_COLLISION_HEIGHT = 64;
+  const DAMAGE_COOLDOWN = 0.65;
+  const HAZARD_TICK = 0.55;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -173,6 +175,116 @@
     return false;
   }
 
+  function getOverlappingBlocks(state) {
+    const player = state.player;
+    const radius = scaledRadius(player);
+    const height = scaledHeight(player);
+    const minX = Math.floor(player.x - radius);
+    const maxX = Math.floor(player.x + radius);
+    const minY = Math.floor(player.y + 0.08 * playerScale(player));
+    const maxY = Math.floor(player.y + height * 0.9);
+    const minZ = Math.floor(player.z - radius);
+    const maxZ = Math.floor(player.z + radius);
+    const ids = new Set();
+    for (let yy = minY; yy <= maxY; yy += 1) {
+      for (let zz = minZ; zz <= maxZ; zz += 1) {
+        for (let xx = minX; xx <= maxX; xx += 1) ids.add(getBlock3D(state, xx, yy, zz));
+      }
+    }
+    return ids;
+  }
+
+  function isSurvival(state) {
+    return !!(state && state.worldMeta && state.worldMeta.mode === 'survival');
+  }
+
+  function setNotice(state, text, timer = 1.45) {
+    if (!state || !state.ui) return;
+    state.ui.noticeText = text;
+    state.ui.noticeTimer = timer;
+  }
+
+  function fallbackSurfaceY(state, x, z) {
+    if (!state || !state.world) return 1;
+    const bx = clamp(Math.floor(x), 1, state.world.w - 2);
+    const bz = clamp(Math.floor(z), 1, state.world.d - 2);
+    for (let y = state.world.h - 2; y >= 1; y -= 1) {
+      if (isSolidBlock3D(getBlock3D(state, bx, y, bz))) return Math.min(state.world.h - 2, y + 1);
+    }
+    return Math.min(state.world.h - 2, 1);
+  }
+
+  function respawnPosition(state) {
+    const world = state && state.world;
+    if (!world) return { x: 0.5, y: 1, z: 0.5 };
+    const generation = Game.generation3d;
+    const spawn = generation && generation.getWorldSpawn3D ? generation.getWorldSpawn3D(state) : null;
+    const sx = spawn && Number.isFinite(spawn.x) ? spawn.x : Math.floor(world.w / 2);
+    const sz = spawn && Number.isFinite(spawn.z) ? spawn.z : Math.floor(world.d / 2);
+    const x = clamp(sx + 0.5, 0.5, world.w - 0.5);
+    const z = clamp(sz + 0.5, 0.5, world.d - 0.5);
+    const surfaceY = generation && generation.getSurfaceSpawnY3D
+      ? generation.getSurfaceSpawnY3D(state, sx, sz)
+      : fallbackSurfaceY(state, sx, sz);
+    const y = clamp(Number.isFinite(surfaceY) ? surfaceY : fallbackSurfaceY(state, sx, sz), 1, world.h - 1);
+    return { x, y, z };
+  }
+
+  function respawnPlayer(state) {
+    const player = state.player;
+    const spawn = respawnPosition(state);
+    player.health = player.maxHealth || 100;
+    player.damageCooldown = 1.2;
+    player.damageFlash = 0;
+    player.hazardTimer = 0;
+    player.fallSpeed = 0;
+    player.vx = 0;
+    player.vy = 0;
+    player.vz = 0;
+    player.x = spawn.x;
+    player.y = spawn.y;
+    player.z = spawn.z;
+    player.onGround = false;
+    setNotice(state, 'Вы погибли и возродились', 2.4);
+  }
+
+  function applyPlayerDamage3D(state, amount, reason = 'урон', options = {}) {
+    const player = state && state.player;
+    if (!player || !isSurvival(state)) return false;
+    if (!Number.isFinite(player.maxHealth) || player.maxHealth <= 0) player.maxHealth = 100;
+    if (!Number.isFinite(player.health) || player.health <= 0) player.health = player.maxHealth;
+    const ignoreCooldown = !!(options && options.ignoreCooldown);
+    if (!ignoreCooldown && (player.damageCooldown || 0) > 0) return false;
+    const damage = Math.max(0, Math.round(amount || 0));
+    if (damage <= 0) return false;
+    player.health = Math.max(0, player.health - damage);
+    player.damageCooldown = Number.isFinite(options.cooldown) ? Math.max(0, options.cooldown) : DAMAGE_COOLDOWN;
+    player.damageFlash = 0.28;
+    setNotice(state, `Урон: ${reason} (-${damage})`, 1.4);
+    if (player.health <= 0) respawnPlayer(state);
+    return true;
+  }
+
+  function updateSurvivalHazards(state, dt, inLiquid) {
+    const player = state.player;
+    player.damageCooldown = Math.max(0, (player.damageCooldown || 0) - dt);
+    player.damageFlash = Math.max(0, (player.damageFlash || 0) - dt);
+    if (!isSurvival(state)) return;
+    const blocks = getOverlappingBlocks(state);
+    player.hazardTimer = Math.max(0, (player.hazardTimer || 0) - dt);
+    if (player.hazardTimer <= 0) {
+      if (blocks.has(BLOCK.LAVA)) {
+        applyPlayerDamage3D(state, 8, 'лава', { ignoreCooldown: true, cooldown: 0.2 });
+        player.hazardTimer = HAZARD_TICK;
+      } else if (blocks.has(BLOCK.CACTUS)) {
+        applyPlayerDamage3D(state, 2, 'кактус', { ignoreCooldown: true, cooldown: 0.15 });
+        player.hazardTimer = HAZARD_TICK;
+      }
+    }
+    if (inLiquid || player.vy >= 0) player.fallSpeed = 0;
+    else player.fallSpeed = Math.max(player.fallSpeed || 0, -player.vy);
+  }
+
   function overlapsColumn(player, x, z) {
     const radius = scaledRadius(player);
     const minX = player.x - radius;
@@ -232,6 +344,8 @@
 
   function updatePlayer3D(state, inputState, mouse, dt, actions = {}) {
     const player = state.player;
+    if (!Number.isFinite(player.maxHealth) || player.maxHealth <= 0) player.maxHealth = 100;
+    if (!Number.isFinite(player.health) || player.health <= 0) player.health = player.maxHealth;
     updatePlayerScale(player, dt);
     resolvePlayerOverlap(state);
     const scale = playerScale(player);
@@ -266,6 +380,9 @@
     const forward = clamp((inputState.keys.KeyW ? 1 : 0) - (inputState.keys.KeyS ? 1 : 0) + mobileForward, -1, 1);
     const strafe = clamp((inputState.keys.KeyD ? 1 : 0) - (inputState.keys.KeyA ? 1 : 0) + mobileStrafe, -1, 1);
     const inLiquid = isInLiquid(state);
+    const wasOnGround = player.onGround;
+    const impactSpeed = player.fallSpeed || 0;
+    updateSurvivalHazards(state, dt, inLiquid);
     const descending = inputState.keys.ShiftLeft || inputState.keys.ShiftRight;
     const sprinting = !player.flying && !inLiquid && descending;
     const speed = (inLiquid ? WALK_SPEED * 0.55 : WALK_SPEED) * (sprinting ? SPRINT_MULTIPLIER : 1) * scale;
@@ -323,13 +440,21 @@
       remaining -= step;
     }
 
+    if (!wasOnGround && player.onGround && !inLiquid && impactSpeed > 11) {
+      applyPlayerDamage3D(state, (impactSpeed - 10) * 4, 'падение', { cooldown: 0.35 });
+      player.fallSpeed = 0;
+    }
+
     if (player.y < -12) {
-      player.x = state.world.w / 2 + 0.5;
-      player.y = state.world.h;
-      player.z = state.world.d / 2 + 0.5;
+      const spawn = respawnPosition(state);
+      player.x = spawn.x;
+      player.y = spawn.y;
+      player.z = spawn.z;
+      player.vx = 0;
       player.vy = 0;
+      player.vz = 0;
     }
   }
 
-  Game.player3d = { updatePlayer3D };
+  Game.player3d = { updatePlayer3D, applyPlayerDamage3D };
 })();

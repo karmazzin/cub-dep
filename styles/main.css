@@ -292,6 +292,62 @@ body {
   gap: 6px;
 }
 
+.inventory-craft-list {
+  display: grid;
+  gap: 8px;
+}
+
+.inventory-craft-recipe {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.inventory-craft-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: rgba(244, 240, 232, 0.78);
+  font-size: 13px;
+}
+
+.inventory-craft-main strong {
+  color: #fff8e8;
+  font-size: 15px;
+}
+
+.inventory-craft-missing {
+  color: #ff9d7a;
+}
+
+.inventory-craft-result {
+  display: grid;
+  grid-template-columns: 54px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.inventory-craft-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 223, 122, 0.48);
+  background: rgba(255, 223, 122, 0.16);
+  color: #fff8e8;
+  font: inherit;
+  cursor: pointer;
+}
+
+.inventory-craft-button:disabled {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(244, 240, 232, 0.36);
+  cursor: default;
+}
+
 .inventory-cursor-item {
   position: fixed;
   z-index: 20;
@@ -305,6 +361,90 @@ body {
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 223, 122, 0.54);
   box-sizing: border-box;
+}
+
+.note-editor-root {
+  position: fixed;
+  inset: 0;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: rgba(6, 8, 9, 0.68);
+  pointer-events: auto;
+}
+
+.note-editor-panel {
+  display: grid;
+  grid-template-rows: auto minmax(180px, 1fr) auto;
+  gap: 10px;
+  width: min(680px, 100%);
+  height: min(560px, calc(100vh - 48px));
+  padding: 14px;
+  box-sizing: border-box;
+  border: 2px solid #2d2419;
+  background: #d9c891;
+  color: #2b2119;
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 245, 190, 0.28),
+    0 18px 44px rgba(0, 0, 0, 0.52);
+  font-family: "Courier New", monospace;
+  image-rendering: pixelated;
+}
+
+.note-editor-head,
+.note-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-editor-head h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.note-editor-text {
+  width: 100%;
+  min-width: 0;
+  resize: none;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 2px solid #6b5130;
+  background:
+    repeating-linear-gradient(0deg, rgba(80, 58, 32, 0.08) 0, rgba(80, 58, 32, 0.08) 1px, transparent 1px, transparent 22px),
+    #f0e6c8;
+  color: #2b2119;
+  font: 16px/1.4 "Courier New", monospace;
+  letter-spacing: 0;
+  outline: none;
+}
+
+.note-editor-text[readonly] {
+  background:
+    repeating-linear-gradient(0deg, rgba(80, 58, 32, 0.08) 0, rgba(80, 58, 32, 0.08) 1px, transparent 1px, transparent 22px),
+    #e6d6a6;
+}
+
+.note-editor-close,
+.note-editor-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 2px solid #4c3922;
+  background: #8f6a3d;
+  color: #fff3cf;
+  font: 14px "Courier New", monospace;
+  cursor: pointer;
+}
+
+.note-editor-close {
+  width: 36px;
+  padding: 0;
 }
 
 .menu-root {

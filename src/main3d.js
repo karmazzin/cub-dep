@@ -154,6 +154,7 @@
       chunkRenderDistance,
       spawnBiome,
       spawnBiomeSeedSearch: form.spawnBiomeSeedSearch === true,
+      botsEnabled: form.botsEnabled === true,
       worldType: 'normal',
       singleBiome: 'forest',
       cavernBiome: 'mix',
@@ -465,9 +466,12 @@
 
   function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main', options = {}) {
     const isPause = context === 'pause';
+    const creatingBotWorld = !isPause && view === 'bot-world';
     const name = state && state.worldMeta && state.worldMeta.name ? state.worldMeta.name : 'Мир';
     const seed = state && state.worldMeta && state.worldMeta.seed ? state.worldMeta.seed : '';
-    const subtitle = isPause ? `${escapeHtml(name)}${seed ? ` / ${escapeHtml(seed)}` : ''}` : '3D voxel survival prototype';
+    const subtitle = isPause
+      ? `${escapeHtml(name)}${seed ? ` / ${escapeHtml(seed)}` : ''}`
+      : (creatingBotWorld ? 'Мир с алгоритмическими ботами-игроками' : '3D voxel survival prototype');
 
     if (view === 'load') {
       menuRoot.innerHTML = `
@@ -512,7 +516,7 @@
       menuRoot.innerHTML = `
         <div class="menu-panel">
           <h1 class="menu-title">Класс</h1>
-          <p class="menu-subtitle">${escapeHtml(getEducationCountryLabel(countryId))}. Сейчас работают 1, 2, 3, 4, 5, 6 и 7 классы.</p>
+          <p class="menu-subtitle">${escapeHtml(getEducationCountryLabel(countryId))}. Сейчас работают 1-11 классы.</p>
           <div class="education-grid education-grid-grades">
             ${Array.from({ length: 11 }, (_, i) => i + 1).map((grade) => `
               <button class="menu-btn education-option" type="button" data-action="education-grade" data-country-id="${escapeHtml(countryId)}" data-grade="${grade}">
@@ -879,8 +883,8 @@
       ? `<button class="menu-btn" type="button" data-action="education-custom-edit-map" data-country-id="${escapeHtml(customPlay.countryId || 'ru')}" data-grade="${Number(customPlay.grade) || 1}" data-course-id="${escapeHtml(customPlay.courseId)}" data-lesson-id="${escapeHtml(customPlay.lessonId)}">Редактировать</button>`
       : '';
     menuRoot.innerHTML = `
-      <form class="menu-panel ${isPause ? 'pause-panel' : ''}" id="${isPause ? 'pauseMenuForm' : 'newWorldForm'}">
-        <h1 class="menu-title">${isPause ? 'Пауза' : 'Cubic Depths'}</h1>
+      <form class="menu-panel ${isPause ? 'pause-panel' : ''}" id="${isPause ? 'pauseMenuForm' : 'newWorldForm'}" data-bots-enabled="${creatingBotWorld ? 'true' : 'false'}">
+        <h1 class="menu-title">${isPause ? 'Пауза' : (creatingBotWorld ? 'Играть с ботами' : 'Cubic Depths')}</h1>
         <p class="menu-subtitle">${subtitle}</p>
         ${fields}
         <div class="menu-actions">
@@ -888,10 +892,11 @@
           ${creatorAction}
           ${editPlayAction}
           <button class="menu-btn" type="button" data-action="show-load" data-context="${context}">Загрузить мир</button>
+          ${!isPause && !creatingBotWorld ? '<button class="menu-btn" type="button" data-action="show-bot-world" data-context="start">Играть с ботами</button>' : ''}
           ${isPause ? '' : '<button class="menu-btn" type="button" data-action="show-education" data-context="start">Обучение</button>'}
           ${pauseExit}
         </div>
-        <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, F - полет в creative, ЛКМ - добыча, ПКМ - поставить, R - починить, P - предпросмотр, 1-9/0 - выбор блока.'}</div>
+        <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : (creatingBotWorld ? 'В мире появятся боты с разными характерами: они исследуют, строят, копают шахты, собирают дерево и охотятся алгоритмами без нейросетей.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, F - полет в creative, ЛКМ - добыча, ПКМ - поставить, R - починить, P - предпросмотр, 1-9/0 - выбор блока.')}</div>
       </form>
     `;
     syncSpawnSeedInput();
@@ -955,6 +960,8 @@
       pitch: state.player.pitch,
       scale: Number.isFinite(state.player.scale) ? state.player.scale : 1,
       targetScale: Number.isFinite(state.player.targetScale) ? state.player.targetScale : (Number.isFinite(state.player.scale) ? state.player.scale : 1),
+      maxHealth: Number.isFinite(state.player.maxHealth) ? state.player.maxHealth : 100,
+      health: Number.isFinite(state.player.health) ? state.player.health : 100,
       inventory: Array.isArray(state.player.inventory)
         ? state.player.inventory.map(saveSlot)
         : [],
@@ -983,6 +990,8 @@
       pitch: state.player.pitch,
       scale: Number.isFinite(state.player.scale) ? state.player.scale : 1,
       targetScale: Number.isFinite(state.player.targetScale) ? state.player.targetScale : (Number.isFinite(state.player.scale) ? state.player.scale : 1),
+      maxHealth: Number.isFinite(state.player.maxHealth) ? state.player.maxHealth : 100,
+      health: Number.isFinite(state.player.health) ? state.player.health : 100,
     };
   }
 
@@ -996,6 +1005,8 @@
     if (Number.isFinite(playerMeta.scale)) state.player.scale = playerMeta.scale;
     if (Number.isFinite(playerMeta.targetScale)) state.player.targetScale = playerMeta.targetScale;
     else if (Number.isFinite(playerMeta.scale)) state.player.targetScale = playerMeta.scale;
+    if (Number.isFinite(playerMeta.maxHealth)) state.player.maxHealth = Math.max(1, playerMeta.maxHealth);
+    if (Number.isFinite(playerMeta.health)) state.player.health = Math.max(1, Math.min(state.player.maxHealth || 100, playerMeta.health));
     state.player.vx = 0;
     state.player.vy = 0;
     state.player.vz = 0;
@@ -1141,6 +1152,8 @@
       if (Number.isFinite(state.worldMeta.player.scale)) state.player.scale = state.worldMeta.player.scale;
       if (Number.isFinite(state.worldMeta.player.targetScale)) state.player.targetScale = state.worldMeta.player.targetScale;
       else if (Number.isFinite(state.worldMeta.player.scale)) state.player.targetScale = state.worldMeta.player.scale;
+      if (Number.isFinite(state.worldMeta.player.maxHealth)) state.player.maxHealth = Math.max(1, state.worldMeta.player.maxHealth);
+      if (Number.isFinite(state.worldMeta.player.health)) state.player.health = Math.max(1, Math.min(state.player.maxHealth || 100, state.worldMeta.player.health));
     }
     if (Game.storage3d && Game.storage3d.listChunkKeys && state.worldMeta.id) {
       const storageId = dimensionStorageWorldId(state.worldMeta.id, currentDimension());
@@ -1149,6 +1162,7 @@
     }
     Game.generation3d.generateWorld3D(state);
     placeCustomLessonPlayerOnSurface();
+    if (Game.bots3d && Game.bots3d.ensureCompanionBots3D) Game.bots3d.ensureCompanionBots3D(state);
     if (!Game.renderer3d.init(canvas3d)) {
       menuRoot.innerHTML = '<div class="menu-panel">WebGL не удалось запустить.</div>';
       setScreen('menu');
@@ -1168,6 +1182,7 @@
       ...(form || {}),
       seed: resolvedSeed.seed,
       spawnBiomeSeedSearch: resolvedSeed.usedSearch,
+      botsEnabled: form && form.botsEnabled === true,
     });
     await startWorldFromMeta(meta);
   }
@@ -1509,6 +1524,16 @@
     state.ui.noticeTimer = 1.35;
   }
 
+  function parseHexColor(hex, fallback = [119, 119, 119]) {
+    const value = String(hex || '');
+    if (!/^#[0-9a-fA-F]{6}$/.test(value)) return fallback;
+    return [
+      parseInt(value.slice(1, 3), 16),
+      parseInt(value.slice(3, 5), 16),
+      parseInt(value.slice(5, 7), 16),
+    ];
+  }
+
   function ensureMapCanvas() {
     if (!mapRoot) return null;
     mapCanvas = mapRoot.querySelector('.map-canvas');
@@ -1534,20 +1559,12 @@
     const world = state.world;
     const labels = Game.generation3d.BIOME_LABELS || {};
     const colorCache = {};
-    for (const biome of Object.keys(labels)) {
-      const color = MAP_BIOME_COLORS[biome] || '#777777';
-      colorCache[biome] = [
-        parseInt(color.slice(1, 3), 16),
-        parseInt(color.slice(3, 5), 16),
-        parseInt(color.slice(5, 7), 16),
-      ];
-    }
+    for (const biome of Object.keys(labels)) colorCache[biome] = parseHexColor(MAP_BIOME_COLORS[biome] || '#777777');
     for (let py = 0; py < MAP_BITMAP_SIZE; py += 1) {
       const z = Math.floor((py + 0.5) / MAP_BITMAP_SIZE * world.d);
       for (let px = 0; px < MAP_BITMAP_SIZE; px += 1) {
         const x = Math.floor((px + 0.5) / MAP_BITMAP_SIZE * world.w);
-        const biome = Game.generation3d.getBiomeAt3D(state, x, z);
-        const color = colorCache[biome] || [119, 119, 119];
+        const color = colorCache[Game.generation3d.getBiomeAt3D(state, x, z)] || [119, 119, 119];
         const i = (px + py * MAP_BITMAP_SIZE) * 4;
         image.data[i] = color[0];
         image.data[i + 1] = color[1];
@@ -1559,6 +1576,21 @@
     state.ui.mapBitmap = canvas;
     state.ui.mapBitmapKey = key;
     return canvas;
+  }
+
+  function drawItemMapCells(ctx, mapX, mapY, scale, data) {
+    const cells = data && data.cells && data.cells.biome ? data.cells.biome : {};
+    ctx.save();
+    ctx.fillStyle = '#101316';
+    ctx.fillRect(mapX, mapY, state.world.w * scale, state.world.d * scale);
+    for (const [key, cell] of Object.entries(cells)) {
+      const parts = key.split(',').map(Number);
+      if (parts.length !== 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) continue;
+      const color = parseHexColor(MAP_BIOME_COLORS[cell && cell.biome] || '#777777');
+      ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+      ctx.fillRect(mapX + parts[0] * scale, mapY + parts[1] * scale, Math.max(1, scale), Math.max(1, scale));
+    }
+    ctx.restore();
   }
 
   function mapScreenToWorld(screenX, screenY) {
@@ -1879,6 +1911,165 @@
     }
   }
 
+  function drawBlasterMinerHouseIcon(ctx, x, y, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'square';
+    ctx.fillStyle = 'rgba(0,0,0,0.46)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.43, size * 0.92, size * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#6b5a44';
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.lineWidth = Math.max(1.5, size * 0.1);
+    ctx.fillRect(-size * 0.45, -size * 0.02, size * 0.72, size * 0.48);
+    ctx.strokeRect(-size * 0.45, -size * 0.02, size * 0.72, size * 0.48);
+
+    ctx.fillStyle = '#4d3928';
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.58, -size * 0.02);
+    ctx.lineTo(-size * 0.12, -size * 0.48);
+    ctx.lineTo(size * 0.38, -size * 0.02);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#201915';
+    ctx.fillRect(-size * 0.2, size * 0.2, size * 0.18, size * 0.26);
+    ctx.fillStyle = '#8a7b63';
+    ctx.fillRect(size * 0.06, size * 0.12, size * 0.14, size * 0.12);
+
+    const tx = size * 0.44;
+    const ty = size * 0.08;
+    ctx.fillStyle = '#b43a2f';
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.lineWidth = Math.max(1, size * 0.07);
+    ctx.fillRect(tx - size * 0.16, ty - size * 0.22, size * 0.32, size * 0.44);
+    ctx.strokeRect(tx - size * 0.16, ty - size * 0.22, size * 0.32, size * 0.44);
+    ctx.fillStyle = '#f2d28a';
+    ctx.fillRect(tx - size * 0.12, ty - size * 0.02, size * 0.24, size * 0.06);
+    ctx.fillStyle = '#2b2119';
+    ctx.font = `bold ${Math.max(7, Math.floor(size * 0.32))}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('T', tx, ty - size * 0.08);
+    ctx.restore();
+  }
+
+  function drawBlasterMinerHouses(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getBlasterMinerHouses3D) return;
+    const houses = generation.getBlasterMinerHouses3D(state);
+    if (!houses.length) return;
+    const iconSize = Math.max(12 * window.devicePixelRatio, Math.min(28 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const house of houses) {
+      if (!house || house.x < 0 || house.x > world.w || house.z < 0 || house.z > world.d) continue;
+      drawBlasterMinerHouseIcon(ctx, mapX + house.x * scale, mapY + house.z * scale, iconSize);
+    }
+  }
+
+  function drawSpawnTentIcon(ctx, x, y, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.fillStyle = 'rgba(0,0,0,0.46)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.44, size * 0.88, size * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#f2d28a';
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.lineWidth = Math.max(2, size * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.72, size * 0.34);
+    ctx.lineTo(0, -size * 0.6);
+    ctx.lineTo(size * 0.72, size * 0.34);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = '#7b4a2a';
+    ctx.lineWidth = Math.max(1.5, size * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(0, -size * 0.56);
+    ctx.lineTo(0, size * 0.34);
+    ctx.moveTo(-size * 0.72, size * 0.34);
+    ctx.lineTo(size * 0.72, size * 0.34);
+    ctx.stroke();
+
+    ctx.fillStyle = '#5b3522';
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.18, size * 0.34);
+    ctx.lineTo(0, -size * 0.06);
+    ctx.lineTo(size * 0.18, size * 0.34);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSpawnTentMarker(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getWorldSpawn3D) return;
+    const spawn = generation.getWorldSpawn3D(state);
+    if (!spawn || spawn.x < 0 || spawn.x > world.w || spawn.z < 0 || spawn.z > world.d) return;
+    const iconSize = Math.max(12 * window.devicePixelRatio, Math.min(28 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    drawSpawnTentIcon(ctx, mapX + (spawn.x + 0.5) * scale, mapY + (spawn.z + 0.5) * scale, iconSize);
+  }
+
+  function drawBotPlayerMarker(ctx, x, y, size, color, yaw) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI - (yaw || 0));
+    ctx.fillStyle = color || '#8fd0ff';
+    ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+    ctx.lineWidth = Math.max(1.5, size * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(size * 0.68, size * 0.74);
+    ctx.lineTo(0, size * 0.42);
+    ctx.lineTo(-size * 0.68, size * 0.74);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function botMapColor(bot) {
+    const value = Number(bot && bot.color);
+    if (!Number.isFinite(value)) return '#8fd0ff';
+    return `#${Math.max(0, Math.min(0xffffff, value)).toString(16).padStart(6, '0')}`;
+  }
+
+  function drawBotMarkers(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.entities || !Array.isArray(state.entities.bots)) return;
+    const bots = state.entities.bots;
+    if (!bots.length) return;
+    const size = Math.max(8 * window.devicePixelRatio, Math.min(18 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    ctx.save();
+    ctx.font = `${Math.max(9, 11 * window.devicePixelRatio)}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (const bot of bots) {
+      if (!bot || bot.x < 0 || bot.x > world.w || bot.z < 0 || bot.z > world.d) continue;
+      const x = mapX + bot.x * scale;
+      const y = mapY + bot.z * scale;
+      const color = botMapColor(bot);
+      drawBotPlayerMarker(ctx, x, y, size, color, bot.yaw || 0);
+      if (scale > 0.9) {
+        ctx.fillStyle = 'rgba(0,0,0,0.72)';
+        ctx.fillText(bot.name || 'Bot', x + 1, y + size * 0.82 + 1);
+        ctx.fillStyle = '#f5f0df';
+        ctx.fillText(bot.name || 'Bot', x, y + size * 0.82);
+      }
+    }
+    ctx.restore();
+  }
+
   function drawMapWaypoint(ctx, mapX, mapY, scale) {
     const waypoint = state && state.ui ? state.ui.mapWaypoint : null;
     if (!waypoint) return;
@@ -1926,8 +2117,9 @@
     const canvas = ensureMapCanvas();
     if (!canvas || !mapCtx || !state || !state.world) return;
     resizeMapCanvas();
-    const bitmap = ensureMapBitmap();
-    if (!bitmap) return;
+    const itemStack = state.ui.openItemMapStack || null;
+    const bitmap = itemStack ? null : ensureMapBitmap();
+    if (!itemStack && !bitmap) return;
     const ctx = mapCtx;
     const world = state.world;
     const width = canvas.width;
@@ -1948,15 +2140,24 @@
     ctx.fillStyle = '#07090a';
     ctx.fillRect(0, 0, width, height);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(bitmap, x, y, viewW, viewH);
+    if (itemStack && Game.inventory3d && Game.inventory3d.ensureMapData) {
+      drawItemMapCells(ctx, x, y, scale, Game.inventory3d.ensureMapData(itemStack));
+    } else {
+      ctx.drawImage(bitmap, x, y, viewW, viewH);
+    }
     ctx.strokeStyle = 'rgba(255,255,255,0.42)';
     ctx.lineWidth = Math.max(1, window.devicePixelRatio);
     ctx.strokeRect(x + 0.5, y + 0.5, viewW - 1, viewH - 1);
-    drawCreativeCaveEntrances(ctx, x, y, scale, width, height, world);
-    drawCreativePortalRuins(ctx, x, y, scale, world);
-    drawCreativeVillages(ctx, x, y, scale, world);
-    drawBearDens(ctx, x, y, scale, world);
+    if (!itemStack) {
+      drawCreativeCaveEntrances(ctx, x, y, scale, width, height, world);
+      drawCreativePortalRuins(ctx, x, y, scale, world);
+      drawCreativeVillages(ctx, x, y, scale, world);
+      drawBearDens(ctx, x, y, scale, world);
+      drawBlasterMinerHouses(ctx, x, y, scale, world);
+      drawSpawnTentMarker(ctx, x, y, scale, world);
+    }
     drawMapWaypoint(ctx, x, y, scale);
+    drawBotMarkers(ctx, x, y, scale, world);
 
     const playerX = x + state.player.x * scale;
     const playerY = y + state.player.z * scale;
@@ -1988,13 +2189,14 @@
   function renderMapRoot() {
     if (!mapRoot || !state || !state.worldMeta) return;
     const labels = Game.generation3d && Game.generation3d.BIOME_LABELS ? Game.generation3d.BIOME_LABELS : {};
+    const itemStack = state.ui.openItemMapStack || null;
     const name = escapeHtml(state.worldMeta.name || 'Мир');
     const seed = escapeHtml(state.worldMeta.seed || '');
     mapRoot.innerHTML = `
       <div class="map-toolbar">
         <div class="map-title">
-          <h2>Карта мира</h2>
-          <div class="map-subtitle">${name}${seed ? ` / ${seed}` : ''}</div>
+          <h2>${itemStack ? 'Карта' : 'Карта мира'}</h2>
+          <div class="map-subtitle">${itemStack ? 'Заполняется по исследованию, структуры скрыты' : `${name}${seed ? ` / ${seed}` : ''}`}</div>
         </div>
         <div class="map-actions">
           <button class="map-btn" type="button" data-map-action="center">К игроку</button>
@@ -2010,7 +2212,7 @@
               <span>${escapeHtml(labels[biome] || biome)}</span>
             </div>
           `).join('')}
-          <div class="map-legend-item">
+          ${itemStack ? '' : `<div class="map-legend-item">
             <span class="map-legend-swatch" style="background:#d6b45d"></span>
             <span>Деревня</span>
           </div>
@@ -2018,6 +2220,18 @@
             <span class="map-legend-swatch" style="background:#7a5a37"></span>
             <span>Берлога</span>
           </div>
+          <div class="map-legend-item">
+            <span class="map-legend-swatch" style="background:#b43a2f"></span>
+            <span>Дом взрывальщика-шахтера</span>
+          </div>
+          <div class="map-legend-item">
+            <span class="map-legend-swatch" style="background:#f2d28a"></span>
+            <span>Спавн</span>
+          </div>
+          <div class="map-legend-item">
+            <span class="map-legend-swatch" style="background:#8fd0ff"></span>
+            <span>Боты</span>
+          </div>`}
         </div>
         <div class="map-hint">ЛКМ - поставить цель, C - сбросить цель, колесо мыши - масштаб, перетаскивание - сдвиг, M или Escape - закрыть.</div>
       </div>
@@ -2029,11 +2243,19 @@
   function openMap(options = {}) {
     if (!state || screen !== 'playing') return;
     if (!options.allowAnyMode && (!state.worldMeta || state.worldMeta.mode !== 'creative')) {
-      setNotice('Карта доступна только в творческом режиме');
+      const mapStack = Game.inventory3d && Game.inventory3d.findFirstMapStack
+        ? Game.inventory3d.findFirstMapStack(state)
+        : null;
+      if (mapStack) {
+        openItemMap(mapStack);
+      } else {
+        setNotice('У вас в инвентаре нет карты');
+      }
       return;
     }
     input.resetMovement();
     if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
+    state.ui.openItemMapStack = null;
     state.ui.mapCenterX = state.player.x;
     state.ui.mapCenterZ = state.player.z;
     setScreen('map');
@@ -2044,11 +2266,25 @@
     if (!state || screen !== 'map') return;
     input.resetMovement();
     mapDrag = null;
+    if (state.ui) state.ui.openItemMapStack = null;
     if (mapCanvas) mapCanvas.classList.remove('is-dragging');
     setScreen('playing');
   }
 
   Game.openMap = openMap;
+  function openItemMap(stack) {
+    if (!state || screen !== 'playing' || !stack) return;
+    if (Game.inventory3d && Game.inventory3d.ensureMapData) Game.inventory3d.ensureMapData(stack);
+    if (Game.inventory3d && Game.inventory3d.updateInventoryMaps) Game.inventory3d.updateInventoryMaps(state);
+    input.resetMovement();
+    if (document.pointerLockElement === canvas3d && document.exitPointerLock) document.exitPointerLock();
+    state.ui.openItemMapStack = stack;
+    state.ui.mapCenterX = state.player.x;
+    state.ui.mapCenterZ = state.player.z;
+    setScreen('map');
+    renderMapRoot();
+  }
+  Game.openItemMap = openItemMap;
   Game.openChestInventory = openChestInventory;
 
   function centerMapOnPlayer() {
@@ -2233,6 +2469,7 @@
 
   function update(dt) {
     if (!state) return;
+    if (state.pause && state.pause.open) return;
     if (!state.perf) state.perf = {};
     state.ui.fpsFrames += 1;
     state.ui.fpsAccum += dt;
@@ -2256,10 +2493,16 @@
     state.perf.playerMs = performance.now() - t0;
     t0 = performance.now();
     if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+    state.ui.mapRevealTimer = Math.max(0, (state.ui.mapRevealTimer || 0) - dt);
+    if (state.ui.mapRevealTimer <= 0 && Game.inventory3d && Game.inventory3d.updateInventoryMaps) {
+      Game.inventory3d.updateInventoryMaps(state);
+      state.ui.mapRevealTimer = 1;
+    }
     state.perf.chunksMs = performance.now() - t0;
     updatePortalTravel(dt);
     t0 = performance.now();
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
+    if (Game.bots3d) Game.bots3d.updateBots3D(state, dt);
     state.perf.entitiesMs = performance.now() - t0;
     t0 = performance.now();
     Game.interaction3d.updateInteraction3D(state, input.input, actions, dt);
@@ -2272,6 +2515,13 @@
     t0 = performance.now();
     Game.fluids3d.updateFluids3D(state, dt);
     state.perf.fluidMs = performance.now() - t0;
+  }
+
+  function updateMapLiveBots(dt) {
+    if (!state || !state.worldMeta || !state.worldMeta.botsEnabled || !Game.bots3d) return;
+    const t0 = performance.now();
+    Game.bots3d.updateBots3D(state, dt);
+    if (state.perf) state.perf.entitiesMs = performance.now() - t0;
   }
 
   function loop(now) {
@@ -2288,6 +2538,7 @@
       }
     } else if ((screen === 'paused' || screen === 'inventory' || screen === 'map') && state) {
       if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+      if (screen === 'map') updateMapLiveBots(dt);
       triggerAutosave();
       Game.renderer3d.resize(canvas3d, overlay);
       const renderStart = performance.now();
@@ -2308,6 +2559,7 @@
       mode: data.get('mode') || 'survival',
       chunkRenderDistance: data.get('chunkRenderDistance') || 'auto',
       spawnBiome: data.get('spawnBiome') || 'any',
+      botsEnabled: event.target.dataset.botsEnabled === 'true',
     });
   });
 
@@ -2322,6 +2574,8 @@
       renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'load');
     } else if (action === 'back-menu') {
       renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'main');
+    } else if (action === 'show-bot-world') {
+      renderUnifiedMenu('start', 'bot-world');
     } else if (action === 'show-education') {
       openEducationMenu();
     } else if (action === 'change-education-country') {
@@ -2336,7 +2590,7 @@
     } else if (action === 'education-grade') {
       const grade = Number(target.dataset.grade) || 1;
       const countryId = target.dataset.countryId || 'ru';
-      if (grade !== 1 && grade !== 2 && grade !== 3 && grade !== 4 && grade !== 5 && grade !== 6 && grade !== 7) renderUnifiedMenu('start', 'education-unavailable', { countryId, grade });
+      if (grade < 1 || grade > 11) renderUnifiedMenu('start', 'education-unavailable', { countryId, grade });
       else if (event.shiftKey && grade === 5 && Game.education3d && Game.education3d.markGrade5ExamCompleted) {
         Game.education3d.markGrade5ExamCompleted(countryId);
         renderUnifiedMenu('start', 'education-subject', { countryId, grade });
@@ -2612,14 +2866,7 @@
   }
 
   window.addEventListener('keydown', (event) => {
-    const scaleUpKey = event.code === 'NumpadAdd' || event.code === 'Equal';
-    const scaleDownKey = event.code === 'NumpadSubtract' || event.code === 'Minus';
-    if ((scaleUpKey || scaleDownKey) && screen === 'inventory' && state && Game.interaction3d && Game.interaction3d.usePlayerScalePotionShortcut) {
-      const item = Game.interaction3d.ITEM || {};
-      const potionId = scaleUpKey ? item.GROW_POTION : item.SHRINK_POTION;
-      Game.interaction3d.usePlayerScalePotionShortcut(state, potionId);
-      input.input.scaleUpPressed = false;
-      input.input.scaleDownPressed = false;
+    if (state && state.ui && state.ui.noteOpen) {
       event.preventDefault();
       return;
     }

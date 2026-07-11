@@ -30,6 +30,7 @@
         worldType: worldMeta && worldMeta.worldType ? worldMeta.worldType : 'normal',
         singleBiome: worldMeta && worldMeta.singleBiome ? worldMeta.singleBiome : 'forest',
         cavernBiome: worldMeta && worldMeta.cavernBiome ? worldMeta.cavernBiome : 'mix',
+        botsEnabled: !!(worldMeta && worldMeta.botsEnabled),
         currentDimension: worldMeta && worldMeta.currentDimension ? worldMeta.currentDimension : 'overworld',
         portalLinks: worldMeta && Array.isArray(worldMeta.portalLinks) ? worldMeta.portalLinks.map((link) => ({ ...link })) : [],
         dimensionPlayers: worldMeta && worldMeta.dimensionPlayers ? { ...worldMeta.dimensionPlayers } : {},
@@ -59,6 +60,16 @@
         targetScale: worldMeta && worldMeta.player && Number.isFinite(worldMeta.player.targetScale)
           ? worldMeta.player.targetScale
           : (worldMeta && worldMeta.player && Number.isFinite(worldMeta.player.scale) ? worldMeta.player.scale : 1),
+        maxHealth: worldMeta && worldMeta.player && Number.isFinite(worldMeta.player.maxHealth)
+          ? Math.max(1, worldMeta.player.maxHealth)
+          : 100,
+        health: worldMeta && worldMeta.player && Number.isFinite(worldMeta.player.health)
+          ? Math.max(1, Math.min(worldMeta.player.maxHealth || 100, worldMeta.player.health))
+          : 100,
+        damageCooldown: 0,
+        damageFlash: 0,
+        hazardTimer: 0,
+        fallSpeed: 0,
         inventory: worldMeta && worldMeta.player && Array.isArray(worldMeta.player.inventory)
           ? worldMeta.player.inventory.map(cloneSlot)
           : [],
@@ -88,9 +99,13 @@
         mapBitmap: null,
         mapBitmapKey: '',
         mapWaypoint: null,
+        mapRevealTimer: 0,
+        openItemMapStack: null,
+        noteOpen: false,
       },
       entities: {
         sheep: [],
+        bots: [],
       },
       pause: {
         open: false,

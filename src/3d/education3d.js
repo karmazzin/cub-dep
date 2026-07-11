@@ -114,6 +114,70 @@
       { id: 'english_reading', label: 'Англоязычное чтение' },
       { id: 'creative', label: 'Творчество' },
     ],
+    8: [
+      { id: 'language', label: 'Русский язык' },
+      { id: 'literature', label: 'Литература' },
+      { id: 'algebra', label: 'Алгебра' },
+      { id: 'geometry', label: 'Геометрия' },
+      { id: 'history', label: 'История' },
+      { id: 'social', label: 'Обществознание' },
+      { id: 'geography', label: 'География' },
+      { id: 'biology', label: 'Биология' },
+      { id: 'physics', label: 'Физика' },
+      { id: 'chemistry', label: 'Химия' },
+      { id: 'informatics', label: 'Информатика' },
+      { id: 'foreign', label: 'Иностранный язык' },
+      { id: 'english_reading', label: 'Англоязычное чтение' },
+      { id: 'creative', label: 'Творчество' },
+    ],
+    9: [
+      { id: 'language', label: 'Русский язык' },
+      { id: 'literature', label: 'Литература' },
+      { id: 'algebra', label: 'Алгебра' },
+      { id: 'geometry', label: 'Геометрия' },
+      { id: 'history', label: 'История' },
+      { id: 'social', label: 'Обществознание' },
+      { id: 'geography', label: 'География' },
+      { id: 'biology', label: 'Биология' },
+      { id: 'physics', label: 'Физика' },
+      { id: 'chemistry', label: 'Химия' },
+      { id: 'informatics', label: 'Информатика' },
+      { id: 'foreign', label: 'Иностранный язык' },
+      { id: 'english_reading', label: 'Англоязычное чтение' },
+      { id: 'creative', label: 'Творчество' },
+    ],
+    10: [
+      { id: 'language', label: 'Русский язык' },
+      { id: 'literature', label: 'Литература' },
+      { id: 'algebra', label: 'Алгебра' },
+      { id: 'geometry', label: 'Геометрия' },
+      { id: 'history', label: 'История' },
+      { id: 'social', label: 'Обществознание' },
+      { id: 'geography', label: 'География' },
+      { id: 'biology', label: 'Биология' },
+      { id: 'physics', label: 'Физика' },
+      { id: 'chemistry', label: 'Химия' },
+      { id: 'informatics', label: 'Информатика' },
+      { id: 'foreign', label: 'Иностранный язык' },
+      { id: 'english_reading', label: 'Англоязычное чтение' },
+      { id: 'creative', label: 'Творчество' },
+    ],
+    11: [
+      { id: 'language', label: 'Русский язык' },
+      { id: 'literature', label: 'Литература' },
+      { id: 'algebra', label: 'Алгебра' },
+      { id: 'geometry', label: 'Геометрия' },
+      { id: 'history', label: 'История' },
+      { id: 'social', label: 'Обществознание' },
+      { id: 'geography', label: 'География' },
+      { id: 'biology', label: 'Биология' },
+      { id: 'physics', label: 'Физика' },
+      { id: 'chemistry', label: 'Химия' },
+      { id: 'informatics', label: 'Информатика' },
+      { id: 'foreign', label: 'Иностранный язык' },
+      { id: 'english_reading', label: 'Англоязычное чтение' },
+      { id: 'creative', label: 'Творчество' },
+    ],
   };
 
   const LETTER_BY_CHAR = {
@@ -2333,9 +2397,139 @@
     ];
   }
 
+  function retitleTasks(tasks, grade, label, fromGrade = 5) {
+    return tasks.map((task) => ({
+      ...task,
+      text: String(task.text || '')
+        .replace(new RegExp(`${fromGrade} класс`, 'g'), `${grade} класс`)
+        .replace('Русский язык,', `${label},`)
+        .replace('Математика,', `${label},`)
+        .replace('Литературное чтение,', `${label},`)
+        .replace('История,', `${label},`)
+        .replace('География,', `${label},`)
+        .replace('Биология,', `${label},`)
+        .replace('Иностранный язык,', `${label},`)
+        .replace('Творчество,', `${label},`)
+        .replace('Алгебра, 7 класс.', 'Алгебра.')
+        .replace('Геометрия, 7 класс', 'Геометрия')
+        .replace('Физика, 7 класс', 'Физика'),
+    }));
+  }
+
+  function lessonAdvancedAlgebraTasks(lesson, grade) {
+    const shift = 32 + Math.max(0, Number(grade) - 7) * 8;
+    return retitleTasks(lessonGrade5MathTasks(Math.min(100, lesson + shift)), grade, 'Алгебра', 5);
+  }
+
+  function lessonAdvancedGeometryTasks(lesson, grade) {
+    const distance = 3 + Math.max(0, Number(grade) - 7) + (lesson % 6);
+    return [
+      measureTask(`Геометрия, ${grade} класс, урок ${lesson}. Измерь отрезок не меньше ${distance} блоков и сравни его с моделью задачи.`, distance),
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.STONE, BLOCK.STONE, BLOCK.PLANK], text: `Геометрия, ${grade} класс, урок ${lesson}. Покажи точки, отрезок и подпись разными блоками.` },
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.PLANK, BLOCK.PLANK, BLOCK.PLANK, BLOCK.STONE], text: `Геометрия, ${grade} класс, урок ${lesson}. Построй схему угла, луча и вершины.` },
+      measureTask(`Геометрия, ${grade} класс, урок ${lesson}. Измерь сторону фигуры не меньше ${distance + 1} блоков.`, distance + 1),
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.SAND, BLOCK.SAND, BLOCK.STONE, BLOCK.STONE], text: `Геометрия, ${grade} класс, урок ${lesson}. Покажи треугольник и две отмеченные стороны.` },
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.PLANK, BLOCK.PLANK, BLOCK.PLANK, BLOCK.PLANK, BLOCK.STONE], text: `Геометрия, ${grade} класс, урок ${lesson}. Построй модель четырехугольника с диагональю.` },
+      measureTask(`Геометрия, ${grade} класс, урок ${lesson}. Измерь диагональ или высоту не меньше ${distance + 2} блоков.`, distance + 2),
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.WOOD, BLOCK.WOOD, BLOCK.LEAF, BLOCK.STONE], text: `Геометрия, ${grade} класс, урок ${lesson}. Покажи подобие фигур через две похожие формы.` },
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.STONE, BLOCK.PLANK, BLOCK.SAND, BLOCK.WOOD], text: `Геометрия, ${grade} класс, урок ${lesson}. Сравни стороны и углы разными материалами.` },
+      measureTask(`Геометрия, ${grade} класс, урок ${lesson}. Итог: измерь контрольный отрезок не меньше ${distance} блоков.`, distance),
+    ];
+  }
+
+  function lessonAdvancedPhysicsTasks(lesson, grade) {
+    const distance = 4 + Math.max(0, Number(grade) - 7) + (lesson % 5);
+    return [
+      measureTask(`Физика, ${grade} класс, урок ${lesson}. Измерь путь опыта линейкой: расстояние не меньше ${distance} блоков.`, distance),
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.STONE, BLOCK.WOOD, BLOCK.PLANK], text: `Физика, ${grade} класс, урок ${lesson}. Покажи тело, опору, измерительный прибор и дорожку.` },
+      { type: 'placeSet', blocks: [BLOCK.WATER, BLOCK.STONE, BLOCK.RULER, BLOCK.SAND], text: `Физика, ${grade} класс, урок ${lesson}. Собери модель вещества, среды и прибора.` },
+      measureTask(`Физика, ${grade} класс, урок ${lesson}. Измерь перемещение тела не меньше ${distance + 1} блоков.`, distance + 1),
+      { type: 'placeSet', blocks: [BLOCK.SAND, BLOCK.STONE, BLOCK.WOOD, BLOCK.WATER], text: `Физика, ${grade} класс, урок ${lesson}. Сравни материалы и среду для опыта.` },
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.PLANK, BLOCK.PLANK, BLOCK.STONE, BLOCK.WOOD], text: `Физика, ${grade} класс, урок ${lesson}. Построй модель движения по дорожке.` },
+      measureTask(`Физика, ${grade} класс, урок ${lesson}. Измерь больший путь не меньше ${distance + 2} блоков.`, distance + 2),
+      { type: 'placeSet', blocks: [BLOCK.RULER, BLOCK.WATER, BLOCK.SAND, BLOCK.STONE], text: `Физика, ${grade} класс, урок ${lesson}. Покажи наблюдение, измерение и результат опыта.` },
+      { type: 'placeSet', blocks: [BLOCK.STONE, BLOCK.STONE, BLOCK.RULER, BLOCK.PLANK], text: `Физика, ${grade} класс, урок ${lesson}. Сравни две точки, прибор и направление движения.` },
+      measureTask(`Физика, ${grade} класс, урок ${lesson}. Итог: измерь путь не меньше ${distance} блоков.`, distance),
+    ];
+  }
+
+  function lessonAdvancedSocialTasks(lesson, grade) {
+    const topic = topicByLesson(lesson, [
+      { to: 18, title: 'Человек и общество' },
+      { to: 36, title: 'Семья, школа и малая группа' },
+      { to: 54, title: 'Правила, права и обязанности' },
+      { to: 72, title: 'Экономика и труд' },
+      { to: 88, title: 'Государство и гражданин' },
+      { to: 100, title: 'Культура и итоговое повторение' },
+    ]);
+    const models = [
+      [[BLOCK.WOOD, BLOCK.PLANK, BLOCK.LEAF], 'семью или малую группу'],
+      [[BLOCK.PATH, BLOCK.STONE, BLOCK.PLANK], 'правило и путь его выполнения'],
+      [[BLOCK.CHEST, BLOCK.PLANK, BLOCK.GOLDEN_FLOWER], 'обмен, товар и ценность'],
+      [[BLOCK.PILLAR, BLOCK.STONE, BLOCK.PATH], 'государство, закон и гражданина'],
+      [[BLOCK.WOOD, BLOCK.LEAF, BLOCK.WATER], 'общество и среду жизни'],
+      [[BLOCK.STONE, BLOCK.PLANK, BLOCK.CHEST], 'труд, результат и хранение ресурсов'],
+      [[BLOCK.PATH, BLOCK.DIRT, BLOCK.LEAF], 'общую территорию и заботу о ней'],
+      [[BLOCK.PILLAR, BLOCK.PLANK, BLOCK.GOLDEN_FLOWER], 'культуру, символ и памятное место'],
+      [[BLOCK.WOOD, BLOCK.STONE, BLOCK.PLANK], 'договор между участниками'],
+      [[BLOCK.CHEST, BLOCK.PATH, BLOCK.STONE], 'итоговую общественную модель'],
+    ];
+    return models.map(([blocks, model]) => ({
+      type: 'placeSet',
+      blocks,
+      text: `Обществознание, ${grade} класс, урок ${lesson}. Тема: ${topic.title}. Построй модель "${model}": поставь ${blocks.map(blockName).join(', ')}.`,
+    }));
+  }
+
+  function lessonAdvancedChemistryTasks(lesson, grade) {
+    const topic = topicByLesson(lesson, [
+      { to: 18, title: 'Вещества и их свойства' },
+      { to: 36, title: 'Смеси и чистые вещества' },
+      { to: 54, title: 'Атомы, молекулы и элементы' },
+      { to: 72, title: 'Химические реакции' },
+      { to: 88, title: 'Растворы и вода' },
+      { to: 100, title: 'Безопасность и повторение' },
+    ]);
+    const models = [
+      [[BLOCK.STONE, BLOCK.SAND, BLOCK.WATER], 'твердое вещество, порошок и жидкость'],
+      [[BLOCK.WATER, BLOCK.SAND, BLOCK.GLASS || BLOCK.STONE], 'смесь и условный сосуд'],
+      [[BLOCK.STONE, BLOCK.STONE, BLOCK.PLANK], 'молекулу из двух атомов и связи'],
+      [[BLOCK.BLACKSTONE, BLOCK.STONE, BLOCK.WATER], 'исходные вещества и продукт реакции'],
+      [[BLOCK.WATER, BLOCK.ALGAE, BLOCK.SAND], 'раствор и примесь'],
+      [[BLOCK.STONE, BLOCK.PLANK, BLOCK.PLANK, BLOCK.STONE], 'цепочку атомов'],
+      [[BLOCK.WATER, BLOCK.DIRT, BLOCK.LEAF], 'вещество в природной среде'],
+      [[BLOCK.SAND, BLOCK.STONE, BLOCK.BLACKSTONE], 'сравнение свойств материалов'],
+      [[BLOCK.CHEST, BLOCK.WATER, BLOCK.STONE], 'лабораторное хранение и образец'],
+      [[BLOCK.WATER, BLOCK.SAND, BLOCK.STONE, BLOCK.PLANK], 'итоговую модель опыта'],
+    ];
+    return models.map(([blocks, model]) => ({
+      type: 'placeSet',
+      blocks: blocks.filter((block) => Number.isFinite(block)),
+      text: `Химия, ${grade} класс, урок ${lesson}. Тема: ${topic.title}. Собери модель "${model}": поставь ${blocks.filter((block) => Number.isFinite(block)).map(blockName).join(', ')}.`,
+    }));
+  }
+
   function getLessonTasks(subjectId, lesson, grade = 1) {
     const subject = subjectById(subjectId, grade).id;
     const safeLesson = clampLesson(lesson);
+    if (Number(grade) >= 8 && Number(grade) <= 11) {
+      const gradeNumber = Number(grade);
+      const shift = Math.min(100, safeLesson + 36 + (gradeNumber - 8) * 8);
+      if (subject === 'language') return retitleTasks(lessonGrade5LanguageTasks(shift), gradeNumber, 'Русский язык', 5);
+      if (subject === 'literature') return retitleTasks(lessonGrade3ReadingTasks(Math.min(100, safeLesson + 54)), gradeNumber, 'Литература', 3);
+      if (subject === 'algebra') return lessonAdvancedAlgebraTasks(safeLesson, gradeNumber);
+      if (subject === 'geometry') return lessonAdvancedGeometryTasks(safeLesson, gradeNumber);
+      if (subject === 'history') return retitleTasks(lessonGrade5HistoryTasks(shift), gradeNumber, 'История', 5);
+      if (subject === 'social') return lessonAdvancedSocialTasks(safeLesson, gradeNumber);
+      if (subject === 'geography') return retitleTasks(lessonGrade5GeographyTasks(shift), gradeNumber, 'География', 5);
+      if (subject === 'biology') return retitleTasks(lessonGrade5BiologyTasks(shift), gradeNumber, 'Биология', 5);
+      if (subject === 'physics') return lessonAdvancedPhysicsTasks(safeLesson, gradeNumber);
+      if (subject === 'chemistry') return lessonAdvancedChemistryTasks(safeLesson, gradeNumber);
+      if (subject === 'informatics') return lessonInformaticsTasks(safeLesson, gradeNumber);
+      if (subject === 'foreign') return retitleTasks(lessonGrade5ForeignTasks(shift), gradeNumber, 'Иностранный язык', 5);
+      if (subject === 'english_reading') return lessonEnglishReadingTasks(safeLesson);
+      if (subject === 'creative') return retitleTasks(lessonGrade3CreativeTasks(Math.min(100, safeLesson + 72)), gradeNumber, 'Творчество', 3);
+    }
     if (Number(grade) === 7) {
       if (subject === 'language') return lessonGrade5LanguageTasks(Math.min(100, safeLesson + 36)).map((task) => ({ ...task, text: task.text.replace('5 класс', '7 класс') }));
       if (subject === 'literature') return lessonGrade3ReadingTasks(Math.min(100, safeLesson + 48)).map((task) => ({ ...task, text: `Литература, 7 класс. ${task.text}` }));

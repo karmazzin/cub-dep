@@ -41,6 +41,7 @@
   let previewFluidCapacity = 0;
   let previewTntMesh = null;
   let sheepMeshes = new Map();
+  let botMeshes = new Map();
   let sheepMaterials = null;
   let textureAtlas = null;
   let atlasMeta = null;
@@ -132,7 +133,7 @@
     if (id === B.GRASS || id === B.MOSS || id === B.MUSHROOM_SOIL || id === B.RED_EARTH || id === B.SCORCHED_DIRT || id === B.ASH) return 'soil';
     if (id === B.DIRT || id === B.PATH || id === B.SAND || id === B.SNOW || id === B.CLOUD || id === B.WOOL) return 'soft';
     if (id === B.WOOD || id === B.SPRUCE_WOOD || id === B.GREAT_TREE_WOOD || id === B.SEQUOIA_WOOD || id === B.PILLAR) return 'wood';
-    if (id === B.CHEST) return 'chest';
+    if (id === B.CHEST || id === B.STONE_CHEST) return 'chest';
     if (id === B.PLANK || id === B.SEQUOIA_PLANK || id === B.DOOR || id === B.LADDER) return 'plank';
     if (id === B.LEAF || id === B.SPRUCE_LEAF || id === B.SEQUOIA_LEAF || id === B.DRY_BUSH || id === B.CACTUS) return 'leaf';
     if (id === B.WATER || id === B.HOT_WATER || id === B.STEAM_WATER) return 'water';
@@ -288,10 +289,11 @@
     }
   }
 
-  function drawChestTile(ctx, rng, x, y, size, faceType) {
-    const body = { r: 132, g: 78, b: 32 };
-    const lid = { r: 96, g: 55, b: 24 };
-    const trim = { r: 56, g: 34, b: 22 };
+  function drawChestTile(ctx, rng, id, x, y, size, faceType) {
+    const stone = id === BLOCK.STONE_CHEST;
+    const body = stone ? { r: 112, g: 116, b: 120 } : { r: 132, g: 78, b: 32 };
+    const lid = stone ? { r: 82, g: 86, b: 91 } : { r: 96, g: 55, b: 24 };
+    const trim = stone ? { r: 48, g: 52, b: 56 } : { r: 56, g: 34, b: 22 };
     fillPixelNoise(ctx, rng, body, x, y, size, 18, 2);
 
     ctx.fillStyle = rgbToCss(lid);
@@ -466,7 +468,7 @@
     } else if (kind === 'wood') {
       drawWoodTile(ctx, rng, x, y, size, base, faceType);
     } else if (kind === 'chest') {
-      drawChestTile(ctx, rng, x, y, size, faceType);
+      drawChestTile(ctx, rng, id, x, y, size, faceType);
     } else if (kind === 'plank') {
       drawPlankTile(ctx, rng, x, y, size, base);
     } else {
@@ -1719,6 +1721,116 @@
     sheepMeshes.clear();
   }
 
+  function createBotLabel(text) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(8, 10, 240, 44);
+    ctx.fillStyle = '#f4f0dc';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(text || 'Bot'), 128, 32, 228);
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.set(0, 2.34, 0);
+    sprite.scale.set(1.8, 0.45, 0.45);
+    return sprite;
+  }
+
+  function createBotHealthSprite() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 24;
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.set(0, 2.05, 0);
+    sprite.scale.set(1.25, 0.23, 0.23);
+    sprite.userData.canvas = canvas;
+    sprite.userData.texture = texture;
+    sprite.userData.lastHealthKey = '';
+    return sprite;
+  }
+
+  function updateBotHealthSprite(sprite, bot, visible) {
+    if (!sprite) return;
+    sprite.visible = !!visible;
+    if (!visible) return;
+    const maxHealth = Number.isFinite(bot && bot.maxHealth) && bot.maxHealth > 0 ? bot.maxHealth : 100;
+    const health = Math.max(0, Math.min(maxHealth, Number.isFinite(bot && bot.health) ? bot.health : maxHealth));
+    const key = `${Math.ceil(health)}:${Math.ceil(maxHealth)}:${bot && bot.damageFlash > 0 ? 1 : 0}`;
+    if (sprite.userData.lastHealthKey === key) return;
+    sprite.userData.lastHealthKey = key;
+    const canvas = sprite.userData.canvas;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.58)';
+    ctx.fillRect(8, 6, 112, 12);
+    ctx.fillStyle = health <= maxHealth * 0.28 ? '#ff6247' : '#d9433b';
+    ctx.fillRect(10, 8, 108 * (health / maxHealth), 8);
+    ctx.strokeStyle = bot && bot.damageFlash > 0 ? '#fff0a8' : 'rgba(255,255,255,0.45)';
+    ctx.strokeRect(8.5, 6.5, 111, 11);
+    sprite.userData.texture.needsUpdate = true;
+  }
+
+  function createBotMesh(bot) {
+    const root = new THREE.Group();
+    const shirt = mat(Number.isFinite(bot && bot.color) ? bot.color : 0x3f7fd5);
+    const skin = mat(0xd4a071);
+    const dark = mat(0x2b2520);
+    const pants = mat(0x2d3857);
+    const tool = mat(0x9a7b42);
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.72, 0.28), shirt);
+    body.position.set(0, 1.08, 0);
+    root.add(body);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skin);
+    head.position.set(0, 1.72, 0);
+    root.add(head);
+    const hair = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.4), dark);
+    hair.position.set(0, 1.96, 0);
+    root.add(hair);
+    const armGeometry = new THREE.BoxGeometry(0.16, 0.62, 0.16);
+    const armL = new THREE.Mesh(armGeometry, skin);
+    armL.position.set(-0.42, 1.08, 0);
+    root.add(armL);
+    const armR = new THREE.Mesh(armGeometry, skin);
+    armR.position.set(0.42, 1.08, 0);
+    root.add(armR);
+    const legGeometry = new THREE.BoxGeometry(0.18, 0.72, 0.18);
+    const legL = new THREE.Mesh(legGeometry, pants);
+    legL.position.set(-0.16, 0.36, 0);
+    root.add(legL);
+    const legR = new THREE.Mesh(legGeometry, pants);
+    legR.position.set(0.16, 0.36, 0);
+    root.add(legR);
+    const held = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.62, 0.12), tool);
+    held.position.set(0.55, 1.02, 0.08);
+    held.rotation.z = -0.55;
+    root.add(held);
+    const label = createBotLabel(`${bot && bot.name ? bot.name : 'Bot'} / ${bot && bot.roleLabel ? bot.roleLabel : ''}`);
+    root.add(label);
+    const health = createBotHealthSprite();
+    root.add(health);
+    root.userData.armL = armL;
+    root.userData.armR = armR;
+    root.userData.legL = legL;
+    root.userData.legR = legR;
+    root.userData.held = held;
+    root.userData.health = health;
+    return root;
+  }
+
+  function disposeBotMeshes() {
+    for (const mesh of botMeshes.values()) scene.remove(mesh);
+    botMeshes.clear();
+  }
+
   function syncSheepMeshes(state) {
     if (!scene) return;
     const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
@@ -1807,6 +1919,45 @@
       sheepMeshes.delete(id);
     }
     if (debugInfo) debugInfo.sheep = sheep.length;
+  }
+
+  function syncBotMeshes(state) {
+    if (!scene) return;
+    const bots = state.entities && Array.isArray(state.entities.bots) ? state.entities.bots : [];
+    const live = new Set();
+    const playerChunk = getPlayerChunk(state.player);
+    const renderDistance = getChunkRenderDistanceValue(state.worldMeta);
+    const now = performance.now() * 0.001;
+    for (const bot of bots) {
+      live.add(bot.id);
+      let mesh = botMeshes.get(bot.id);
+      if (!mesh) {
+        mesh = createBotMesh(bot);
+        botMeshes.set(bot.id, mesh);
+        scene.add(mesh);
+      }
+      mesh.position.set(bot.x, bot.y, bot.z);
+      mesh.rotation.y = -(bot.yaw || 0) + Math.PI * 0.5;
+      const speed = Math.hypot(bot.vx || 0, bot.vz || 0);
+      const swing = Math.sin(now * 8.5 + (bot.id || '').length) * Math.min(0.65, speed * 0.22);
+      if (mesh.userData.armL) mesh.userData.armL.rotation.x = swing;
+      if (mesh.userData.armR) mesh.userData.armR.rotation.x = -swing;
+      if (mesh.userData.legL) mesh.userData.legL.rotation.x = -swing;
+      if (mesh.userData.legR) mesh.userData.legR.rotation.x = swing;
+      if (mesh.userData.held) mesh.userData.held.rotation.x = -Math.abs(swing) * 0.8;
+      updateBotHealthSprite(mesh.userData.health, bot, state.worldMeta && state.worldMeta.mode === 'survival');
+      const cx = Math.floor(bot.x / CHUNK_SIZE);
+      const cz = Math.floor(bot.z / CHUNK_SIZE);
+      const dx = cx - playerChunk.cx;
+      const dz = cz - playerChunk.cz;
+      mesh.visible = dx * dx + dz * dz <= renderDistance * renderDistance;
+    }
+    for (const [id, mesh] of botMeshes) {
+      if (live.has(id)) continue;
+      scene.remove(mesh);
+      botMeshes.delete(id);
+    }
+    if (debugInfo) debugInfo.bots = bots.length;
   }
 
   function disposeChunkMeshes() {
@@ -2003,6 +2154,7 @@
 
   function setWorld(state) {
     disposeSheepMeshes();
+    disposeBotMeshes();
     rebuildAllChunks(state);
   }
 
@@ -2051,6 +2203,7 @@
     updateDynamiteOverlays(state);
     updatePreviewOverlay(state);
     syncSheepMeshes(state);
+    syncBotMeshes(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
       debugInfo.rotation = [camera.rotation.x, camera.rotation.y, camera.rotation.z];

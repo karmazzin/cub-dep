@@ -21,8 +21,17 @@
     FILLED_CHEST: -7,
     FOX_SPAWN_EGG: -8,
     POLAR_BEAR_SPAWN_EGG: -9,
-    SHRINK_POTION: -10,
-    GROW_POTION: -11,
+    BUILDER_BOT_SPAWN_EGG: -20,
+    EXPLORER_BOT_SPAWN_EGG: -21,
+    DIGGER_BOT_SPAWN_EGG: -22,
+    HUNTER_BOT_SPAWN_EGG: -23,
+    GATHERER_BOT_SPAWN_EGG: -24,
+    MINER_BOT_SPAWN_EGG: -25,
+    BLASTER_BOT_SPAWN_EGG: -26,
+    FILLED_STONE_CHEST: -27,
+    PAPER: -28,
+    NOTE: -29,
+    MAP: -30,
   };
 
   const SPAWN_EGG_TYPES = {
@@ -34,6 +43,16 @@
     [ITEM.FISH_SPAWN_EGG]: 'fish',
     [ITEM.FOX_SPAWN_EGG]: 'fox',
     [ITEM.POLAR_BEAR_SPAWN_EGG]: 'bear',
+  };
+
+  const BOT_SPAWN_EGG_ROLES = {
+    [ITEM.BUILDER_BOT_SPAWN_EGG]: 'builder',
+    [ITEM.EXPLORER_BOT_SPAWN_EGG]: 'explorer',
+    [ITEM.DIGGER_BOT_SPAWN_EGG]: 'digger',
+    [ITEM.HUNTER_BOT_SPAWN_EGG]: 'hunter',
+    [ITEM.GATHERER_BOT_SPAWN_EGG]: 'gatherer',
+    [ITEM.MINER_BOT_SPAWN_EGG]: 'miner',
+    [ITEM.BLASTER_BOT_SPAWN_EGG]: 'blaster',
   };
 
   const DEFAULT_HOTBAR_ITEMS = [
@@ -63,6 +82,8 @@
     BLOCK.LAVA,
     BLOCK.GRASS,
     BLOCK.CHEST,
+    BLOCK.STONE_CHEST,
+    BLOCK.COBWEB,
     BLOCK.MOSS,
     BLOCK.SMALL_WHITE_MUSHROOM,
     BLOCK.ALGAE,
@@ -84,7 +105,9 @@
     BLOCK.STRANGE_PORTAL_STONE,
     BLOCK.STRANGE_PORTAL_CORE,
     BLOCK.STRANGE_PORTAL_RUNE,
-    ...LETTER_BLOCK_IDS,
+    ITEM.PAPER,
+    ITEM.NOTE,
+    ITEM.MAP,
   ];
 
   const CREATIVE_ITEMS = [
@@ -97,8 +120,14 @@
     ITEM.FISH_SPAWN_EGG,
     ITEM.FOX_SPAWN_EGG,
     ITEM.POLAR_BEAR_SPAWN_EGG,
-    ITEM.SHRINK_POTION,
-    ITEM.GROW_POTION,
+    ITEM.BUILDER_BOT_SPAWN_EGG,
+    ITEM.EXPLORER_BOT_SPAWN_EGG,
+    ITEM.DIGGER_BOT_SPAWN_EGG,
+    ITEM.HUNTER_BOT_SPAWN_EGG,
+    ITEM.GATHERER_BOT_SPAWN_EGG,
+    ITEM.MINER_BOT_SPAWN_EGG,
+    ITEM.BLASTER_BOT_SPAWN_EGG,
+    ...LETTER_BLOCK_IDS,
   ];
   const HOTBAR_BLOCKS = DEFAULT_HOTBAR_ITEMS;
 
@@ -113,11 +142,45 @@
     [BLOCK.WATER]: 'Вода',
     [BLOCK.HOT_WATER]: 'Горячая вода',
     [BLOCK.LAVA]: 'Лава',
+    [BLOCK.BEDROCK]: 'Коренная порода',
     [BLOCK.SAND]: 'Песок',
     [BLOCK.CACTUS]: 'Кактус',
     [BLOCK.DRY_BUSH]: 'Сухой куст',
     [BLOCK.GRASS]: 'Трава',
+    [BLOCK.COAL_ORE]: 'Угольная руда',
+    [BLOCK.GOLD_ORE]: 'Золотая руда',
+    [BLOCK.LADDER]: 'Лестница',
+    [BLOCK.DEEPSTONE]: 'Глубинный камень',
+    [BLOCK.DEEP_ORE]: 'Глубинная руда',
     [BLOCK.CHEST]: 'Сундук',
+    [BLOCK.STONE_CHEST]: 'Каменный сундук',
+    [BLOCK.COBWEB]: 'Паутина',
+    [BLOCK.DOOR]: 'Дверь',
+    [BLOCK.IRON_ORE]: 'Железная руда',
+    [BLOCK.DIAMOND_ORE]: 'Алмазная руда',
+    [BLOCK.FIRE_SEAL]: 'Огненная печать',
+    [BLOCK.FIRE_PORTAL]: 'Огненный портал',
+    [BLOCK.FRIENDSHIP_ORE]: 'Руда дружбы',
+    [BLOCK.FRIENDSHIP_AMULET]: 'Амулет дружбы',
+    [BLOCK.WATER_FRAME]: 'Рамка воды',
+    [BLOCK.WATER_CRYSTAL]: 'Кристалл воды',
+    [BLOCK.WATER_WELL_FRAME]: 'Рамка водного колодца',
+    [BLOCK.WATER_DIMENSION_PORTAL]: 'Портал измерения воды',
+    [BLOCK.GOLDEN_GARDEN_SHELL]: 'Оболочка золотого сада',
+    [BLOCK.STEAM_ORE]: 'Паровая руда',
+    [BLOCK.MAIN_WELL_FRAME]: 'Рамка главного колодца',
+    [BLOCK.CLOUD]: 'Облако',
+    [BLOCK.STEAM_WATER]: 'Паровая вода',
+    [BLOCK.AIR_CRYSTAL]: 'Кристалл воздуха',
+    [BLOCK.AIR_ENTRANCE_FRAME]: 'Рамка входа воздуха',
+    [BLOCK.AIR_DIMENSION_PORTAL]: 'Портал измерения воздуха',
+    [BLOCK.AIR_THIEF_PORTAL]: 'Портал воздушного вора',
+    [BLOCK.INVISIBLE_BLOCK]: 'Невидимый блок',
+    [BLOCK.INVISIBLE_ORE]: 'Невидимая руда',
+    [BLOCK.AIR_HOME_PORTAL]: 'Портал воздушного дома',
+    [BLOCK.GREAT_TREE_WOOD]: 'Древесина великого дерева',
+    [BLOCK.END_GATE]: 'Конечные врата',
+    [BLOCK.ELEMENTAL_RETURN_PORTAL]: 'Портал возвращения стихий',
     [ITEM.SHEEP_SPAWN_EGG]: 'Яйцо призыва овцы',
     [ITEM.BOAR_SPAWN_EGG]: 'Яйцо призыва кабана',
     [ITEM.TURTLE_SPAWN_EGG]: 'Яйцо призыва черепахи',
@@ -126,9 +189,18 @@
     [ITEM.FISH_SPAWN_EGG]: 'Яйцо призыва рыбы',
     [ITEM.FOX_SPAWN_EGG]: 'Яйцо призыва лисы',
     [ITEM.POLAR_BEAR_SPAWN_EGG]: 'Яйцо призыва медведя',
-    [ITEM.SHRINK_POTION]: 'Зелье уменьшения',
-    [ITEM.GROW_POTION]: 'Зелье увеличения',
+    [ITEM.BUILDER_BOT_SPAWN_EGG]: 'Яйцо призыва строителя',
+    [ITEM.EXPLORER_BOT_SPAWN_EGG]: 'Яйцо призыва исследователя',
+    [ITEM.DIGGER_BOT_SPAWN_EGG]: 'Яйцо призыва копателя',
+    [ITEM.HUNTER_BOT_SPAWN_EGG]: 'Яйцо призыва охотника',
+    [ITEM.GATHERER_BOT_SPAWN_EGG]: 'Яйцо призыва собирателя',
+    [ITEM.MINER_BOT_SPAWN_EGG]: 'Яйцо призыва шахтера',
+    [ITEM.BLASTER_BOT_SPAWN_EGG]: 'Яйцо призыва взрывателя',
     [ITEM.FILLED_CHEST]: 'Сундук с вещами',
+    [ITEM.FILLED_STONE_CHEST]: 'Каменный сундук с вещами',
+    [ITEM.PAPER]: 'Бумага',
+    [ITEM.NOTE]: 'Записка',
+    [ITEM.MAP]: 'Карта',
     [BLOCK.DYNAMITE_SMALL]: 'ТНТ мощность 1',
     [BLOCK.DYNAMITE_MEDIUM]: 'ТНТ мощность 5',
     [BLOCK.DYNAMITE_LARGE]: 'ТНТ мощность 10',
@@ -148,8 +220,37 @@
     [BLOCK.PILLOW]: 'Подушка',
     [BLOCK.WOOL]: 'Шерсть',
     [BLOCK.MOSS]: 'Мох',
+    [BLOCK.MUSHROOM_SOIL]: 'Грибная почва',
+    [BLOCK.WHITE_MUSHROOM_STEM]: 'Ножка белого гриба',
+    [BLOCK.WHITE_MUSHROOM_CAP]: 'Шляпка белого гриба',
+    [BLOCK.FLY_AGARIC_STEM]: 'Ножка мухомора',
+    [BLOCK.FLY_AGARIC_CAP]: 'Шляпка мухомора',
+    [BLOCK.GLOW_MUSHROOM_STEM]: 'Ножка светящегося гриба',
+    [BLOCK.GLOW_MUSHROOM_CAP]: 'Шляпка светящегося гриба',
     [BLOCK.SMALL_WHITE_MUSHROOM]: 'Маленький белый гриб',
+    [BLOCK.SMALL_FLY_AGARIC]: 'Маленький мухомор',
+    [BLOCK.SMALL_GLOW_MUSHROOM]: 'Маленький светящийся гриб',
+    [BLOCK.ECHO_CORE]: 'Эхо-ядро',
+    [BLOCK.ECHO_SHARD_PEDESTAL]: 'Пьедестал эхо-осколка',
+    [BLOCK.ROOT_NODE]: 'Корневой узел',
+    [BLOCK.ROOT_CORE]: 'Корневое ядро',
+    [BLOCK.ROOT_STONE]: 'Корневой камень',
+    [BLOCK.ROOT_PLATFORM]: 'Корневая платформа',
+    [BLOCK.PINK_CORAL]: 'Розовый коралл',
+    [BLOCK.BLUE_CORAL]: 'Синий коралл',
+    [BLOCK.GOLD_CORAL]: 'Золотой коралл',
+    [BLOCK.CORAL_STONE]: 'Коралловый камень',
+    [BLOCK.GLOW_ALGAE]: 'Светящиеся водоросли',
+    [BLOCK.TALL_GLOW_ALGAE]: 'Высокие светящиеся водоросли',
     [BLOCK.ALGAE]: 'Водоросли',
+    [BLOCK.TALL_ALGAE]: 'Высокие водоросли',
+    [BLOCK.ASH]: 'Пепел',
+    [BLOCK.ASH_STONE]: 'Пепельный камень',
+    [BLOCK.EMBER_FLOWER]: 'Угольковый цветок',
+    [BLOCK.EMBER_SHRUB]: 'Угольковый куст',
+    [BLOCK.SEQUOIA_WOOD]: 'Древесина секвойи',
+    [BLOCK.SEQUOIA_LEAF]: 'Листья секвойи',
+    [BLOCK.SEQUOIA_PLANK]: 'Доски секвойи',
     [BLOCK.PILLAR]: 'Колонна',
     [BLOCK.PATH]: 'Тропа',
     [BLOCK.BLACKSTONE]: 'Черный камень',
@@ -201,6 +302,10 @@
     };
   }
 
+  function isRaycastTargetBlock(id) {
+    return isSolidBlock3D(id) || id === BLOCK.DRY_BUSH;
+  }
+
   function raycastBlock(state, includePreviewFluids = false) {
     const player = state.player;
     const scale = Number.isFinite(player.scale) ? Math.max(MIN_SCALE, Math.min(MAX_SCALE, player.scale)) : 1;
@@ -222,7 +327,7 @@
         continue;
       }
       const id = getBlock3D(state, x, y, z);
-      if (isSolidBlock3D(id) || (includePreviewFluids && isPreviewFluid(id))) {
+      if (isRaycastTargetBlock(id) || (includePreviewFluids && isPreviewFluid(id))) {
         const normal = previous ? {
           x: Math.max(-1, Math.min(1, previous.x - x)),
           y: Math.max(-1, Math.min(1, previous.y - y)),
@@ -264,6 +369,40 @@
         const maxZ = item.z + radius;
         if (px < minX || px > maxX || py < minY || py > maxY || pz < minZ || pz > maxZ) continue;
         if (!best || distance < best.distance) best = { sheep: item, distance };
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  function raycastBot(state) {
+    const bots = state && state.entities && Array.isArray(state.entities.bots) ? state.entities.bots : [];
+    if (!bots.length) return null;
+    const player = state.player;
+    const scale = Number.isFinite(player.scale) ? Math.max(MIN_SCALE, Math.min(MAX_SCALE, player.scale)) : 1;
+    const dir = getLookDirection(player);
+    const origin = {
+      x: player.x,
+      y: player.y + EYE_HEIGHT * scale,
+      z: player.z,
+    };
+    let best = null;
+    const step = 0.045;
+    for (let distance = 0; distance <= REACH_DISTANCE; distance += step) {
+      const px = origin.x + dir.x * distance;
+      const py = origin.y + dir.y * distance;
+      const pz = origin.z + dir.z * distance;
+      for (const bot of bots) {
+        if (!bot) continue;
+        const radius = 0.42;
+        const minX = bot.x - radius;
+        const maxX = bot.x + radius;
+        const minY = bot.y;
+        const maxY = bot.y + PLAYER_HEIGHT + 0.12;
+        const minZ = bot.z - radius;
+        const maxZ = bot.z + radius;
+        if (px < minX || px > maxX || py < minY || py > maxY || pz < minZ || pz > maxZ) continue;
+        if (!best || distance < best.distance) best = { bot, distance };
       }
       if (best) return best;
     }
@@ -698,6 +837,7 @@
     }
     if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, item.id, 1);
     if (setBlock3D(state, item.x, item.y, item.z, BLOCK.AIR)) activateFluidAroundChange(state, item.x, item.y, item.z);
+    damageEntitiesFromExplosion(state, item);
     ensureActiveExplosions(state).push({
       x: item.x,
       y: item.y,
@@ -723,6 +863,7 @@
     const radiusSq = radius * radius;
     let broken = 0;
     const destroyedActiveKeys = new Set();
+    damageEntitiesFromExplosion(state, item);
     for (let y = Math.max(1, item.y - radius); y <= Math.min(world.h - 1, item.y + radius); y += 1) {
       for (let z = Math.max(0, item.z - radius); z <= Math.min(world.d - 1, item.z + radius); z += 1) {
         for (let x = Math.max(0, item.x - radius); x <= Math.min(world.w - 1, item.x + radius); x += 1) {
@@ -746,6 +887,44 @@
     }
     setNotice(state, broken > 0 ? `Взрыв: разрушено ${broken}` : 'Взрыв');
     if (Game.audio && Game.audio.playHit) Game.audio.playHit();
+  }
+
+  function damagePlayerFromExplosion(state, item) {
+    const player = state && state.player;
+    if (!player || !Game.player3d || !Game.player3d.applyPlayerDamage3D) return;
+    const radius = Math.max(1, Number(item && item.radius) || 1);
+    const dx = player.x - (item.x + 0.5);
+    const dy = (player.y + PLAYER_HEIGHT * 0.5) - (item.y + 0.5);
+    const dz = player.z - (item.z + 0.5);
+    const dist = Math.hypot(dx, dy, dz);
+    const effectiveRadius = Math.max(radius + 0.8, 1.8);
+    if (dist > effectiveRadius) return;
+    const maxDamage = Math.max(30, Math.min(140, radius * 12));
+    const damage = maxDamage * (1 - dist / effectiveRadius);
+    Game.player3d.applyPlayerDamage3D(state, damage, 'взрыв ТНТ', { cooldown: 0.45 });
+  }
+
+  function damageBotsFromExplosion(state, item) {
+    if (!state || !state.entities || !Array.isArray(state.entities.bots) || !Game.bots3d || !Game.bots3d.damageBot3D) return;
+    const radius = Math.max(1, Number(item && item.radius) || 1);
+    const effectiveRadius = Math.max(radius + 0.8, 1.8);
+    const bots = state.entities.bots.slice();
+    for (const bot of bots) {
+      if (!bot) continue;
+      const dx = bot.x - (item.x + 0.5);
+      const dy = (bot.y + PLAYER_HEIGHT * 0.5) - (item.y + 0.5);
+      const dz = bot.z - (item.z + 0.5);
+      const dist = Math.hypot(dx, dy, dz);
+      if (dist > effectiveRadius) continue;
+      const maxDamage = Math.max(30, Math.min(140, radius * 12));
+      const damage = maxDamage * (1 - dist / effectiveRadius);
+      Game.bots3d.damageBot3D(state, bot.id, damage, item.x + 0.5, item.z + 0.5);
+    }
+  }
+
+  function damageEntitiesFromExplosion(state, item) {
+    damagePlayerFromExplosion(state, item);
+    damageBotsFromExplosion(state, item);
   }
 
   function updateDynamite3D(state, dt) {
@@ -832,6 +1011,10 @@
     state.ui.mineSoundTimer = 0;
   }
 
+  function isChestBlock(id) {
+    return id === BLOCK.CHEST || id === BLOCK.STONE_CHEST;
+  }
+
   function customLessonPlayMode(state) {
     const meta = state && state.worldMeta;
     return meta && meta.customLessonPlay ? meta.customLessonPlay.mode : '';
@@ -865,10 +1048,10 @@
     if (!inBounds3D(state.world, x, y, z)) return null;
     const id = getBlock3D(state, x, y, z);
     if (id === BLOCK.AIR || id === BLOCK.BEDROCK || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) return null;
-    const dropId = id === BLOCK.CHEST && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
-      ? ITEM.FILLED_CHEST
+    const dropId = isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
+      ? (id === BLOCK.STONE_CHEST ? ITEM.FILLED_STONE_CHEST : ITEM.FILLED_CHEST)
       : (id === BLOCK.BASALT ? BLOCK.BLACKSTONE : id);
-    const dropData = id === BLOCK.CHEST && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
+    const dropData = isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
       ? Game.inventory3d.filledChestDataFromWorld(state, x, y, z)
       : null;
     let collected = true;
@@ -882,7 +1065,7 @@
       activateFluidAroundChange(state, x, y, z);
       if (state.world.blockDamage) delete state.world.blockDamage[coordKey(x, y, z)];
       syncNearbyStrangePortals(state, x, y, z);
-      const label = Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel({ id: dropId, count: 1, data: dropData || undefined }) : (BLOCK_LABELS[dropId] || 'Блок');
+      const label = Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel({ id: dropId, count: 1, data: dropData || undefined }) : (BLOCK_LABELS[dropId] || `ID ${dropId}`);
       if (Game.education3d && Game.education3d.onBlockMined) Game.education3d.onBlockMined(state, id);
       return { id, dropId, dropData, label, collected };
     }
@@ -972,6 +1155,24 @@
     return true;
   }
 
+  function attackTargetBot(state, blockHit) {
+    const hit = raycastBot(state);
+    if (!hit || !hit.bot || !Game.bots3d || !Game.bots3d.damageBot3D) return false;
+    if (blockHit && Number.isFinite(blockHit.distance) && hit.distance > blockHit.distance) return false;
+    if (state.worldMeta && state.worldMeta.mode === 'creative') {
+      resetMining(state);
+      setNotice(state, 'В creative ботов нельзя бить');
+      return true;
+    }
+    const result = Game.bots3d.damageBot3D(state, hit.bot.id, 12, state.player.x, state.player.z);
+    if (!result.hit) return false;
+    resetMining(state);
+    const label = hit.bot.roleLabel || hit.bot.name || 'Бот';
+    setNotice(state, result.dead ? `${label} отключился` : `${label}: ${Math.ceil(result.health)}/${Math.ceil(result.maxHealth)} HP`);
+    if (Game.audio && Game.audio.playDig) Game.audio.playDig();
+    return true;
+  }
+
   function handleRulerPlaced(state, x, y, z) {
     if (!state || !state.worldMeta) return;
     const first = state.worldMeta.rulerFirstPoint;
@@ -1010,138 +1211,11 @@
     }
     if (!placed) return false;
     if (targetId === BLOCK.WATER || targetId === BLOCK.HOT_WATER || targetId === BLOCK.LAVA) activateFluidAroundChange(state, x, y, z);
-    if (blockId === ITEM.FILLED_CHEST && Game.inventory3d && Game.inventory3d.restoreFilledChest) Game.inventory3d.restoreFilledChest(state, x, y, z, stack && stack.data);
+    if ((blockId === ITEM.FILLED_CHEST || blockId === ITEM.FILLED_STONE_CHEST) && Game.inventory3d && Game.inventory3d.restoreFilledChest) Game.inventory3d.restoreFilledChest(state, x, y, z, stack && stack.data);
     if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
     syncNearbyStrangePortals(state, x, y, z);
     if (Game.education3d && Game.education3d.onBlockPlaced) Game.education3d.onBlockPlaced(state, placedBlockId);
     if (placedBlockId === BLOCK.RULER) handleRulerPlaced(state, x, y, z);
-    return true;
-  }
-
-  function isScalePotion(id) {
-    return id === ITEM.SHRINK_POTION || id === ITEM.GROW_POTION;
-  }
-
-  function normalizeScaleChoice(value) {
-    const text = String(value || '').trim().toLowerCase();
-    if (text === '1' || text === 'all' || text === 'все' || text === 'все мобы') return 'all_mobs';
-    if (text === '2' || text === 'near' || text === 'nearest' || text === 'ближайший' || text === 'ближайший моб') return 'nearest_mob';
-    if (text === '3' || text === 'player' || text === 'игрок') return 'player';
-    return '';
-  }
-
-  function chooseScalePotionTarget(state) {
-    if (typeof window === 'undefined' || typeof window.prompt !== 'function') return '';
-    if (typeof document !== 'undefined' && document.exitPointerLock && document.pointerLockElement) document.exitPointerLock();
-    return normalizeScaleChoice(window.prompt('На кого применить? 1 - все мобы, 2 - ближайший моб, 3 - игрок', '3'));
-  }
-
-  function allMobs(state) {
-    return state && state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
-  }
-
-  function nearestMob(state) {
-    const mobs = allMobs(state);
-    if (!mobs.length || !state || !state.player) return null;
-    const player = state.player;
-    let best = null;
-    let bestDist = Infinity;
-    for (const mob of mobs) {
-      if (!mob) continue;
-      const dx = (Number(mob.x) || 0) - (Number(player.x) || 0);
-      const dy = (Number(mob.y) || 0) - (Number(player.y) || 0);
-      const dz = (Number(mob.z) || 0) - (Number(player.z) || 0);
-      const dist = dx * dx + dy * dy + dz * dz;
-      if (dist < bestDist) {
-        best = mob;
-        bestDist = dist;
-      }
-    }
-    return best;
-  }
-
-  function entityScale(entity) {
-    const scale = Number(entity && entity.targetScale);
-    if (Number.isFinite(scale)) return Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-    const current = Number(entity && entity.scale);
-    return Number.isFinite(current) ? Math.max(MIN_SCALE, Math.min(MAX_SCALE, current)) : 1;
-  }
-
-  function setEntityTargetScale(entity, scale) {
-    if (!entity) return;
-    const current = Number(entity.scale);
-    entity.scale = Number.isFinite(current) ? Math.max(MIN_SCALE, Math.min(MAX_SCALE, current)) : 1;
-    entity.targetScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-  }
-
-  function stackHasItem(stack, id) {
-    return !!stack && stack.id === id && (!Number.isFinite(stack.count) || stack.count > 0);
-  }
-
-  function playerHasItem(state, id) {
-    if (!state || !state.player) return false;
-    const hotbar = Array.isArray(state.player.hotbar) ? state.player.hotbar : [];
-    const inventory = Array.isArray(state.player.inventory) ? state.player.inventory : [];
-    return hotbar.some((stack) => stackHasItem(stack, id)) || inventory.some((stack) => stackHasItem(stack, id));
-  }
-
-  function usePlayerScalePotionShortcut(state, potionId) {
-    if (!state || !state.worldMeta || state.worldMeta.mode !== 'creative') return false;
-    if (!playerHasItem(state, potionId)) return false;
-    const multiplier = potionId === ITEM.SHRINK_POTION ? 0.5 : 2;
-    setEntityTargetScale(state.player, entityScale(state.player) * multiplier);
-    setNotice(state, `Игрок: ${scaleLabel(state.player.targetScale)}`);
-    return true;
-  }
-
-  function scaleLabel(scale) {
-    if (!Number.isFinite(scale)) return '1x';
-    if (scale >= 100 || scale <= 0.01) return `${scale.toExponential(2)}x`;
-    if (scale >= 10 || scale <= 0.1) return `${Math.round(scale * 1000) / 1000}x`;
-    return `${Math.round(scale * 100) / 100}x`;
-  }
-
-  function mobLabel(mob) {
-    if (!mob) return 'моб';
-    const type = mob.type === 'polar_bear' ? 'bear' : mob.type;
-    return MOB_LABELS[type] || 'Моб';
-  }
-
-  function useScalePotion(state, potionId) {
-    if (!state || !state.worldMeta || state.worldMeta.mode !== 'creative') {
-      setNotice(state, 'Зелье доступно только в creative');
-      return true;
-    }
-    const multiplier = potionId === ITEM.SHRINK_POTION ? 0.5 : 2;
-    const choice = chooseScalePotionTarget(state);
-    if (!choice) {
-      setNotice(state, 'Цель не выбрана');
-      return true;
-    }
-    if (choice === 'player') {
-      const targetScale = entityScale(state.player) * multiplier;
-      setEntityTargetScale(state.player, targetScale);
-      setNotice(state, `Игрок: ${scaleLabel(state.player.targetScale)}`);
-      return true;
-    }
-    if (choice === 'nearest_mob') {
-      const mob = nearestMob(state);
-      if (!mob) {
-        setNotice(state, 'Рядом нет мобов');
-        return true;
-      }
-      const targetScale = entityScale(mob) * multiplier;
-      setEntityTargetScale(mob, targetScale);
-      setNotice(state, `${mobLabel(mob)}: ${scaleLabel(mob.targetScale)}`);
-      return true;
-    }
-    const mobs = allMobs(state);
-    if (!mobs.length) {
-      setNotice(state, 'Мобов нет');
-      return true;
-    }
-    for (const mob of mobs) setEntityTargetScale(mob, entityScale(mob) * multiplier);
-    setNotice(state, `Мобы: ${mobs.length} шт.`);
     return true;
   }
 
@@ -1150,7 +1224,16 @@
       ? Game.inventory3d.getSelectedHotbarStack(state)
       : null;
     const blockId = stack ? stack.id : BLOCK.AIR;
-    if (isScalePotion(blockId) && useScalePotion(state, blockId)) return;
+    if (blockId === ITEM.NOTE) {
+      if (Game.inventory3d && Game.inventory3d.openNote) Game.inventory3d.openNote(state, stack);
+      else setNotice(state, 'Записка недоступна');
+      return;
+    }
+    if (blockId === ITEM.MAP) {
+      if (Game.openItemMap) Game.openItemMap(stack);
+      else setNotice(state, 'Карта недоступна');
+      return;
+    }
     const hit = raycastBlock(state);
     if (!hit || !hit.place) return;
     if (hit.id === BLOCK.CALCULATOR) {
@@ -1162,7 +1245,7 @@
       else setNotice(state, 'Карта недоступна');
       return;
     }
-    if (hit.id === BLOCK.CHEST) {
+    if (isChestBlock(hit.id)) {
       if (Game.openChestInventory) Game.openChestInventory(hit.x, hit.y, hit.z);
       else setNotice(state, 'Сундук недоступен');
       return;
@@ -1191,7 +1274,26 @@
       }
       return;
     }
-    const placedBlockId = blockId === ITEM.FILLED_CHEST ? BLOCK.CHEST : blockId;
+    const botRole = BOT_SPAWN_EGG_ROLES[blockId];
+    if (botRole) {
+      if (spawnBotFromEgg(state, botRole, x, y, z)) {
+        if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
+        setNotice(state, `Призван бот: ${BOT_ROLE_LABELS[botRole] || 'Бот'}`);
+      }
+      return;
+    }
+    const canPlaceSelected = blockId === BLOCK.WATER
+      || blockId === BLOCK.LAVA
+      || blockId === ITEM.FILLED_CHEST
+      || blockId === ITEM.FILLED_STONE_CHEST
+      || (Game.blocks.PLACEABLE && Game.blocks.PLACEABLE.has(blockId));
+    if (!canPlaceSelected) {
+      setNotice(state, 'Этот предмет нельзя поставить');
+      return;
+    }
+    const placedBlockId = blockId === ITEM.FILLED_CHEST
+      ? BLOCK.CHEST
+      : (blockId === ITEM.FILLED_STONE_CHEST ? BLOCK.STONE_CHEST : blockId);
     const cells = actionCubeCells(hit.place, playerActionSize(state));
     const available = survival && stack && Number.isFinite(stack.count) ? Math.max(0, stack.count | 0) : Infinity;
     let placed = 0;
@@ -1202,7 +1304,7 @@
       if (placeBlockAt(state, blockId, placedBlockId, stack, survival, cell.x, cell.y, cell.z)) placed += 1;
     }
     if (placed > 0) {
-      const placedLabel = Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel(stack) : (BLOCK_LABELS[blockId] || 'Блок');
+      const placedLabel = Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel(stack) : (BLOCK_LABELS[blockId] || `ID ${blockId}`);
       setNotice(state, placed === 1 ? `Поставлено: ${placedLabel}` : `Поставлено блоков: ${placed}`);
     } else if (blockedByPlayer) {
       setNotice(state, 'Нельзя поставить блок внутри себя');
@@ -1236,8 +1338,13 @@
     return false;
   }
 
+  function spawnBotFromEgg(state, botRole, x, y, z) {
+    if (!Game.bots3d || !Game.bots3d.spawnBot3D) return false;
+    return !!Game.bots3d.spawnBot3D(state, botRole, x, y, z);
+  }
+
   function showTargetLootTable(state, hit) {
-    if (!hit || hit.id !== BLOCK.CHEST) {
+    if (!hit || !isChestBlock(hit.id)) {
       setNotice(state, 'Наведи прицел на сундук');
       return;
     }
@@ -1259,8 +1366,9 @@
     updateSelectedBlock(state, input);
     const hit = raycastBlock(state);
     const previewHit = actions.previewPressed ? raycastBlock(state, true) : hit;
-    const attackedSheep = actions.breakPressed && attackTargetSheep(state, hit);
-    if (attackedSheep) input.primaryDown = false;
+    const attackedBot = actions.breakPressed && attackTargetBot(state, hit);
+    const attackedSheep = !attackedBot && actions.breakPressed && attackTargetSheep(state, hit);
+    if (attackedBot || attackedSheep) input.primaryDown = false;
     state.ui.targetBlock = hit ? { x: hit.x, y: hit.y, z: hit.z, id: hit.id, normal: hit.normal } : null;
     if (hit && (!state.ui.mineTarget || state.ui.mineTarget.key !== targetKey(hit))) {
       state.ui.mineProgress = (state.world.blockDamage && state.world.blockDamage[targetKey(hit)]) || 0;
@@ -1275,12 +1383,10 @@
       state.ui.lootTableTimer = Math.max(0, state.ui.lootTableTimer - dt);
       if (state.ui.lootTableTimer === 0) state.ui.lootTableLines = null;
     }
-    if (!attackedSheep) updateMining(state, input, hit, dt);
+    if (!attackedBot && !attackedSheep) updateMining(state, input, hit, dt);
     if (actions.repairPressed) repairTargetBlock(state, hit);
     if (actions.previewPressed) togglePreview(state, previewHit);
     if (actions.lootTablePressed) showTargetLootTable(state, hit);
-    if (actions.scaleUpPressed) usePlayerScalePotionShortcut(state, ITEM.GROW_POTION);
-    if (actions.scaleDownPressed) usePlayerScalePotionShortcut(state, ITEM.SHRINK_POTION);
     if (actions.placePressed) placeSelectedBlock(state);
   }
 
@@ -1296,6 +1402,16 @@
     polar_bear: 'Белый медведь',
   };
 
+  const BOT_ROLE_LABELS = {
+    builder: 'Строитель',
+    explorer: 'Исследователь',
+    digger: 'Копатель',
+    hunter: 'Охотник',
+    gatherer: 'Собиратель',
+    miner: 'Шахтер',
+    blaster: 'Взрыватель',
+  };
+
   Game.interaction3d = {
     updateInteraction3D,
     HOTBAR_BLOCKS,
@@ -1304,10 +1420,11 @@
     BLOCK_LABELS,
     ITEM,
     SPAWN_EGG_TYPES,
+    BOT_SPAWN_EGG_ROLES,
     MOB_LABELS,
+    BOT_ROLE_LABELS,
     DYNAMITE_CONFIG,
     isDynamiteBlock,
     updateDynamite3D,
-    usePlayerScalePotionShortcut,
   };
 })();

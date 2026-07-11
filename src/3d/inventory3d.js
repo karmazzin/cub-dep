@@ -5,11 +5,83 @@
   const CHEST_SIZE = 36;
   const HOTBAR_SIZE = 10;
   const MAX_STACK = 100;
+  const MAP_REVEAL_RADIUS = 100;
+  const REMOVED_ITEM_IDS = new Set([-10, -11]);
   let carried = null;
   let carriedOrigin = null;
   let carriedReturnOrigin = null;
   let pointer = { x: 0, y: 0 };
   let activeTab = 'inventory';
+
+  function recipeList() {
+    const block = Game.blocks && Game.blocks.BLOCK;
+    if (!block) return [];
+    return [
+      {
+        id: 'plank_from_wood',
+        title: 'Доски',
+        ingredients: [{ id: block.WOOD, count: 1 }],
+        result: { id: block.PLANK, count: 4 },
+      },
+      {
+        id: 'plank_from_spruce_wood',
+        title: 'Доски',
+        ingredients: [{ id: block.SPRUCE_WOOD, count: 1 }],
+        result: { id: block.PLANK, count: 4 },
+      },
+      {
+        id: 'wood_from_dry_bush',
+        title: 'Доски',
+        ingredients: [{ id: block.DRY_BUSH, count: 1 }],
+        result: { id: block.PLANK, count: 1 },
+      },
+      {
+        id: 'path_from_sand_and_dirt',
+        title: 'Тропинка',
+        ingredients: [{ id: block.SAND, count: 1 }, { id: block.DIRT, count: 1 }],
+        result: { id: block.PATH, count: 1 },
+      },
+      {
+        id: 'pillow_from_wool',
+        title: 'Подушка',
+        ingredients: [{ id: block.WOOL, count: 3 }],
+        result: { id: block.PILLOW, count: 1 },
+      },
+      {
+        id: 'chest_from_plank',
+        title: 'Сундук',
+        ingredients: [{ id: block.PLANK, count: 8 }],
+        result: { id: block.CHEST, count: 1 },
+      },
+      {
+        id: 'stone_chest_from_stone_and_chest',
+        title: 'Каменный сундук',
+        ingredients: [{ id: block.STONE, count: 8 }, { id: block.CHEST, count: 1 }],
+        result: { id: block.STONE_CHEST, count: 1 },
+      },
+      {
+        id: 'paper_from_wood',
+        title: 'Бумага',
+        ingredients: [{ id: block.WOOD, count: 4 }],
+        result: { id: Game.interaction3d.ITEM.PAPER, count: 16 },
+      },
+      {
+        id: 'note_from_paper_and_stone',
+        title: 'Записка',
+        ingredients: [{ id: Game.interaction3d.ITEM.PAPER, count: 1 }, { id: block.STONE, count: 1 }],
+        result: { id: Game.interaction3d.ITEM.NOTE, count: 1 },
+      },
+      {
+        id: 'map_from_paper_and_dirt',
+        title: 'Карта',
+        ingredients: [{ id: Game.interaction3d.ITEM.PAPER, count: 4 }, { id: block.DIRT, count: 1 }],
+        result: { id: Game.interaction3d.ITEM.MAP, count: 1, data: createMapData() },
+      },
+    ].filter((recipe) => (
+      recipe.ingredients.every((item) => Number.isFinite(item.id))
+      && Number.isFinite(recipe.result.id)
+    ));
+  }
 
   function cloneData(data) {
     if (!data || typeof data !== 'object') return null;
@@ -24,8 +96,55 @@
     return stack ? { id: stack.id, count: stack.count, data: cloneData(stack.data) || undefined } : null;
   }
 
+  function createNoteData(text = '', readOnly = false) {
+    return {
+      text: String(text || ''),
+      readOnly: !!readOnly,
+    };
+  }
+
+  function createMapData() {
+    return {
+      type: 'survival_map',
+      mode: 'biome',
+      scale: 1,
+      radius: MAP_REVEAL_RADIUS,
+      cells: {
+        biome: {},
+      },
+    };
+  }
+
+  function noteTextFromStack(stack) {
+    if (!stack || !stack.data || typeof stack.data.text !== 'string') return '';
+    return stack.data.text;
+  }
+
+  function ensureMapData(stack) {
+    if (!stack) return createMapData();
+    if (!stack.data || typeof stack.data !== 'object') stack.data = createMapData();
+    stack.data.type = 'survival_map';
+    stack.data.mode = 'biome';
+    if (!Number.isFinite(stack.data.scale) || stack.data.scale <= 0) stack.data.scale = 1;
+    if (!Number.isFinite(stack.data.radius) || stack.data.radius <= 0) stack.data.radius = MAP_REVEAL_RADIUS;
+    if (!stack.data.cells || typeof stack.data.cells !== 'object') stack.data.cells = {};
+    if (!stack.data.cells.biome || typeof stack.data.cells.biome !== 'object') stack.data.cells.biome = {};
+    if (stack.data.cells.block) delete stack.data.cells.block;
+    return stack.data;
+  }
+
+  function saveNoteText(stack, text) {
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    if (!item || !stack || stack.id !== item.NOTE) return false;
+    const data = ensureNoteData(stack);
+    if (data.readOnly) return false;
+    data.text = String(text || '');
+    return true;
+  }
+
   function normalizeStack(stack) {
     if (!stack || !Number.isFinite(stack.id) || !Number.isFinite(stack.count) || stack.count <= 0) return null;
+    if (REMOVED_ITEM_IDS.has(stack.id)) return null;
     const normalized = { id: stack.id, count: Math.max(1, Math.min(MAX_STACK, stack.count | 0)) };
     const data = cloneData(stack.data);
     if (data) normalized.data = data;
@@ -127,7 +246,7 @@
 
   function getLabel(id) {
     const labels = Game.interaction3d && Game.interaction3d.BLOCK_LABELS;
-    return (labels && labels[id]) || 'Предмет';
+    return (labels && labels[id]) || `ID ${id}`;
   }
 
   function itemCountsFromSlots(slots) {
@@ -144,10 +263,16 @@
   function getStackLabel(stack) {
     if (!stack) return 'Пусто';
     const item = Game.interaction3d && Game.interaction3d.ITEM;
-    if (item && stack.id === item.FILLED_CHEST) {
+    if (item && (stack.id === item.FILLED_CHEST || stack.id === item.FILLED_STONE_CHEST)) {
       const items = itemCountsFromSlots(stack.data && stack.data.slots);
-      return items.length ? `Сундук с вещами: ${items.slice(0, 4).join(', ')}${items.length > 4 ? '...' : ''}` : 'Сундук с вещами: пусто';
+      const label = stack.id === item.FILLED_STONE_CHEST ? 'Каменный сундук с вещами' : 'Сундук с вещами';
+      return items.length ? `${label}: ${items.slice(0, 4).join(', ')}${items.length > 4 ? '...' : ''}` : `${label}: пусто`;
     }
+    if (item && stack.id === item.NOTE) {
+      const text = noteTextFromStack(stack).trim();
+      return text ? `Записка: ${text.slice(0, 32)}${text.length > 32 ? '...' : ''}` : 'Записка';
+    }
+    if (item && stack.id === item.MAP) return 'Карта';
     return getLabel(stack.id);
   }
 
@@ -232,23 +357,72 @@
     return { added, remaining };
   }
 
+  function canFitPlayerItem(state, id, count = 1, consumed = [], data = null) {
+    let remaining = Math.max(0, count | 0);
+    if (!Number.isFinite(id) || remaining <= 0) return false;
+    const hotbar = ensureHotbar(state).map(cloneStack);
+    const inventory = ensureInventory(state).map(cloneStack);
+    for (const item of consumed) removeFromSimulatedSlots([hotbar, inventory], item.id, item.count);
+    const slotsList = [hotbar, inventory];
+    for (const slots of slotsList) {
+      for (const slot of slots) {
+        if (!slot) {
+          remaining -= data ? 1 : MAX_STACK;
+        } else if (slot.id === id && !slot.data && slot.count < MAX_STACK) {
+          remaining -= MAX_STACK - slot.count;
+        }
+        if (remaining <= 0) return true;
+      }
+    }
+    return false;
+  }
+
+  function removeFromSimulatedSlots(slotsList, id, count) {
+    let remaining = Math.max(0, count | 0);
+    for (const slots of slotsList) {
+      for (let i = 0; i < slots.length; i += 1) {
+        const slot = slots[i];
+        if (!slot || slot.id !== id || slot.data) continue;
+        const move = Math.min(slot.count, remaining);
+        slot.count -= move;
+        remaining -= move;
+        if (slot.count <= 0) slots[i] = null;
+        if (remaining <= 0) return true;
+      }
+    }
+    return remaining <= 0;
+  }
+
   function filledChestDataFromWorld(state, x, y, z) {
     const key = `${x},${y},${z}`;
     const stored = state && state.world && state.world.chests ? state.world.chests[key] : null;
     let slots = chestSlotsFromStored(stored);
     if (stored && !Array.isArray(stored) && stored.lootTable) slots = generateLootSlots(state, key, resolveChestLootTableId(state, { x, y, z }, stored.lootTable));
-    return { slots: normalizeSlots(cloneData(slots) || [], CHEST_SIZE) };
+    const data = { slots: normalizeSlots(cloneData(slots) || [], CHEST_SIZE) };
+    if (stored && !Array.isArray(stored) && typeof stored.code === 'string') data.code = stored.code;
+    return data;
   }
 
   function restoreFilledChest(state, x, y, z, data) {
     if (!state || !state.world || !data) return false;
     if (!state.world.chests) state.world.chests = {};
-    state.world.chests[`${x},${y},${z}`] = { slots: normalizeSlots(cloneData(data.slots) || [], CHEST_SIZE), lootGenerated: true };
+    const restored = { slots: normalizeSlots(cloneData(data.slots) || [], CHEST_SIZE), lootGenerated: true };
+    if (typeof data.code === 'string') restored.code = data.code;
+    state.world.chests[`${x},${y},${z}`] = restored;
     return true;
   }
 
   function countInventoryItem(state, id) {
     return ensureInventory(state).reduce((sum, slot) => slot && slot.id === id ? sum + slot.count : sum, 0);
+  }
+
+  function countPlayerItem(state, id) {
+    const inventory = ensureInventory(state);
+    const hotbar = ensureHotbar(state);
+    let total = 0;
+    for (const slot of hotbar) if (slot && slot.id === id && !slot.data) total += slot.count;
+    for (const slot of inventory) if (slot && slot.id === id && !slot.data) total += slot.count;
+    return total;
   }
 
   function hasInventoryItem(state, id, count = 1) {
@@ -268,6 +442,28 @@
       if (slot.count <= 0) inventory[i] = null;
       if (remaining <= 0) return true;
     }
+    return true;
+  }
+
+  function removePlayerItem(state, id, count = 1) {
+    let remaining = Math.max(0, count | 0);
+    if (!Number.isFinite(id) || remaining <= 0 || countPlayerItem(state, id) < remaining) return false;
+    const slotsList = [ensureHotbar(state), ensureInventory(state)];
+    for (const slots of slotsList) {
+      for (let i = 0; i < slots.length; i += 1) {
+        const slot = slots[i];
+        if (!slot || slot.id !== id || slot.data) continue;
+        const move = Math.min(slot.count, remaining);
+        slot.count -= move;
+        remaining -= move;
+        if (slot.count <= 0) slots[i] = null;
+        if (remaining <= 0) {
+          updateSelectedBlockFromHotbar(state);
+          return true;
+        }
+      }
+    }
+    updateSelectedBlockFromHotbar(state);
     return true;
   }
 
@@ -497,6 +693,167 @@
     return state;
   }
 
+  function isChestBlock(id) {
+    const block = Game.blocks && Game.blocks.BLOCK;
+    return !!block && (id === block.CHEST || id === block.STONE_CHEST);
+  }
+
+  function isStoneChestBlock(id) {
+    const block = Game.blocks && Game.blocks.BLOCK;
+    return !!block && id === block.STONE_CHEST;
+  }
+
+  function ensureChestRecord(state, key) {
+    if (!state.world.chests) state.world.chests = {};
+    const stored = state.world.chests[key];
+    if (stored && !Array.isArray(stored)) return stored;
+    const slots = normalizeSlots(chestSlotsFromStored(stored), CHEST_SIZE);
+    const record = { slots };
+    state.world.chests[key] = record;
+    return record;
+  }
+
+  function askStoneChestCode(stored) {
+    const promptFn = window && typeof window.prompt === 'function' ? window.prompt.bind(window) : null;
+    if (!promptFn) return false;
+    if (!stored.code) {
+      const nextCode = promptFn('Придумай код для каменного сундука');
+      if (!nextCode) return false;
+      stored.code = String(nextCode);
+      return true;
+    }
+    const entered = promptFn('Введите код каменного сундука');
+    return normalizeChestCode(entered || '') === normalizeChestCode(stored.code || '');
+  }
+
+  function normalizeChestCode(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/\s*-\s*/g, '-')
+      .replace(/\s+/g, ' ');
+  }
+
+  function ensureNoteData(stack) {
+    if (!stack) return createNoteData();
+    if (!stack.data || typeof stack.data !== 'object') stack.data = createNoteData();
+    if (typeof stack.data.text !== 'string') stack.data.text = '';
+    stack.data.readOnly = !!stack.data.readOnly;
+    return stack.data;
+  }
+
+  function revealMapCell(state, data, x, z) {
+    if (!state || !state.world || !data) return false;
+    if (x < 0 || z < 0 || x >= state.world.w || z >= state.world.d) return false;
+    const key = `${x},${z}`;
+    const biome = Game.generation3d && Game.generation3d.getBiomeAt3D ? Game.generation3d.getBiomeAt3D(state, x, z) : 'unknown';
+    const prev = data.cells.biome[key];
+    if (prev && prev.biome === biome) return false;
+    data.cells.biome[key] = { biome };
+    return true;
+  }
+
+  function updateMapStack(state, stack) {
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    if (!item || !stack || stack.id !== item.MAP || !state || !state.player || !state.world) return 0;
+    const data = ensureMapData(stack);
+    const radius = Math.max(2, Math.min(MAP_REVEAL_RADIUS, data.radius | 0));
+    const px = Math.floor(state.player.x);
+    const pz = Math.floor(state.player.z);
+    let updated = 0;
+    for (let z = pz - radius; z <= pz + radius; z += 1) {
+      for (let x = px - radius; x <= px + radius; x += 1) {
+        if ((x - px) * (x - px) + (z - pz) * (z - pz) > radius * radius) continue;
+        if (revealMapCell(state, data, x, z)) updated += 1;
+      }
+    }
+    return updated;
+  }
+
+  function updateInventoryMaps(state) {
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    if (!item || !Number.isFinite(item.MAP) || !state || !state.player) return { maps: 0, updated: 0 };
+    const slots = [...ensureHotbar(state), ...ensureInventory(state)];
+    let maps = 0;
+    let updated = 0;
+    for (const slot of slots) {
+      if (!slot || slot.id !== item.MAP) continue;
+      maps += 1;
+      updated += updateMapStack(state, slot);
+    }
+    return { maps, updated };
+  }
+
+  function findFirstMapStack(state) {
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    if (!item || !Number.isFinite(item.MAP) || !state || !state.player) return null;
+    const slots = [...ensureHotbar(state), ...ensureInventory(state)];
+    return slots.find((slot) => slot && slot.id === item.MAP) || null;
+  }
+
+  function openNote(state, stack) {
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    if (!item || !stack || stack.id !== item.NOTE) return false;
+    const data = ensureNoteData(stack);
+    if (state && state.pause) state.pause.open = true;
+    if (state && state.ui) state.ui.noteOpen = true;
+    if (typeof document === 'undefined' || !document.body) {
+      if (state && state.ui) {
+        state.ui.noticeText = data.text || 'Пустая записка';
+        state.ui.noticeTimer = 4;
+      }
+      return true;
+    }
+    if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
+    const existing = document.querySelector('.note-editor-root');
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    const root = document.createElement('div');
+    root.className = 'note-editor-root';
+    const title = data.readOnly ? 'Готовая записка' : 'Записка';
+    root.innerHTML = `
+      <section class="note-editor-panel">
+        <div class="note-editor-head">
+          <h2>${escapeHtml(title)}</h2>
+          <button class="note-editor-close" type="button" data-note-action="close">x</button>
+        </div>
+        <textarea class="note-editor-text" ${data.readOnly ? 'readonly' : ''} spellcheck="false"></textarea>
+        <div class="note-editor-actions">
+          ${data.readOnly ? '' : '<button class="note-editor-button" type="button" data-note-action="save">Сохранить</button>'}
+          <button class="note-editor-button" type="button" data-note-action="close">Закрыть</button>
+        </div>
+      </section>
+    `;
+    const textarea = root.querySelector('.note-editor-text');
+    if (textarea) textarea.value = data.text || '';
+    const close = () => {
+      if (root.parentNode) root.parentNode.removeChild(root);
+      if (state && state.ui) state.ui.noteOpen = false;
+      if (state && state.pause) state.pause.open = false;
+    };
+    root.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+    });
+    root.addEventListener('click', (event) => {
+      const target = event.target && event.target.closest ? event.target.closest('[data-note-action]') : null;
+      if (!target) return;
+      const action = target.dataset.noteAction;
+      if (action === 'save' && !data.readOnly) {
+        saveNoteText(stack, textarea ? textarea.value : '');
+        if (state && state.ui) {
+          state.ui.noticeText = 'Записка сохранена';
+          state.ui.noticeTimer = 1.7;
+        }
+        close();
+      } else if (action === 'close') {
+        close();
+      }
+    });
+    document.body.appendChild(root);
+    if (textarea && !data.readOnly) textarea.focus();
+    return true;
+  }
+
   function isLikelySpawnTentChest(state, pos) {
     const block = Game.blocks && Game.blocks.BLOCK;
     const world3d = Game.world3d;
@@ -519,9 +876,23 @@
 
   function openChest(state, x, y, z) {
     const block = Game.blocks && Game.blocks.BLOCK;
-    if (!state || !state.world || !block || !Game.world3d || Game.world3d.getBlock3D(state, x, y, z) !== block.CHEST) return false;
+    const blockId = Game.world3d && Game.world3d.getBlock3D(state, x, y, z);
+    if (!state || !state.world || !block || !Game.world3d || !isChestBlock(blockId)) return false;
     if (!state.ui) state.ui = {};
-    state.ui.openChestKey = `${x},${y},${z}`;
+    const key = `${x},${y},${z}`;
+    if (isStoneChestBlock(blockId)) {
+      const stored = ensureChestRecord(state, key);
+      if (!askStoneChestCode(stored)) {
+        state.ui.openChestKey = '';
+        if (state.ui) {
+          state.ui.noticeText = 'Каменный сундук: неверный код';
+          state.ui.noticeTimer = 1.7;
+        }
+        return false;
+      }
+      markOpenChestModified(state);
+    }
+    state.ui.openChestKey = key;
     ensureOpenChestSlots(state);
     return true;
   }
@@ -540,7 +911,7 @@
     const key = state && state.ui && state.ui.openChestKey;
     const pos = parseChestKey(key);
     const block = Game.blocks && Game.blocks.BLOCK;
-    if (!state || !state.world || !pos || !block || !Game.world3d || Game.world3d.getBlock3D(state, pos.x, pos.y, pos.z) !== block.CHEST) {
+    if (!state || !state.world || !pos || !block || !Game.world3d || !isChestBlock(Game.world3d.getBlock3D(state, pos.x, pos.y, pos.z))) {
       closeChest(state);
       return [];
     }
@@ -663,8 +1034,10 @@
     const chest = ensureOpenChestSlots(state);
     const hasChest = chest.length > 0;
     const isCreative = state.worldMeta && state.worldMeta.mode === 'creative';
+    const isSurvival = state.worldMeta && state.worldMeta.mode === 'survival';
     const creativeTabLabel = isEducationCreativeEditor(state) ? 'Учебно-творческий инвентарь' : 'Творческий инвентарь';
-    if (!isCreative) activeTab = 'inventory';
+    if (!isCreative && activeTab === 'creative') activeTab = 'inventory';
+    if (!isSurvival && activeTab === 'craft') activeTab = 'inventory';
     const carriedLabel = carried ? `${getStackLabel(carried)} x${carried.count}` : 'Пусто';
     root.innerHTML = `
       <section class="inventory-panel">
@@ -674,10 +1047,11 @@
         </div>
         <div class="inventory-tabs">
           <button class="inventory-tab ${activeTab === 'inventory' ? 'is-active' : ''}" type="button" data-inventory-tab="inventory">Инвентарь</button>
+          ${isSurvival ? `<button class="inventory-tab ${activeTab === 'craft' ? 'is-active' : ''}" type="button" data-inventory-tab="craft">Крафт</button>` : ''}
           ${isCreative ? `<button class="inventory-tab ${activeTab === 'creative' ? 'is-active' : ''}" type="button" data-inventory-tab="creative">${creativeTabLabel}</button>` : ''}
         </div>
         <div class="inventory-carried">В руке: ${escapeHtml(carriedLabel)}</div>
-        ${activeTab === 'creative' && isCreative ? renderCreativeTab(state) : renderInventoryTab(inventory)}
+        ${activeTab === 'creative' && isCreative ? renderCreativeTab(state) : (activeTab === 'craft' && isSurvival ? renderCraftTab(state) : renderInventoryTab(inventory))}
         ${hasChest ? renderChestTab(chest) : ''}
         ${renderHotbarStrip(hotbar, state.player.selectedHotbarIndex)}
         ${renderCarriedCursor()}
@@ -717,6 +1091,43 @@
             ${renderStack({ id, count: MAX_STACK })}
           </button>
         `).join('')}
+      </div>
+    `;
+  }
+
+  function recipeLine(items) {
+    return items.map((item) => `${getLabel(item.id)} x${item.count}`).join(' + ');
+  }
+
+  function canCraftRecipe(state, recipe) {
+    return recipe.ingredients.every((item) => countPlayerItem(state, item.id) >= item.count);
+  }
+
+  function renderCraftTab(state) {
+    const recipes = recipeList();
+    return `
+      <div class="inventory-section-title">Крафт</div>
+      <div class="inventory-craft-list">
+        ${recipes.map((recipe) => {
+          const canCraft = canCraftRecipe(state, recipe);
+          const missing = recipe.ingredients
+            .filter((item) => countPlayerItem(state, item.id) < item.count)
+            .map((item) => `${getLabel(item.id)} x${item.count - countPlayerItem(state, item.id)}`);
+          return `
+            <div class="inventory-craft-recipe">
+              <div class="inventory-craft-main">
+                <strong>${escapeHtml(recipe.title)}</strong>
+                <span>Нужно: ${escapeHtml(recipeLine(recipe.ingredients))}</span>
+                <span>Получится: ${escapeHtml(getLabel(recipe.result.id))} x${recipe.result.count}</span>
+                ${missing.length ? `<span class="inventory-craft-missing">Не хватает: ${escapeHtml(missing.join(', '))}</span>` : ''}
+              </div>
+              <div class="inventory-craft-result">
+                ${renderStack(recipe.result)}
+                <button class="inventory-craft-button" type="button" data-craft-recipe="${escapeHtml(recipe.id)}" ${canCraft ? '' : 'disabled'}>Создать</button>
+              </div>
+            </div>
+          `;
+        }).join('')}
       </div>
     `;
   }
@@ -766,12 +1177,33 @@
 
   function handleInventoryClick(state, event) {
     updatePointer(event);
-    const selector = '[data-inventory-action],[data-inventory-tab],[data-inventory-slot],[data-hotbar-slot],[data-chest-slot],[data-creative-item]';
+    const selector = '[data-inventory-action],[data-inventory-tab],[data-inventory-slot],[data-hotbar-slot],[data-chest-slot],[data-creative-item],[data-craft-recipe]';
     const target = event.target && event.target.closest ? event.target.closest(selector) : null;
     if (!target) return { close: false };
     if (target.dataset.inventoryAction === 'close') return { close: true };
     if (hasData(target, 'inventoryTab')) {
       activeTab = target.dataset.inventoryTab;
+      return { changed: true };
+    }
+    if (hasData(target, 'craftRecipe')) {
+      if (event.button === 2 || carried) return { changed: false };
+      const recipe = recipeList().find((item) => item.id === target.dataset.craftRecipe);
+      if (!recipe || !canCraftRecipe(state, recipe)) return { changed: false };
+      if (!canFitPlayerItem(state, recipe.result.id, recipe.result.count, recipe.ingredients, recipe.result.data || null)) {
+        if (state.ui) {
+          state.ui.noticeText = 'Крафт: не хватает места';
+          state.ui.noticeTimer = 1.7;
+        }
+        return { changed: true };
+      }
+      for (const item of recipe.ingredients) removePlayerItem(state, item.id, item.count);
+      const result = addMinedItem(state, recipe.result.id, recipe.result.count, recipe.result.data || null);
+      if (state.ui) {
+        state.ui.noticeText = result.remaining > 0
+          ? 'Крафт: не хватает места'
+          : `Создано: ${getLabel(recipe.result.id)}`;
+        state.ui.noticeTimer = 1.7;
+      }
       return { changed: true };
     }
     if (hasData(target, 'inventorySlot')) {
@@ -877,6 +1309,15 @@
     CHEST_SIZE,
     HOTBAR_SIZE,
     MAX_STACK,
+    recipeList,
+    createNoteData,
+    createMapData,
+    noteTextFromStack,
+    saveNoteText,
+    ensureMapData,
+    updateInventoryMaps,
+    findFirstMapStack,
+    normalizeChestCode,
     ensureInventory,
     ensureHotbar,
     addInventoryItem,
@@ -884,11 +1325,13 @@
     hasInventoryItem,
     removeInventoryItem,
     countInventoryItem,
+    countPlayerItem,
     consumeSelectedHotbarItem,
     getSelectedHotbarStack,
     getStackLabel,
     filledChestDataFromWorld,
     restoreFilledChest,
+    openNote,
     updateSelectedBlockFromHotbar,
     openChest,
     closeChest,
