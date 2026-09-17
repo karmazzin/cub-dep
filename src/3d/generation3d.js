@@ -1,20 +1,25 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { clearWorld3D, setBlock3D, getBlock3D, setStaticWater3D, setLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
+  const { clearWorld3D, setBlock3D, getBlock3D, setStaticWater3D, setLava3D, setVolcanicLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
   const {
     CHUNK_SIZE,
     CHUNK_UNLOAD_DISTANCE,
     CHUNK_START_SYNC_RADIUS,
     CHUNK_WORKER_MAX_PENDING,
+    CHUNK_WORKER_MAX_COUNT,
     CHUNK_SYNC_GENERATE_TIME_BUDGET_MS,
     CHUNK_SYNC_GENERATE_MAX_TIME_BUDGET_MS,
     CHUNK_SYNC_FALLBACK_RADIUS,
     CHUNK_DECORATE_BUDGET,
+    CHUNK_DECORATE_MAX_BUDGET,
+    CHUNK_DECORATE_TIME_BUDGET_MS,
     CHUNK_UNLOAD_COLUMN_BUDGET,
     getChunkRenderDistanceValue,
     isManualChunkRenderDistance,
   } = Game.constants3d;
+
+  const TERRAIN_SURFACE_PRIORITY_WEIGHT = 0.45;
 
   const WATER_LEVEL = 14;
   const SNOW_LEVEL = 48;
@@ -22,8 +27,10 @@
   const BIOME_TRANSITION_RADIUS = 18;
   const BIOME_TRANSITION_OFFSETS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
   let chunkWorker = null;
+  let chunkWorkers = [];
   let chunkWorkerAvailable = true;
   let nextWorkerJobId = 1;
+  let nextWorkerIndex = 0;
   let activeState = null;
   const guaranteedVolcanicCache = new Map();
 
@@ -42,6 +49,17 @@
     n = (n ^ (n >>> 13)) >>> 0;
     n = Math.imul(n, 1274126177) >>> 0;
     return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+  }
+
+  function seededRandom(seedText) {
+    let state = hash(seedText) || 1;
+    return () => {
+      state = Math.imul(state + 0x6D2B79F5, 1) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
   }
 
   function smoothNoise(seed, x, z) {
@@ -145,7 +163,7 @@
       const dist = Math.hypot(x - guaranteed.x, z - guaranteed.z) + edgeNoise;
       if (dist <= guaranteed.radius + 28) {
         const edge = guaranteed.radius - dist;
-        best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+        best = { inVolcanic: edge >= 0, fringe: edge < 0, edge, centerX: guaranteed.x, centerZ: guaranteed.z, radius: guaranteed.radius, key: 'guaranteed' };
       }
     }
     if (mountainStrength(seed, x, z) < 0.58) return best || { inVolcanic: false, fringe: false, edge: 99 };
@@ -165,10 +183,51 @@
         const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
         if (dist > radius + 28) continue;
         const edge = radius - dist;
-        if (!best || edge > best.edge) best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+        if (!best || edge > best.edge) best = { inVolcanic: edge >= 0, fringe: edge < 0, edge, centerX, centerZ, radius, key: `${cx},${cz}` };
       }
     }
     return best || { inVolcanic: false, fringe: false, edge: 99 };
+  }
+
+  function volcanoInfo(seed, x, z) {
+    const volcanic = volcanicInfo(seed, x, z);
+    if (!volcanic.inVolcanic || !Number.isFinite(volcanic.centerX) || !Number.isFinite(volcanic.centerZ)) return null;
+    const radius = Math.max(16, Math.min(28, volcanic.radius * 0.42));
+    const dx = x - volcanic.centerX;
+    const dz = z - volcanic.centerZ;
+    const dist = Math.hypot(dx, dz);
+    if (dist > radius + 2) return null;
+    const height = 22 + Math.floor(noise2(seed + 2741, Math.floor(volcanic.centerX), Math.floor(volcanic.centerZ)) * 12);
+    return {
+      x: volcanic.centerX,
+      z: volcanic.centerZ,
+      key: volcanic.key || `${Math.floor(volcanic.centerX)},${Math.floor(volcanic.centerZ)}`,
+      radius,
+      craterRadius: 5 + noise2(seed + 2743, Math.floor(volcanic.centerX), Math.floor(volcanic.centerZ)) * 2.5,
+      ventRadius: 2.2 + noise2(seed + 2745, Math.floor(volcanic.centerX), Math.floor(volcanic.centerZ)) * 1.2,
+      height,
+      dist,
+    };
+  }
+
+  function volcanoTerrainOffset(info) {
+    if (!info) return 0;
+    const slope = Math.max(0, 1 - info.dist / info.radius);
+    const cone = Math.pow(slope, 1.45) * info.height;
+    const rim = info.dist >= info.craterRadius && info.dist <= info.craterRadius + 3
+      ? (1 - Math.abs(info.dist - (info.craterRadius + 1.5)) / 1.5) * 4
+      : 0;
+    const crater = info.dist < info.craterRadius
+      ? (1 - info.dist / Math.max(1, info.craterRadius)) * 8
+      : 0;
+    return Math.floor(Math.max(0, cone + Math.max(0, rim) - crater));
+  }
+
+  function isVolcanoVentCell(seed, x, y, z) {
+    const info = volcanoInfo(seed, x, z);
+    if (!info || info.dist > info.ventRadius) return false;
+    const floorY = 1 + Math.floor(noise2(seed + 2747, Math.floor(info.x), Math.floor(info.z)) * 2);
+    return y > floorY && y <= terrainHeight(seed, x, z) + 1;
   }
 
   function baseLandBiome(seed, x, z) {
@@ -399,7 +458,8 @@
   function terrainHeight(seed, x, z) {
     const river = riverInfo(seed, x, z);
     const riverCut = river.inRiver ? river.depth + 2 : (river.shore ? 1 : 0);
-    return Math.max(5, Math.min(58, terrainBaseHeight(seed, x, z) - riverCut));
+    const base = terrainBaseHeight(seed, x, z) - riverCut;
+    return Math.max(5, Math.min(92, base + volcanoTerrainOffset(volcanoInfo(seed, x, z))));
   }
 
   function biomeAt(seed, x, z) {
@@ -430,6 +490,203 @@
     if (!state || !state.worldMeta) return 'plains';
     if (state.worldMeta.currentDimension === 'underground') return 'deep_cavern';
     return biomeAt(worldSeed(state), Math.floor(x), Math.floor(z));
+  }
+
+  function getVolcanoAt3D(state, x, z) {
+    if (!state || !state.worldMeta || currentDimension(state) === 'underground') return null;
+    return volcanoInfo(worldSeed(state), Math.floor(x), Math.floor(z));
+  }
+
+  function isVolcanoVentCell3D(state, x, y, z) {
+    if (!state || !state.worldMeta || currentDimension(state) === 'underground') return false;
+    return isVolcanoVentCell(worldSeed(state), Math.floor(x), Math.floor(y), Math.floor(z));
+  }
+
+  function volcanoEruptionIntensity(state, info) {
+    if (!state || !info) return 0;
+    const volcanoes = state.volcanoes || {};
+    const forced = volcanoes.forcedEruptions && volcanoes.forcedEruptions.get(info.key);
+    if (forced) {
+      const elapsed = Math.max(0, (Number.isFinite(volcanoes.time) ? volcanoes.time : 0) - forced.startedAt);
+      if (elapsed <= forced.duration) {
+        if (elapsed < 6) return elapsed / 6;
+        if (elapsed > forced.duration - 10) return Math.max(0, (forced.duration - elapsed) / 10);
+        return 1;
+      }
+      volcanoes.forcedEruptions.delete(info.key);
+    }
+    const time = Number.isFinite(volcanoes.time) ? volcanoes.time : 0;
+    const phaseOffset = noise2(worldSeed(state) + 2751, Math.floor(info.x), Math.floor(info.z)) * 360;
+    const local = (time + phaseOffset) % 360;
+    if (local > 78) return 0;
+    if (local < 10) return local / 10;
+    if (local > 64) return Math.max(0, (78 - local) / 14);
+    return 1;
+  }
+
+  function findNearbyVolcano3D(state, x, z, radius = 96) {
+    const seed = worldSeed(state);
+    let best = null;
+    const offsets = [[0, 0], [radius * 0.5, 0], [-radius * 0.5, 0], [0, radius * 0.5], [0, -radius * 0.5], [radius, 0], [-radius, 0], [0, radius], [0, -radius], [radius * 0.7, radius * 0.7], [radius * 0.7, -radius * 0.7], [-radius * 0.7, radius * 0.7], [-radius * 0.7, -radius * 0.7]];
+    for (const [ox, oz] of offsets) {
+      const info = volcanoInfo(seed, Math.floor(x + ox), Math.floor(z + oz));
+      if (!info) continue;
+      const dist = Math.hypot(x - info.x, z - info.z);
+      if (dist > info.radius + 112) continue;
+      if (!best || dist < best.dist) best = { ...info, dist };
+    }
+    return best;
+  }
+
+  function ensureVolcanoState(state) {
+    if (!state.volcanoes) state.volcanoes = {};
+    if (!state.volcanoes.active) state.volcanoes.active = new Map();
+    if (!state.volcanoes.forcedEruptions) state.volcanoes.forcedEruptions = new Map();
+    if (!state.volcanoes.coolingWaves) state.volcanoes.coolingWaves = new Map();
+    if (!Number.isFinite(state.volcanoes.time)) state.volcanoes.time = 0;
+    if (!Number.isFinite(state.volcanoes.lavaTimer)) state.volcanoes.lavaTimer = 0;
+    return state.volcanoes;
+  }
+
+  function maybeStartFirstVolcanoEruption(state, info) {
+    if (!state || !state.worldMeta || !info) return;
+    if (getBiomeAt3D(state, state.player.x || 0, state.player.z || 0) !== 'volcanic') return;
+    const meta = state.worldMeta;
+    if (!meta.volcanoFirstEruptions || typeof meta.volcanoFirstEruptions !== 'object') meta.volcanoFirstEruptions = {};
+    if (meta.volcanoFirstEruptions[info.key]) return;
+    const volcanoes = ensureVolcanoState(state);
+    meta.volcanoFirstEruptions[info.key] = true;
+    volcanoes.forcedEruptions.set(info.key, {
+      startedAt: volcanoes.time,
+      duration: 78,
+    });
+  }
+
+  function startVolcanicCoolingWave(state, info) {
+    if (!state || !info) return;
+    const volcanoes = ensureVolcanoState(state);
+    const wave = {
+      x: info.x,
+      z: info.z,
+      outerRadius: Math.max(info.radius + 28, info.radius + 100),
+      ventRadius: Math.max(1.5, info.ventRadius || 2.4),
+      elapsed: 0,
+      speed: 5.5,
+      activateTimer: 0,
+    };
+    volcanoes.coolingWaves.set(info.key, wave);
+    if (Game.fluids3d && Game.fluids3d.activateVolcanicLavaCoolingWave3D) {
+      Game.fluids3d.activateVolcanicLavaCoolingWave3D(state, wave);
+    }
+  }
+
+  function updateVolcanicCoolingWaves(state, dt) {
+    const volcanoes = ensureVolcanoState(state);
+    for (const [key, wave] of Array.from(volcanoes.coolingWaves.entries())) {
+      wave.elapsed += Math.max(0, dt || 0);
+      wave.activateTimer = Math.max(0, (wave.activateTimer || 0) - Math.max(0, dt || 0));
+      if (wave.activateTimer <= 0 && Game.fluids3d && Game.fluids3d.activateVolcanicLavaCoolingWave3D) {
+        Game.fluids3d.activateVolcanicLavaCoolingWave3D(state, wave);
+        wave.activateTimer = 0.45;
+      }
+      if (wave.outerRadius - wave.elapsed * wave.speed <= wave.ventRadius - 2) {
+        volcanoes.coolingWaves.delete(key);
+      }
+    }
+  }
+
+  function emitVolcanicLava(state, info) {
+    if (!state || !state.world || !info || !Game.fluids3d || !Game.fluids3d.addVolcanicLavaSource3D) return false;
+    const volcanoes = ensureVolcanoState(state);
+    const seed = worldSeed(state);
+    const step = Math.floor(volcanoes.time * 2);
+    const angle = noise2(seed + 2753, Math.floor(info.x), step) * Math.PI * 2;
+    const radius = info.craterRadius + 1 + noise2(seed + 2755, step, Math.floor(info.z)) * 3;
+    const x = Math.floor(info.x + Math.cos(angle) * radius);
+    const z = Math.floor(info.z + Math.sin(angle) * radius);
+    if (!state.world || x <= 1 || z <= 1 || x >= state.world.w - 2 || z >= state.world.d - 2) return false;
+    const y = Math.min(state.world.h - 2, terrainHeight(seed, x, z) + 1);
+    if (getBlock3D(state, x, y, z) !== BLOCK.AIR && getBlock3D(state, x, y, z) !== BLOCK.VOLCANIC_LAVA) return false;
+    return Game.fluids3d.addVolcanicLavaSource3D(state, x, y, z);
+  }
+
+  function updateVolcanoes3D(state, dt) {
+    if (!state || !state.world || currentDimension(state) === 'underground') return;
+    const volcanoes = ensureVolcanoState(state);
+    volcanoes.time += Math.max(0, dt || 0);
+    volcanoes.lavaTimer = Math.max(0, volcanoes.lavaTimer - dt);
+    updateVolcanicCoolingWaves(state, dt);
+    const player = state.player || { x: 0, z: 0 };
+    const info = findNearbyVolcano3D(state, player.x || 0, player.z || 0, 128);
+    const previous = info && volcanoes.active ? volcanoes.active.get(info.key) : null;
+    volcanoes.active.clear();
+    volcanoes.shake = 0;
+    if (!info) return;
+    maybeStartFirstVolcanoEruption(state, info);
+    const intensity = volcanoEruptionIntensity(state, info);
+    if (intensity <= 0) {
+      if (previous && (previous.intensity || 0) > 0) startVolcanicCoolingWave(state, info);
+      return;
+    }
+    const ventX = Math.round(info.x);
+    const ventZ = Math.round(info.z);
+    const ventY = Math.min(state.world.h - 2, terrainHeight(worldSeed(state), ventX, ventZ) + 1);
+    volcanoes.active.set(info.key, { x: info.x, y: ventY, z: info.z, radius: info.radius, craterRadius: info.craterRadius, ventRadius: info.ventRadius, steamHeight: 15, intensity });
+    const dist = Math.hypot((player.x || 0) - info.x, (player.z || 0) - info.z);
+    volcanoes.shake = intensity * Math.max(0, 1 - Math.max(0, dist - info.radius) / 96);
+    if (intensity > 0.8 && volcanoes.lavaTimer <= 0) {
+      if (emitVolcanicLava(state, info)) volcanoes.lavaTimer = 1.8 + noise2(worldSeed(state) + 2757, Math.floor(volcanoes.time), Math.floor(info.x)) * 1.6;
+      else volcanoes.lavaTimer = 0.8;
+    }
+  }
+
+  function getActiveVolcanicEruption3D(state, x, z) {
+    const active = state && state.volcanoes && state.volcanoes.active ? Array.from(state.volcanoes.active.values()) : [];
+    let best = null;
+    for (const info of active) {
+      const dist = Math.hypot((x || 0) - info.x, (z || 0) - info.z);
+      const limit = (info.radius || 0) + 100;
+      if (dist > limit) continue;
+      const threat = { ...info, dist, intensity: info.intensity * Math.max(0, 1 - Math.max(0, dist - (info.radius || 0)) / 100) };
+      if (!best || threat.intensity > best.intensity) best = threat;
+    }
+    return best;
+  }
+
+  function getVolcanicSkyInfluence3D(state, x, z) {
+    const threat = getActiveVolcanicEruption3D(state, x, z);
+    if (!threat) return 0;
+    const biome = getBiomeAt3D(state, x, z);
+    const biomeFactor = biome === 'volcanic' ? 1 : 0.45;
+    return Math.max(0, Math.min(1, threat.intensity * biomeFactor));
+  }
+
+  function getActiveVolcanicVents3D(state) {
+    const active = state && state.volcanoes && state.volcanoes.active ? Array.from(state.volcanoes.active.values()) : [];
+    return active
+      .filter((info) => info && Number.isFinite(info.y) && (info.intensity || 0) > 0)
+      .map((info) => ({
+        x: Math.round(info.x),
+        y: info.y,
+        z: Math.round(info.z),
+        height: info.steamHeight || 15,
+        radius: Math.max(1.4, info.ventRadius || 2.4),
+        intensity: Math.max(0, Math.min(1, info.intensity || 0)),
+        volcanic: true,
+      }));
+  }
+
+  function getVolcanicCoolingWave3D(state, x, z) {
+    const waves = state && state.volcanoes && state.volcanoes.coolingWaves ? Array.from(state.volcanoes.coolingWaves.values()) : [];
+    let best = null;
+    for (const wave of waves) {
+      const dist = Math.hypot((x || 0) - wave.x, (z || 0) - wave.z);
+      const threshold = wave.outerRadius - wave.elapsed * wave.speed;
+      if (dist < Math.max(wave.ventRadius, threshold)) continue;
+      const info = { ...wave, dist, threshold };
+      if (!best || dist > best.dist) best = info;
+    }
+    return best;
   }
 
   function caveFeatureForCell(seed, world, cellX, cellZ) {
@@ -504,7 +761,7 @@
   const VILLAGE_MIN_DISTANCE = 300;
   const VILLAGE_MARGIN = 128;
   const DECORATION_MIN_WRITE_BELOW = 3;
-  const DECORATION_MAX_WRITE_ABOVE = 10;
+  const DECORATION_MAX_WRITE_ABOVE = 26;
   const VILLAGE_BUILDING_CLEAR_HEIGHT = 8;
   const VILLAGE_BUILDING_FOUNDATION_DEPTH = 16;
   const TREE_CROWN_RADIUS = 2;
@@ -730,6 +987,684 @@
     }));
   }
 
+  const TREASURY_COUNT_MIN = 3;
+  const TREASURY_COUNT_MAX = 4;
+  const TREASURY_MARGIN = 96;
+  const TREASURY_MIN_DISTANCE = 260;
+  const TREASURY_SURFACE_NEAR_MIN = 100;
+  const TREASURY_SURFACE_NEAR_MAX = 200;
+  const TREASURY_PARKOUR_SNAKES = 10;
+
+  function randInt(rng, min, max) {
+    return min + Math.floor(rng() * (max - min + 1));
+  }
+
+  function shuffleDeterministic(list, rng) {
+    const result = list.slice();
+    for (let i = result.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(rng() * (i + 1));
+      const temp = result[i];
+      result[i] = result[j];
+      result[j] = temp;
+    }
+    return result;
+  }
+
+  function treasurySiteAllowed(seed, world, x, z, chosen, options = {}) {
+    if (!world) return false;
+    if (x < TREASURY_MARGIN || z < TREASURY_MARGIN || x > world.w - TREASURY_MARGIN || z > world.d - TREASURY_MARGIN) return false;
+    const biome = biomeAt(seed, x, z);
+    if (biome === 'lake' || biome === 'beach' || biome === 'geysers' || biome === 'volcanic') return false;
+    const ground = terrainHeight(seed, x, z);
+    if (ground < 14 || ground > world.h - 18) return false;
+    for (const treasury of chosen) {
+      if (Math.hypot(x - treasury.x, z - treasury.z) < TREASURY_MIN_DISTANCE) return false;
+    }
+    const villages = options.villages || [];
+    for (const village of villages) {
+      if (Math.hypot(x - village.x, z - village.z) < village.radius + 80) return false;
+    }
+    return true;
+  }
+
+  function findNearSpawnTreasurySite(seed, world, villages) {
+    const rng = seededRandom(`${seed}:treasury-near-spawn`);
+    const spawnX = Math.floor(world.w / 2);
+    const spawnZ = Math.floor(world.d / 2);
+    let best = null;
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const angle = rng() * Math.PI * 2;
+      const distance = TREASURY_SURFACE_NEAR_MIN + rng() * (TREASURY_SURFACE_NEAR_MAX - TREASURY_SURFACE_NEAR_MIN);
+      const x = Math.round(spawnX + Math.cos(angle) * distance);
+      const z = Math.round(spawnZ + Math.sin(angle) * distance);
+      if (!treasurySiteAllowed(seed, world, x, z, [], { villages })) continue;
+      let roughness = 0;
+      let minH = Infinity;
+      let maxH = -Infinity;
+      for (let dz = -5; dz <= 5; dz += 5) {
+        for (let dx = -5; dx <= 5; dx += 5) {
+          const h = terrainHeight(seed, x + dx, z + dz);
+          minH = Math.min(minH, h);
+          maxH = Math.max(maxH, h);
+        }
+      }
+      roughness = maxH - minH;
+      const score = Math.max(0, 1 - roughness / 12) + (1 - Math.abs(distance - 150) / 80) * 0.35;
+      if (!best || score > best.score) best = { x, z, score };
+    }
+    if (!best) {
+      for (let distance = TREASURY_SURFACE_NEAR_MIN; distance <= TREASURY_SURFACE_NEAR_MAX && !best; distance += 16) {
+        for (let step = 0; step < 24; step += 1) {
+          const angle = (step / 24) * Math.PI * 2;
+          const x = Math.round(spawnX + Math.cos(angle) * distance);
+          const z = Math.round(spawnZ + Math.sin(angle) * distance);
+          if (treasurySiteAllowed(seed, world, x, z, [], { villages })) {
+            best = { x, z, score: 0 };
+            break;
+          }
+        }
+      }
+    }
+    if (!best) {
+      const x = Math.max(TREASURY_MARGIN, Math.min(world.w - TREASURY_MARGIN, spawnX + 150));
+      const z = Math.max(TREASURY_MARGIN, Math.min(world.d - TREASURY_MARGIN, spawnZ));
+      best = { x, z, score: -1 };
+    }
+    return {
+      id: 'treasury-0',
+      type: 'surface',
+      x: best.x,
+      y: terrainHeight(seed, best.x, best.z) + 1,
+      z: best.z,
+    };
+  }
+
+  function findSurfaceTreasurySite(seed, world, index, chosen, villages) {
+    const rng = seededRandom(`${seed}:treasury-surface:${index}`);
+    let best = null;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const x = TREASURY_MARGIN + Math.floor(rng() * Math.max(1, world.w - TREASURY_MARGIN * 2));
+      const z = TREASURY_MARGIN + Math.floor(rng() * Math.max(1, world.d - TREASURY_MARGIN * 2));
+      if (!farFromSpawn(world, x, z, 260)) continue;
+      if (!treasurySiteAllowed(seed, world, x, z, chosen, { villages })) continue;
+      const biome = biomeAt(seed, x, z);
+      const biomeScore = biome === 'plains' ? 1 : (biome === 'forest' || biome === 'spruce_forest' ? 0.82 : 0.62);
+      const score = biomeScore + rng() * 0.18;
+      if (!best || score > best.score) best = { x, z, score };
+    }
+    if (!best) {
+      const rng2 = seededRandom(`${seed}:treasury-surface-fallback:${index}`);
+      for (let ring = 0; ring < 10 && !best; ring += 1) {
+        const distance = 280 + ring * 80;
+        for (let step = 0; step < 32; step += 1) {
+          const angle = ((step + rng2()) / 32) * Math.PI * 2;
+          const x = Math.round(world.w / 2 + Math.cos(angle) * distance);
+          const z = Math.round(world.d / 2 + Math.sin(angle) * distance);
+          if (treasurySiteAllowed(seed, world, x, z, chosen, { villages })) {
+            best = { x, z, score: 0 };
+            break;
+          }
+        }
+      }
+    }
+    if (!best) {
+      const offset = 320 + index * 170;
+      const side = index % 4;
+      const x = Math.max(TREASURY_MARGIN, Math.min(world.w - TREASURY_MARGIN, world.w / 2 + (side === 0 ? offset : side === 1 ? -offset : 0)));
+      const z = Math.max(TREASURY_MARGIN, Math.min(world.d - TREASURY_MARGIN, world.d / 2 + (side === 2 ? offset : side === 3 ? -offset : 0)));
+      best = { x: Math.round(x), z: Math.round(z), score: -1 };
+    }
+    return {
+      id: `treasury-${index}`,
+      type: 'surface',
+      x: best.x,
+      y: terrainHeight(seed, best.x, best.z) + 1,
+      z: best.z,
+    };
+  }
+
+  function addPlanCell(map, x, z, kind = 'corridor') {
+    const key = `${x},${z}`;
+    const existing = map.get(key);
+    if (existing) {
+      if (kind === 'room' || kind === 'final') existing.kind = kind;
+      if (kind === 'parkour' && existing.kind !== 'final') existing.kind = kind;
+      return existing;
+    }
+    const cell = { x, z, kind };
+    map.set(key, cell);
+    return cell;
+  }
+
+  function addRoomCells(map, room, kind) {
+    for (let z = room.z0; z <= room.z1; z += 1) {
+      for (let x = room.x0; x <= room.x1; x += 1) addPlanCell(map, x, z, kind);
+    }
+  }
+
+  function addCorridorCells(map, ax, az, bx, bz, rng) {
+    addCorridorCellsOfKind(map, ax, az, bx, bz, rng, 'corridor');
+  }
+
+  function addCorridorCellsOfKind(map, ax, az, bx, bz, rng, kind) {
+    const firstX = rng() < 0.5;
+    const draw = (x0, z0, x1, z1) => {
+      const dx = Math.sign(x1 - x0);
+      const dz = Math.sign(z1 - z0);
+      let x = x0;
+      let z = z0;
+      for (;;) {
+        addPlanCell(map, x, z, kind);
+        if (x === x1 && z === z1) break;
+        if (x !== x1) x += dx;
+        if (z !== z1) z += dz;
+      }
+    };
+    if (firstX) {
+      draw(ax, az, bx, az);
+      draw(bx, az, bx, bz);
+    } else {
+      draw(ax, az, ax, bz);
+      draw(ax, bz, bx, bz);
+    }
+  }
+
+  function treasuryRoomFits(room, limit) {
+    return room.x0 >= -limit && room.z0 >= -limit && room.x1 <= limit && room.z1 <= limit;
+  }
+
+  function addTreasuryParkourRoom(cells, finalRoom, rng) {
+    const horizontal = Math.abs(finalRoom.cx) >= Math.abs(finalRoom.cz);
+    const positive = horizontal ? finalRoom.cx >= 0 : finalRoom.cz >= 0;
+    const length = randInt(rng, 12, 16);
+    const halfWidth = 2;
+    let room;
+    if (horizontal) {
+      const endX = positive ? finalRoom.x0 - 1 : finalRoom.x1 + 1;
+      const startX = endX + (positive ? -length + 1 : length - 1);
+      room = {
+        x0: Math.min(startX, endX),
+        x1: Math.max(startX, endX),
+        z0: finalRoom.cz - halfWidth,
+        z1: finalRoom.cz + halfWidth,
+        axis: 'x',
+        positive,
+      };
+    } else {
+      const endZ = positive ? finalRoom.z0 - 1 : finalRoom.z1 + 1;
+      const startZ = endZ + (positive ? -length + 1 : length - 1);
+      room = {
+        x0: finalRoom.cx - halfWidth,
+        x1: finalRoom.cx + halfWidth,
+        z0: Math.min(startZ, endZ),
+        z1: Math.max(startZ, endZ),
+        axis: 'z',
+        positive,
+      };
+    }
+    const safe = [];
+    const steps = 7;
+    for (let i = 0; i < steps; i += 1) {
+      const t = steps === 1 ? 0 : i / (steps - 1);
+      const wiggle = i === 0 || i === steps - 1 ? 0 : randInt(rng, -1, 1);
+      if (room.axis === 'x') {
+        const x = Math.round((room.positive ? room.x0 : room.x1) + (room.positive ? 1 : -1) * t * (length - 1));
+        safe.push({ x, z: finalRoom.cz + wiggle });
+      } else {
+        const z = Math.round((room.positive ? room.z0 : room.z1) + (room.positive ? 1 : -1) * t * (length - 1));
+        safe.push({ x: finalRoom.cx + wiggle, z });
+      }
+    }
+    for (let z = room.z0; z <= room.z1; z += 1) {
+      for (let x = room.x0; x <= room.x1; x += 1) addPlanCell(cells, x, z, 'parkour');
+    }
+    if (finalRoom.parent) {
+      addCorridorCellsOfKind(cells, finalRoom.parent.cx, finalRoom.parent.cz, safe[0].x, safe[0].z, rng, 'parkour');
+      addCorridorCellsOfKind(cells, safe[safe.length - 1].x, safe[safe.length - 1].z, finalRoom.cx, finalRoom.cz, rng, 'parkour');
+    }
+    return { ...room, safe };
+  }
+
+  function generateTreasuryLayout(treasury, seed, world) {
+    if (treasury.layout) return treasury.layout;
+    const rng = seededRandom(`${seed}:treasury-layout:${treasury.id}:${treasury.type}`);
+    const roomTarget = randInt(rng, 10, 15);
+    const limit = 64;
+    const cells = new Map();
+    const rooms = [];
+    const startRoom = {
+      x0: -randInt(rng, 3, 5),
+      z0: -randInt(rng, 3, 5),
+      x1: randInt(rng, 3, 5),
+      z1: randInt(rng, 3, 5),
+      cx: 0,
+      cz: 0,
+    };
+    rooms.push(startRoom);
+    addRoomCells(cells, startRoom, 'room');
+    for (let i = 1; i < roomTarget; i += 1) {
+      let placed = null;
+      for (let attempt = 0; attempt < 40 && !placed; attempt += 1) {
+        const parent = rooms[Math.floor(rng() * rooms.length)];
+        const dir = shuffleDeterministic([[1, 0], [-1, 0], [0, 1], [0, -1]], rng)[0];
+        const distance = randInt(rng, 14, 28);
+        const w = randInt(rng, 6, 13);
+        const d = randInt(rng, 6, 13);
+        const cx = parent.cx + dir[0] * distance + randInt(rng, -6, 6);
+        const cz = parent.cz + dir[1] * distance + randInt(rng, -6, 6);
+        const room = {
+          x0: cx - Math.floor(w / 2),
+          z0: cz - Math.floor(d / 2),
+          x1: cx + Math.ceil(w / 2),
+          z1: cz + Math.ceil(d / 2),
+          cx,
+          cz,
+          parent,
+        };
+        if (!treasuryRoomFits(room, limit)) continue;
+        placed = room;
+      }
+      if (!placed) continue;
+      rooms.push(placed);
+      addRoomCells(cells, placed, 'room');
+      addCorridorCells(cells, placed.parent.cx, placed.parent.cz, placed.cx, placed.cz, rng);
+    }
+    let finalRoom = rooms[0];
+    for (const room of rooms) {
+      if (Math.hypot(room.cx, room.cz) > Math.hypot(finalRoom.cx, finalRoom.cz)) finalRoom = room;
+    }
+    addRoomCells(cells, finalRoom, 'final');
+    const parkour = addTreasuryParkourRoom(cells, finalRoom, rng);
+
+    const sideRooms = shuffleDeterministic(rooms.filter((room) => room !== finalRoom && room !== startRoom), rng);
+    const sideChestCount = Math.min(sideRooms.length, randInt(rng, 1, 3));
+    const chests = [{ x: treasury.x + finalRoom.cx, z: treasury.z + finalRoom.cz, table: 'treasury_final' }];
+    for (let i = 0; i < sideChestCount; i += 1) {
+      const room = sideRooms[i];
+      chests.push({
+        x: treasury.x + randInt(rng, room.x0 + 1, room.x1 - 1),
+        z: treasury.z + randInt(rng, room.z0 + 1, room.z1 - 1),
+        table: 'treasury_side',
+      });
+    }
+
+    let minX = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxZ = -Infinity;
+    const worldCells = new Map();
+    for (const cell of cells.values()) {
+      cell.x += treasury.x;
+      cell.z += treasury.z;
+      worldCells.set(`${cell.x},${cell.z}`, cell);
+      minX = Math.min(minX, cell.x);
+      minZ = Math.min(minZ, cell.z);
+      maxX = Math.max(maxX, cell.x);
+      maxZ = Math.max(maxZ, cell.z);
+    }
+    const worldParkour = parkour ? {
+      x0: parkour.x0 + treasury.x,
+      x1: parkour.x1 + treasury.x,
+      z0: parkour.z0 + treasury.z,
+      z1: parkour.z1 + treasury.z,
+      axis: parkour.axis,
+      safe: parkour.safe.map((cell) => ({ x: cell.x + treasury.x, z: cell.z + treasury.z })),
+      safeKeys: new Set(parkour.safe.map((cell) => `${cell.x + treasury.x},${cell.z + treasury.z}`)),
+    } : null;
+    const floorY = Math.max(7, Math.min(world.h - 8, treasury.y - randInt(rng, 11, 18)));
+    const entranceDepth = Math.max(1, treasury.y - floorY);
+    const layout = {
+      y: floorY,
+      entranceDepth,
+      parkour: worldParkour,
+      cells: worldCells,
+      rooms,
+      chests,
+      minX: minX - 2,
+      minZ: minZ - 2,
+      maxX: maxX + 2,
+      maxZ: maxZ + 2 + entranceDepth,
+    };
+    treasury.layout = layout;
+    treasury.radius = Math.ceil(Math.max(
+      Math.abs(layout.minX - treasury.x),
+      Math.abs(layout.maxX - treasury.x),
+      Math.abs(layout.minZ - treasury.z),
+      Math.abs(layout.maxZ - treasury.z),
+    ));
+    return layout;
+  }
+
+  function getTreasuries3D(state) {
+    const world = state && state.world;
+    if (world) {
+      world.treasuriesKey = 'disabled';
+      world.treasuries = [];
+    }
+    return [];
+  }
+
+  function treasuryIntersectsBounds(treasury, bounds) {
+    const layout = treasury && treasury.layout;
+    return !!(layout
+      && layout.maxX >= bounds.minX
+      && layout.minX < bounds.maxX
+      && layout.maxZ >= bounds.minZ
+      && layout.minZ < bounds.maxZ);
+  }
+
+  function isChunkRangeGenerated(world, cx, cz, minCy, maxCy, counts) {
+    if (cx < 0 || cz < 0 || cx >= counts.x || cz >= counts.z || !world || !world.generatedChunks) return false;
+    for (let cy = Math.max(0, minCy); cy <= Math.min(counts.y - 1, maxCy); cy += 1) {
+      if (!world.generatedChunks.has(chunkKey(cx, cy, cz))) return false;
+    }
+    return true;
+  }
+
+  function treasuryChunkRange(treasury, counts) {
+    const layout = treasury && treasury.layout;
+    if (!layout) return { minCy: 0, maxCy: 0 };
+    const minY = Math.max(1, layout.y - 6);
+    const maxY = Math.min((counts.y * CHUNK_SIZE) - 1, Math.max(layout.y + 5, treasury.y + 2));
+    return {
+      minCy: Math.max(0, Math.floor(minY / CHUNK_SIZE)),
+      maxCy: Math.min(counts.y - 1, Math.floor(maxY / CHUNK_SIZE)),
+    };
+  }
+
+  function isTreasuryDecorationReady(world, treasury, cx, cz, counts) {
+    const range = treasuryChunkRange(treasury, counts);
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        if (nx < 0 || nz < 0 || nx >= counts.x || nz >= counts.z) continue;
+        if (!isChunkRangeGenerated(world, nx, nz, range.minCy, range.maxCy, counts)) return false;
+      }
+    }
+    return true;
+  }
+
+  function treasuryFloorCell(layout, x, z) {
+    return layout.cells.get(`${x},${z}`) || null;
+  }
+
+  function treasuryNearFloor(layout, x, z) {
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dz === 0) continue;
+        if (treasuryFloorCell(layout, x + dx, z + dz)) return true;
+      }
+    }
+    return false;
+  }
+
+  function placeTreasuryRoomColumn(state, layout, x, z, cell) {
+    const y = layout.y;
+    setBlock3D(state, x, y - 1, z, cell.kind === 'final' ? BLOCK.BLACKSTONE : BLOCK.STONE);
+    const clearTop = cell.kind === 'corridor' ? y + 1 : y + 3;
+    for (let yy = y; yy <= clearTop; yy += 1) setBlock3D(state, x, yy, z, BLOCK.AIR);
+    setBlock3D(state, x, clearTop + 1, z, cell.kind === 'final' ? BLOCK.BLACKSTONE : BLOCK.STONE);
+  }
+
+  function placeTreasuryWallColumn(state, layout, x, z) {
+    const y = layout.y;
+    setBlock3D(state, x, y - 1, z, BLOCK.STONE);
+    for (let yy = y; yy <= y + 3; yy += 1) setBlock3D(state, x, yy, z, BLOCK.STONE);
+    setBlock3D(state, x, y + 4, z, BLOCK.STONE);
+  }
+
+  function isTreasuryParkourSafe(layout, x, z) {
+    return !!(layout.parkour && layout.parkour.safeKeys && layout.parkour.safeKeys.has(`${x},${z}`));
+  }
+
+  function placeTreasuryParkourColumn(state, layout, x, z) {
+    const y = layout.y;
+    const safe = isTreasuryParkourSafe(layout, x, z);
+    const pitFloorY = y - 5;
+    if (pitFloorY >= 1) {
+      setBlock3D(state, x, pitFloorY, z, BLOCK.STONE);
+      for (let yy = pitFloorY + 1; yy <= y - 2; yy += 1) setBlock3D(state, x, yy, z, BLOCK.AIR);
+    }
+    setBlock3D(state, x, y - 1, z, safe ? BLOCK.STONE : BLOCK.BROKEN_STONE);
+    for (let yy = y; yy <= y + 3; yy += 1) setBlock3D(state, x, yy, z, BLOCK.AIR);
+    setBlock3D(state, x, y + 4, z, safe ? BLOCK.DIRT : BLOCK.STONE);
+  }
+
+  function placeTreasuryEntranceColumn(state, treasury, layout, x, z) {
+    if (treasury.type === 'surface') {
+      const dx = x - treasury.x;
+      const dz = z - treasury.z;
+      if (Math.abs(dx) <= 2 && dz >= -2 && dz <= 1) {
+        setBlock3D(state, x, treasury.y - 1, z, BLOCK.STONE);
+        if (Math.abs(dx) === 2 || dz === -2 || dz === 1) {
+          setBlock3D(state, x, treasury.y, z, BLOCK.PILLAR);
+          return true;
+        } else {
+          setBlock3D(state, x, treasury.y, z, BLOCK.AIR);
+          setBlock3D(state, x, treasury.y + 1, z, BLOCK.AIR);
+        }
+      }
+      const depth = Math.max(1, layout.entranceDepth || treasury.y - layout.y);
+      if (Math.abs(dx) > 1 || dz < 0 || dz > depth + 2) return false;
+      const y = treasury.y - dz;
+      if (y >= layout.y && y <= treasury.y) {
+        setBlock3D(state, x, y - 1, z, BLOCK.STONE);
+        setBlock3D(state, x, y, z, BLOCK.AIR);
+        setBlock3D(state, x, y + 1, z, BLOCK.AIR);
+        setBlock3D(state, x, y + 2, z, BLOCK.AIR);
+      }
+      setBlock3D(state, x, layout.y - 1, z, BLOCK.STONE);
+      for (let yy = layout.y; yy <= layout.y + 3; yy += 1) setBlock3D(state, x, yy, z, BLOCK.AIR);
+      setBlock3D(state, x, layout.y + 4, z, BLOCK.STONE);
+      if (Math.abs(dx) === 1) {
+        setBlock3D(state, x, layout.y, z, BLOCK.STONE);
+        setBlock3D(state, x, layout.y + 1, z, BLOCK.STONE);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function forceGenerateChunkRange(state, seed, minX, minY, minZ, maxX, maxY, maxZ) {
+    const world = state && state.world;
+    if (!world) return 0;
+    const counts = chunkCounts(world);
+    const minCx = Math.max(0, Math.floor(minX / CHUNK_SIZE));
+    const maxCx = Math.min(counts.x - 1, Math.floor(maxX / CHUNK_SIZE));
+    const minCy = Math.max(0, Math.floor(minY / CHUNK_SIZE));
+    const maxCy = Math.min(counts.y - 1, Math.floor(maxY / CHUNK_SIZE));
+    const minCz = Math.max(0, Math.floor(minZ / CHUNK_SIZE));
+    const maxCz = Math.min(counts.z - 1, Math.floor(maxZ / CHUNK_SIZE));
+    let generated = 0;
+    for (let cz = minCz; cz <= maxCz; cz += 1) {
+      for (let cx = minCx; cx <= maxCx; cx += 1) {
+        for (let cy = minCy; cy <= maxCy; cy += 1) {
+          if (generateTerrainChunk3D(state, seed, cx, cy, cz)) {
+            if (world.dirtyChunks) world.dirtyChunks.add(chunkKey(cx, cy, cz));
+            generated += 1;
+          }
+        }
+      }
+    }
+    return generated;
+  }
+
+  function forceGenerateChunkColumns(state, seed, columns, minY, maxY) {
+    const world = state && state.world;
+    if (!world || !columns || !columns.length) return 0;
+    const counts = chunkCounts(world);
+    const minCy = Math.max(0, Math.floor(minY / CHUNK_SIZE));
+    const maxCy = Math.min(counts.y - 1, Math.floor(maxY / CHUNK_SIZE));
+    let generated = 0;
+    for (const column of columns) {
+      for (let cy = minCy; cy <= maxCy; cy += 1) {
+        if (generateTerrainChunk3D(state, seed, column.cx, cy, column.cz)) {
+          if (world.dirtyChunks) world.dirtyChunks.add(chunkKey(column.cx, cy, column.cz));
+          generated += 1;
+        }
+      }
+    }
+    return generated;
+  }
+
+  function treasuryBodyChunkColumns(treasury, counts) {
+    const layout = treasury && treasury.layout;
+    if (!layout) return [];
+    const columns = new Map();
+    function add(x, z) {
+      if (x < 0 || z < 0) return;
+      const cx = Math.floor(x / CHUNK_SIZE);
+      const cz = Math.floor(z / CHUNK_SIZE);
+      if (cx < 0 || cz < 0 || cx >= counts.x || cz >= counts.z) return;
+      columns.set(columnKey(cx, cz), { cx, cz });
+    }
+    for (const cell of layout.cells.values()) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) add(cell.x + dx, cell.z + dz);
+      }
+    }
+    const depth = Math.max(1, layout.entranceDepth || treasury.y - layout.y);
+    for (let z = treasury.z - 2; z <= treasury.z + depth + 2; z += 1) {
+      for (let x = treasury.x - 2; x <= treasury.x + 2; x += 1) add(x, z);
+    }
+    return Array.from(columns.values());
+  }
+
+  function ensureTreasuryEntranceNow(state, seed, treasury) {
+    const world = state && state.world;
+    const layout = treasury && treasury.layout;
+    if (!world || !layout || treasury.type !== 'surface') return 0;
+    if (!world.ensuredTreasuryEntrances) world.ensuredTreasuryEntrances = new Set();
+    if (world.ensuredTreasuryEntrances.has(treasury.id)) return 0;
+
+    const depth = Math.max(1, layout.entranceDepth || treasury.y - layout.y);
+    const minX = Math.max(0, treasury.x - 2);
+    const maxX = Math.min(world.w - 1, treasury.x + 2);
+    const minZ = Math.max(0, treasury.z - 2);
+    const maxZ = Math.min(world.d - 1, treasury.z + depth + 2);
+    let changed = forceGenerateChunkRange(state, seed, minX, layout.y - 1, minZ, maxX, treasury.y + 2, maxZ);
+
+    world.suppressChunkModification = (world.suppressChunkModification || 0) + 1;
+    try {
+      for (let z = minZ; z <= maxZ; z += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          if (placeTreasuryEntranceColumn(state, treasury, layout, x, z)) changed += 1;
+        }
+      }
+    } finally {
+      world.suppressChunkModification -= 1;
+    }
+    world.ensuredTreasuryEntrances.add(treasury.id);
+    return changed;
+  }
+
+  function ensureTreasuryBodyNow(state, seed, treasury) {
+    const world = state && state.world;
+    const layout = treasury && treasury.layout;
+    if (!world || !layout) return 0;
+    if (!world.ensuredTreasuryBodies) world.ensuredTreasuryBodies = new Set();
+    if (world.ensuredTreasuryBodies.has(treasury.id)) return 0;
+
+    const minY = Math.max(1, layout.y - 6);
+    const maxY = Math.min(world.h - 1, Math.max(layout.y + 5, treasury.y + 2));
+    const counts = chunkCounts(world);
+    const columns = treasuryBodyChunkColumns(treasury, counts);
+    let changed = forceGenerateChunkColumns(state, seed, columns, minY, maxY);
+
+    world.suppressChunkModification = (world.suppressChunkModification || 0) + 1;
+    try {
+      for (const column of columns) {
+        const bounds = {
+          minX: column.cx * CHUNK_SIZE,
+          minZ: column.cz * CHUNK_SIZE,
+          maxX: Math.min(world.w, (column.cx + 1) * CHUNK_SIZE),
+          maxZ: Math.min(world.d, (column.cz + 1) * CHUNK_SIZE),
+        };
+        if (decorateTreasuriesForColumn(state, [treasury], bounds)) changed += 1;
+        if (!world.ensuredTreasuryColumns) world.ensuredTreasuryColumns = new Set();
+        world.ensuredTreasuryColumns.add(`${treasury.id}:${columnKey(column.cx, column.cz)}`);
+        if (!world.decoratedColumns) world.decoratedColumns = new Set();
+        world.decoratedColumns.add(columnKey(column.cx, column.cz));
+      }
+    } finally {
+      world.suppressChunkModification -= 1;
+    }
+    world.ensuredTreasuryBodies.add(treasury.id);
+    return changed;
+  }
+
+  function placeTreasuryChests(state, layout, x, z) {
+    for (const chest of layout.chests) {
+      if (chest.x !== x || chest.z !== z) continue;
+      const y = layout.y;
+      setBlock3D(state, x, y, z, BLOCK.CHEST);
+      markStructureChestLoot(state, x, y, z, chest.table);
+    }
+  }
+
+  function spawnTreasuryParkourSnakes(state, treasury, layout, bounds) {
+    const parkour = layout && layout.parkour;
+    if (!parkour || !Game.entities3d || !Game.entities3d.spawnMob3D) return;
+    const y = layout.y - 4;
+    if (y < 2) return;
+    const width = Math.max(1, parkour.x1 - parkour.x0 + 1);
+    const depth = Math.max(1, parkour.z1 - parkour.z0 + 1);
+    for (let i = 0; i < TREASURY_PARKOUR_SNAKES; i += 1) {
+      const sx = parkour.x0 + Math.floor((i * 3 + 1) % width);
+      const sz = parkour.z0 + Math.floor((i * 5 + 2) % depth);
+      if (sx < bounds.minX || sx >= bounds.maxX || sz < bounds.minZ || sz >= bounds.maxZ) continue;
+      const id = `${treasury.id}-parkour-snake-${i}`;
+      if (hasMob(state, id)) continue;
+      Game.entities3d.spawnMob3D(state, 'snake', sx, y, sz, id);
+    }
+  }
+
+  function decorateTreasuryColumnAt(state, treasury, x, z) {
+    const layout = treasury.layout;
+    if (!layout) return false;
+    let changed = false;
+    if (placeTreasuryEntranceColumn(state, treasury, layout, x, z)) changed = true;
+    const cell = treasuryFloorCell(layout, x, z);
+    if (cell) {
+      if (cell.kind === 'parkour') {
+        placeTreasuryParkourColumn(state, layout, x, z);
+        return true;
+      }
+      placeTreasuryRoomColumn(state, layout, x, z, cell);
+      placeTreasuryChests(state, layout, x, z);
+      return true;
+    }
+    if (treasuryNearFloor(layout, x, z)) {
+      placeTreasuryWallColumn(state, layout, x, z);
+      return true;
+    }
+    return changed;
+  }
+
+  function decorateTreasuriesForColumn(state, treasuries, bounds) {
+    let changed = false;
+    for (const treasury of treasuries) {
+      if (!treasuryIntersectsBounds(treasury, bounds)) continue;
+      const layout = treasury.layout;
+      const minX = Math.max(bounds.minX, layout.minX);
+      const maxX = Math.min(bounds.maxX - 1, layout.maxX);
+      const minZ = Math.max(bounds.minZ, layout.minZ);
+      const maxZ = Math.min(bounds.maxZ - 1, layout.maxZ);
+      for (let z = minZ; z <= maxZ; z += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          if (decorateTreasuryColumnAt(state, treasury, x, z)) changed = true;
+        }
+      }
+      spawnTreasuryParkourSnakes(state, treasury, layout, bounds);
+    }
+    return changed;
+  }
+
+  function ensureTreasuriesAroundPlayer3D() {
+    return 0;
+  }
+
   function villageStyle(village) {
     return VILLAGE_STYLES.find((style) => style.id === village.styleId) || VILLAGE_STYLES[0];
   }
@@ -879,7 +1814,7 @@
       const foundationDepth = options.foundationDepth || 4;
       for (let y = Math.max(1, baseY - foundationDepth); y < baseY; y += 1) {
         const block = getBlock3D(state, x, y, z);
-        if (block === BLOCK.AIR || block === BLOCK.WATER || block === BLOCK.HOT_WATER || block === BLOCK.LAVA) setBlock3D(state, x, y, z, foundationBlock);
+        if (block === BLOCK.AIR || block === BLOCK.WATER || block === BLOCK.HOT_WATER || block === BLOCK.LAVA || block === BLOCK.VOLCANIC_LAVA) setBlock3D(state, x, y, z, foundationBlock);
       }
     }
     setBlock3D(state, x, baseY, z, surfaceBlock);
@@ -1433,6 +2368,10 @@
     const waterLevel = lake.inLake && Number.isFinite(lake.waterLevel) ? lake.waterLevel : WATER_LEVEL;
     const groundH = lake.inLake ? waterLevel - lake.depth : h;
     if (y === 0) return BLOCK.BEDROCK;
+    const volcano = volcanoInfo(seed, x, z);
+    if (volcano && volcano.dist <= volcano.ventRadius && y <= groundH + 1) {
+      return y <= Math.max(2, groundH - 4) ? BLOCK.VOLCANIC_LAVA : BLOCK.AIR;
+    }
     if (y <= groundH) {
       const portalRuin = portalRuinBlockAt(seed, x, y, z, groundH, world);
       if (portalRuin !== null) return portalRuin;
@@ -1492,7 +2431,7 @@
     const sz = Math.max(1, Math.min(world.d - 2, Math.floor(z)));
     for (let y = world.h - 2; y >= 1; y -= 1) {
       const id = terrainBlockAt(seed, sx, y, sz, world);
-      if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA) {
+      if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA && id !== BLOCK.VOLCANIC_LAVA) {
         return Math.min(world.h + 4, y + 2);
       }
     }
@@ -1617,7 +2556,7 @@
   }
 
   function isReplaceableForTent(id) {
-    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA
+    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA
       || id === BLOCK.DRY_BUSH || id === BLOCK.ALGAE || id === BLOCK.TALL_ALGAE;
   }
 
@@ -1763,7 +2702,7 @@
     if (!state || !state.world) return 24;
     for (let y = state.world.h - 2; y >= 1; y -= 1) {
       const id = getBlock3D(state, x, y, z);
-      if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA) return y;
+      if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA && id !== BLOCK.VOLCANIC_LAVA) return y;
     }
     return Math.max(5, Math.min(state.world.h - 8, terrainHeight(worldSeed(state), x, z)));
   }
@@ -1878,11 +2817,20 @@
     const groundY = Number.isFinite(options.groundY) ? options.groundY : surfaceYForStructure(state, x, z);
     if (!options.allowNearSpawn && !farFromSpawn(world, x, z, 56)) return null;
     const baseY = Math.max(8, Math.min(world.h - 12, groundY + 1));
+    const cave = options.cave || nearestCaveFeature(state, x, z, 260);
+    const caveTarget = cave ? { x: cave.endX || cave.x, y: cave.endY || Math.max(5, baseY - 18), z: cave.endZ || cave.z } : { x: x + 46, y: Math.max(5, baseY - 26), z: z + 19 };
+    if (!structureWriteVolumeReady(
+      state,
+      Math.min(x - 8, caveTarget.x - 2),
+      Math.min(1, caveTarget.y - 2),
+      Math.min(z - 8, caveTarget.z - 2),
+      Math.max(x + 48, caveTarget.x + 2),
+      baseY + 8,
+      Math.max(z + 20, caveTarget.z + 2)
+    )) return null;
     buildAbandonedHouseShell(state, x, baseY, z);
     buildBlasterMinerInterior(state, x, baseY, z);
     const stairEnd = buildStairToBasement(state, x, baseY, z);
-    const cave = options.cave || nearestCaveFeature(state, x, z, 260);
-    const caveTarget = cave ? { x: cave.endX || cave.x, y: cave.endY || Math.max(5, baseY - 18), z: cave.endZ || cave.z } : null;
     const underground = buildBlasterMinerBasementAndSafe(state, stairEnd, caveTarget);
     const key = options.key || `blaster-miner-house-${x}-${z}`;
     const house = {
@@ -1920,6 +2868,323 @@
         cave: candidate.cave,
       });
     }
+  }
+
+  const TREE_HOUSE_FOREST_SAMPLE_STEP = 96;
+  const TREE_HOUSE_MIN_SPAWN_DISTANCE = 160;
+  const TREE_HOUSE_MIN_VILLAGE_DISTANCE = 92;
+  const TREE_HOUSE_MIN_HOUSE_DISTANCE = 72;
+  const TREE_HOUSE_FOOTPRINT_RADIUS = 8;
+  const TREE_HOUSE_CLEAR_HEIGHT = 22;
+
+  function treeHouseCountForForestComponent(seed, component) {
+    const samples = component && Number.isFinite(component.samples) ? component.samples : 0;
+    const roll = noise2(seed + 5821, component.id, samples);
+    if (samples >= 10) return roll < 0.5 ? 3 : 4;
+    if (samples >= 4) return 3;
+    return roll < 0.5 ? 1 : 2;
+  }
+
+  function treeHouseSiteAllowed(state, seed, x, z, villages, chosen) {
+    const world = state && state.world;
+    if (!world) return null;
+    if (x < TREE_HOUSE_FOOTPRINT_RADIUS + 2 || z < TREE_HOUSE_FOOTPRINT_RADIUS + 2) return false;
+    if (x >= world.w - TREE_HOUSE_FOOTPRINT_RADIUS - 2 || z >= world.d - TREE_HOUSE_FOOTPRINT_RADIUS - 2) return false;
+    if (!farFromSpawn(world, x, z, TREE_HOUSE_MIN_SPAWN_DISTANCE)) return false;
+    if (biomeAt(seed, x, z) !== 'forest') return false;
+    const groundY = terrainHeight(seed, x, z);
+    if (groundY < 8 || groundY + TREE_HOUSE_CLEAR_HEIGHT >= world.h) return false;
+    let forestSamples = 0;
+    const forestChecks = [[0, 0], [16, 0], [-16, 0], [0, 16], [0, -16]];
+    for (const [dx, dz] of forestChecks) {
+      if (baseLandBiome(seed, x + dx, z + dz) === 'forest') forestSamples += 1;
+    }
+    if (forestSamples < 4) return false;
+    for (const village of villages || []) {
+      if (Math.hypot(x - village.x, z - village.z) < village.radius + TREE_HOUSE_MIN_VILLAGE_DISTANCE) return false;
+    }
+    for (const house of chosen || []) {
+      if (Math.hypot(x - house.x, z - house.z) < TREE_HOUSE_MIN_HOUSE_DISTANCE) return false;
+    }
+    return { x, z, groundY };
+  }
+
+  function treeHouseCandidateAt(state, seed, key, x, z, villages, chosen) {
+    const site = treeHouseSiteAllowed(state, seed, x, z, villages, chosen);
+    if (!site) return null;
+    return {
+      key,
+      type: 'tree_house',
+      name: 'Домик на дереве',
+      x: site.x,
+      y: site.groundY + 1,
+      z: site.z,
+      groundY: site.groundY,
+      generated: false,
+    };
+  }
+
+  function scanForestComponentsForTreeHouses(state, seed) {
+    const world = state && state.world;
+    if (!world) return [];
+    const step = TREE_HOUSE_FOREST_SAMPLE_STEP;
+    const cols = Math.ceil(world.w / step);
+    const rows = Math.ceil(world.d / step);
+    const forest = new Uint8Array(cols * rows);
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const x = Math.min(world.w - 1, col * step + Math.floor(step / 2));
+        const z = Math.min(world.d - 1, row * step + Math.floor(step / 2));
+        if (baseLandBiome(seed, x, z) === 'forest') forest[row * cols + col] = 1;
+      }
+    }
+    const visited = new Uint8Array(cols * rows);
+    const components = [];
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const start = row * cols + col;
+        if (!forest[start] || visited[start]) continue;
+        const stack = [[col, row]];
+        const cells = [];
+        visited[start] = 1;
+        let minCol = col;
+        let maxCol = col;
+        let minRow = row;
+        let maxRow = row;
+        while (stack.length) {
+          const [cx, cz] = stack.pop();
+          cells.push({ col: cx, row: cz });
+          minCol = Math.min(minCol, cx);
+          maxCol = Math.max(maxCol, cx);
+          minRow = Math.min(minRow, cz);
+          maxRow = Math.max(maxRow, cz);
+          const neighbors = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+          for (const [dx, dz] of neighbors) {
+            const nx = cx + dx;
+            const nz = cz + dz;
+            if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue;
+            const key = nz * cols + nx;
+            if (!forest[key] || visited[key]) continue;
+            visited[key] = 1;
+            stack.push([nx, nz]);
+          }
+        }
+        if (cells.length < 1) continue;
+        components.push({
+          id: components.length,
+          samples: cells.length,
+          cells,
+          minX: minCol * step,
+          maxX: Math.min(world.w - 1, (maxCol + 1) * step - 1),
+          minZ: minRow * step,
+          maxZ: Math.min(world.d - 1, (maxRow + 1) * step - 1),
+        });
+      }
+    }
+    return components;
+  }
+
+  function treeHouseCandidatesForComponent(state, seed, component, villages, chosen) {
+    const targetCount = treeHouseCountForForestComponent(seed, component);
+    const sortedCells = component.cells
+      .map((cell) => ({ ...cell, order: noise2(seed + 5831 + component.id, cell.col, cell.row) }))
+      .sort((a, b) => a.order - b.order);
+    const houses = [];
+    const maxAttempts = Math.min(sortedCells.length * 2, Math.max(18, targetCount * 24));
+    for (let attempt = 0; attempt < maxAttempts && houses.length < targetCount; attempt += 1) {
+      const cell = sortedCells[attempt % sortedCells.length];
+      const pass = Math.floor(attempt / sortedCells.length);
+      const baseX = cell.col * TREE_HOUSE_FOREST_SAMPLE_STEP;
+      const baseZ = cell.row * TREE_HOUSE_FOREST_SAMPLE_STEP;
+      const jitterX = Math.floor(noise2(seed + 5833 + pass, cell.col, cell.row) * (TREE_HOUSE_FOREST_SAMPLE_STEP - TREE_HOUSE_FOOTPRINT_RADIUS * 2));
+      const jitterZ = Math.floor(noise2(seed + 5835 + pass, cell.row, cell.col) * (TREE_HOUSE_FOREST_SAMPLE_STEP - TREE_HOUSE_FOOTPRINT_RADIUS * 2));
+      const x = baseX + TREE_HOUSE_FOOTPRINT_RADIUS + jitterX;
+      const z = baseZ + TREE_HOUSE_FOOTPRINT_RADIUS + jitterZ;
+      const key = `tree-house-${component.id}-${houses.length}`;
+      const house = treeHouseCandidateAt(state, seed, key, x, z, villages, chosen.concat(houses));
+      if (house) houses.push(house);
+    }
+    return houses;
+  }
+
+  function treeHouseCandidates(state) {
+    const world = state && state.world;
+    if (!world || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return [];
+    const cacheKey = `${state.worldMeta.seed || ''}:${world.w}:${world.d}:forest-components-v2`;
+    if (world.treeHousePlanKey === cacheKey && Array.isArray(world.treeHousePlan)) return world.treeHousePlan;
+    const seed = worldSeed(state);
+    const villages = VILLAGE_BLOCK_GENERATION_ENABLED ? getVillages3D(state) : [];
+    const candidates = [];
+    const components = scanForestComponentsForTreeHouses(state, seed);
+    for (const component of components) {
+      const componentHouses = treeHouseCandidatesForComponent(state, seed, component, villages, candidates);
+      candidates.push(...componentHouses);
+    }
+    world.treeHousePlanKey = cacheKey;
+    world.treeHousePlan = candidates;
+    return candidates;
+  }
+
+  function registerTreeHouse(state, house) {
+    if (!state || !state.world || !house) return;
+    if (!Array.isArray(state.world.treeHouses)) state.world.treeHouses = [];
+    const existing = state.world.treeHouses.find((item) => item && item.key === house.key);
+    if (existing) Object.assign(existing, house);
+    else state.world.treeHouses.push(house);
+  }
+
+  function canBuildTreeHouseAt(state, x, groundY, z) {
+    const world = state && state.world;
+    if (!world || x < TREE_HOUSE_FOOTPRINT_RADIUS + 2 || z < TREE_HOUSE_FOOTPRINT_RADIUS + 2) return false;
+    if (x >= world.w - TREE_HOUSE_FOOTPRINT_RADIUS - 2 || z >= world.d - TREE_HOUSE_FOOTPRINT_RADIUS - 2) return false;
+    const ground = getBlock3D(state, x, groundY, z);
+    if (ground !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) return false;
+    return true;
+  }
+
+  function placeTreeHouseCrown(state, seed, x, z, floorY) {
+    for (let yy = floorY - 4; yy <= floorY + 7; yy += 1) {
+      const dy = yy - floorY;
+      const radius = dy < -1 ? 3 : (dy > 4 ? 4 : 5);
+      for (let zz = z - radius; zz <= z + radius; zz += 1) {
+        for (let xx = x - radius; xx <= x + radius; xx += 1) {
+          const dist = Math.abs(xx - x) + Math.abs(zz - z);
+          if (dist > radius + 2) continue;
+          if (noise2(seed + 5811 + yy, xx, zz) < 0.18 && dist > radius - 1) continue;
+          if (getBlock3D(state, xx, yy, zz) === BLOCK.AIR) setBlock3D(state, xx, yy, zz, BLOCK.LEAF);
+        }
+      }
+    }
+  }
+
+  function buildTreeHouseRoom(state, x, floorY, z) {
+    clearBox(state, x - 3, floorY, z - 3, x + 3, floorY + 4, z + 3);
+    fillBox(state, x - 3, floorY, z - 3, x + 3, floorY, z + 3, BLOCK.PLANK);
+    for (let yy = floorY + 1; yy <= floorY + 3; yy += 1) {
+      for (let xx = x - 3; xx <= x + 3; xx += 1) {
+        setBlock3D(state, xx, yy, z - 3, BLOCK.PLANK);
+        setBlock3D(state, xx, yy, z + 3, BLOCK.PLANK);
+      }
+      for (let zz = z - 2; zz <= z + 2; zz += 1) {
+        setBlock3D(state, x - 3, yy, zz, BLOCK.PLANK);
+        setBlock3D(state, x + 3, yy, zz, BLOCK.PLANK);
+      }
+    }
+    for (let yy = floorY + 1; yy <= floorY + 3; yy += 1) {
+      setBlock3D(state, x - 3, yy, z - 3, BLOCK.WOOD);
+      setBlock3D(state, x + 3, yy, z - 3, BLOCK.WOOD);
+      setBlock3D(state, x - 3, yy, z + 3, BLOCK.WOOD);
+      setBlock3D(state, x + 3, yy, z + 3, BLOCK.WOOD);
+    }
+    clearBox(state, x - 1, floorY + 1, z - 3, x + 1, floorY + 2, z - 3);
+    clearBox(state, x - 3, floorY + 2, z, x - 3, floorY + 2, z + 1);
+    clearBox(state, x + 3, floorY + 2, z - 1, x + 3, floorY + 2, z);
+    fillBox(state, x - 4, floorY + 4, z - 4, x + 4, floorY + 4, z + 4, BLOCK.PLANK);
+    fillBox(state, x - 3, floorY + 5, z - 3, x + 3, floorY + 5, z + 3, BLOCK.LEAF);
+
+    setBlock3D(state, x + 2, floorY + 1, z + 1, BLOCK.CHEST);
+    markStructureChestLoot(state, x + 2, floorY + 1, z + 1, 'tree_house');
+    setBlock3D(state, x - 2, floorY + 1, z + 1, BLOCK.PILLOW);
+    setBlock3D(state, x - 2, floorY + 1, z + 2, BLOCK.WOOL);
+    setBlock3D(state, x + 1, floorY + 1, z - 2, BLOCK.PLANK);
+  }
+
+  function buildTreeHouseBalcony(state, x, floorY, z) {
+    clearBox(state, x - 2, floorY + 1, z + 4, x + 2, floorY + 3, z + 7);
+    fillBox(state, x - 2, floorY, z + 4, x + 2, floorY, z + 7, BLOCK.PLANK);
+    for (let zz = z + 4; zz <= z + 7; zz += 1) {
+      setBlock3D(state, x - 3, floorY + 1, zz, BLOCK.WOOD);
+      setBlock3D(state, x + 3, floorY + 1, zz, BLOCK.WOOD);
+    }
+    for (let xx = x - 3; xx <= x + 3; xx += 1) setBlock3D(state, xx, floorY + 1, z + 8, BLOCK.WOOD);
+    setBlock3D(state, x - 3, floorY + 2, z + 4, BLOCK.WOOD);
+    setBlock3D(state, x + 3, floorY + 2, z + 4, BLOCK.WOOD);
+    setBlock3D(state, x - 3, floorY + 2, z + 8, BLOCK.WOOD);
+    setBlock3D(state, x + 3, floorY + 2, z + 8, BLOCK.WOOD);
+    clearBox(state, x - 1, floorY + 1, z + 3, x + 1, floorY + 2, z + 3);
+  }
+
+  function buildTreeHouseStair(state, x, groundY, z, floorY) {
+    const steps = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+    for (let y = groundY + 1; y <= floorY; y += 1) {
+      const step = steps[(y - groundY - 1) % steps.length];
+      const sx = x + step[0];
+      const sz = z + step[1];
+      setBlock3D(state, sx, y, sz, y % 3 === 0 || y === floorY ? BLOCK.PLANK : BLOCK.LADDER);
+    }
+  }
+
+  function createTreeHouseAt3D(state, candidate) {
+    if (!state || !state.world || !candidate) return null;
+    const x = Math.round(candidate.x);
+    const z = Math.round(candidate.z);
+    const groundY = Number.isFinite(candidate.groundY) ? candidate.groundY : surfaceYForStructure(state, x, z);
+    if (!canBuildTreeHouseAt(state, x, groundY, z)) return null;
+    const trunkHeight = 11 + Math.floor(noise2(worldSeed(state) + 5807, x, z) * 2);
+    const floorY = groundY + trunkHeight;
+    if (!structureWriteVolumeReady(
+      state,
+      x - TREE_HOUSE_FOOTPRINT_RADIUS,
+      groundY,
+      z - TREE_HOUSE_FOOTPRINT_RADIUS,
+      x + TREE_HOUSE_FOOTPRINT_RADIUS,
+      groundY + TREE_HOUSE_CLEAR_HEIGHT,
+      z + TREE_HOUSE_FOOTPRINT_RADIUS
+    )) return null;
+    state.world.suppressChunkModification = (state.world.suppressChunkModification || 0) + 1;
+    state.world.allowChunkCreationWrites = (state.world.allowChunkCreationWrites || 0) + 1;
+    try {
+      clearBox(state, x - TREE_HOUSE_FOOTPRINT_RADIUS, groundY + 1, z - TREE_HOUSE_FOOTPRINT_RADIUS, x + TREE_HOUSE_FOOTPRINT_RADIUS, groundY + TREE_HOUSE_CLEAR_HEIGHT, z + TREE_HOUSE_FOOTPRINT_RADIUS);
+      for (let y = groundY + 1; y <= floorY + 5; y += 1) setBlock3D(state, x, y, z, BLOCK.WOOD);
+      placeTreeHouseCrown(state, worldSeed(state), x, z, floorY);
+      buildTreeHouseStair(state, x, groundY, z, floorY);
+      buildTreeHouseRoom(state, x, floorY, z);
+      buildTreeHouseBalcony(state, x, floorY, z);
+    } finally {
+      state.world.allowChunkCreationWrites -= 1;
+      state.world.suppressChunkModification -= 1;
+    }
+    const house = {
+      ...candidate,
+      x,
+      y: floorY,
+      z,
+      groundY,
+      generated: true,
+      chest: { x: x + 2, y: floorY + 1, z: z + 1 },
+    };
+    registerTreeHouse(state, house);
+    return house;
+  }
+
+  function getTreeHouses3D(state) {
+    const byKey = new Map();
+    for (const candidate of treeHouseCandidates(state)) byKey.set(candidate.key, candidate);
+    const generated = state && state.world && Array.isArray(state.world.treeHouses) ? state.world.treeHouses : [];
+    for (const house of generated) byKey.set(house.key, house);
+    return Array.from(byKey.values());
+  }
+
+  function generateTreeHousesForColumn(state, bounds) {
+    if (!state || !state.world || state.worldMeta && state.worldMeta.currentDimension === 'underground') return;
+    const generated = state.world.treeHouses || [];
+    for (const candidate of treeHouseCandidates(state)) {
+      if (generated.some((house) => house && house.key === candidate.key && house.generated)) continue;
+      if (candidate.x < bounds.minX || candidate.x >= bounds.maxX || candidate.z < bounds.minZ || candidate.z >= bounds.maxZ) continue;
+      createTreeHouseAt3D(state, candidate);
+    }
+  }
+
+  function ensureTreeHousesAroundPlayer3D(state, radius = 56) {
+    if (!state || !state.world || !state.player || state.worldMeta && state.worldMeta.currentDimension === 'underground') return 0;
+    const generated = state.world.treeHouses || [];
+    let created = 0;
+    for (const candidate of treeHouseCandidates(state)) {
+      if (generated.some((house) => house && house.key === candidate.key && house.generated)) continue;
+      if (Math.hypot(candidate.x - state.player.x, candidate.z - state.player.z) > radius) continue;
+      if (createTreeHouseAt3D(state, candidate)) created += 1;
+    }
+    return created;
   }
 
   function ensureBlasterMinerHousesAroundPlayer3D(state, radius = 40) {
@@ -2109,6 +3374,15 @@
     }
     if (!site) return false;
     const { x0, z0, baseY, door } = site;
+    if (!structureWriteVolumeReady(
+      state,
+      x0 - 2,
+      Math.max(1, baseY - 4),
+      z0 - 2,
+      x0 + SPAWN_TENT_SIZE + 1,
+      baseY + SPAWN_TENT_HEIGHT,
+      z0 + SPAWN_TENT_SIZE + 1
+    )) return false;
     const spawnBiome = biomeAt(seed, spawnX, spawnZ);
     const style = spawnTentStyleForBiome(spawnBiome);
     clearTentVolume(state, x0, baseY, z0);
@@ -2204,55 +3478,107 @@
     return world.chunkLoading;
   }
 
+  function maxChunkWorkerCount() {
+    const configured = Math.max(1, Math.floor(CHUNK_WORKER_MAX_COUNT || 1));
+    const cores = typeof navigator !== 'undefined' && Number.isFinite(navigator.hardwareConcurrency)
+      ? Math.max(1, navigator.hardwareConcurrency - 1)
+      : 2;
+    return Math.max(1, Math.min(configured, cores));
+  }
+
+  function requeuePendingWorkerJobs(stateRef) {
+    if (!stateRef || !stateRef.world || !stateRef.world.chunkLoading) return;
+    const loading = stateRef.world.chunkLoading;
+    for (const job of loading.pendingIds.values()) {
+      if (!loading.queued.has(job.key)) {
+        const parts = job.key.split(',').map(Number);
+        if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) {
+          loading.queue.unshift({ cx: parts[0], cy: parts[1], cz: parts[2], key: job.key });
+          loading.queued.add(job.key);
+        }
+      }
+    }
+    loading.pendingIds.clear();
+    loading.pendingKeys.clear();
+  }
+
+  function disableChunkWorkers() {
+    for (const worker of chunkWorkers) {
+      try {
+        worker.terminate();
+      } catch (error) {
+        // Worker termination can fail during browser shutdown.
+      }
+    }
+    chunkWorkers = [];
+    chunkWorker = null;
+    chunkWorkerAvailable = false;
+  }
+
   function initChunkWorker(state) {
-    if (chunkWorker) return true;
+    if (chunkWorkers.length > 0) return true;
     if (!chunkWorkerAvailable || typeof Worker === 'undefined') return false;
     try {
-      chunkWorker = new Worker('./src/3d/chunkWorker3d.js');
-      chunkWorker.onmessage = (event) => {
-        const data = event && event.data ? event.data : null;
-        const stateRef = activeState;
-        if (!data || !stateRef || !stateRef.world) return;
-        const loading = ensureChunkLoading(stateRef);
-        const job = loading.pendingIds.get(data.id);
-        if (!job) return;
-        loading.pendingIds.delete(data.id);
-        loading.pendingKeys.delete(job.key);
-        if (job.worldId !== currentStorageWorldId(stateRef) || job.seed !== worldSeed(stateRef)) return;
-        installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel, data.grassLevel || null);
-      };
-      chunkWorker.onerror = () => {
-        const stateRef = activeState;
-        if (stateRef && stateRef.world && stateRef.world.chunkLoading) {
-          const loading = stateRef.world.chunkLoading;
-          for (const job of loading.pendingIds.values()) {
-            if (!loading.queued.has(job.key)) {
-              const parts = job.key.split(',').map(Number);
-              if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) {
-                loading.queue.unshift({ cx: parts[0], cy: parts[1], cz: parts[2], key: job.key });
-                loading.queued.add(job.key);
-              }
-            }
-          }
-          loading.pendingIds.clear();
-          loading.pendingKeys.clear();
-        }
-        chunkWorkerAvailable = false;
-        if (chunkWorker) {
-          chunkWorker.terminate();
-          chunkWorker = null;
-        }
-      };
+      const count = maxChunkWorkerCount();
+      for (let i = 0; i < count; i += 1) {
+        const worker = new Worker('./src/3d/chunkWorker3d.js');
+        worker.onmessage = (event) => {
+          const data = event && event.data ? event.data : null;
+          const stateRef = activeState;
+          if (!data || !stateRef || !stateRef.world) return;
+          const loading = ensureChunkLoading(stateRef);
+          const job = loading.pendingIds.get(data.id);
+          if (!job) return;
+          loading.pendingIds.delete(data.id);
+          loading.pendingKeys.delete(job.key);
+          if (job.worldId !== currentStorageWorldId(stateRef) || job.seed !== worldSeed(stateRef)) return;
+          installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel, data.grassLevel || null);
+        };
+        worker.onerror = () => {
+          requeuePendingWorkerJobs(activeState);
+          disableChunkWorkers();
+        };
+        chunkWorkers.push(worker);
+      }
+      chunkWorker = chunkWorkers[0] || null;
     } catch (error) {
-      chunkWorkerAvailable = false;
-      chunkWorker = null;
+      requeuePendingWorkerJobs(state);
+      disableChunkWorkers();
     }
-    return !!chunkWorker;
+    return chunkWorkers.length > 0;
   }
 
   function hasTerrainChunk(state, cx, cy, cz) {
     const key = chunkKey(cx, cy, cz);
     return !!((state.world.generatedChunks && state.world.generatedChunks.has(key)) || (state.world.modifiedChunks && state.world.modifiedChunks.has(key)));
+  }
+
+  function structureWriteVolumeReady(state, minX, minY, minZ, maxX, maxY, maxZ) {
+    const world = state && state.world;
+    if (!world) return false;
+    const counts = chunkCounts(world);
+    const x0 = Math.max(0, Math.floor(minX));
+    const y0 = Math.max(0, Math.floor(minY));
+    const z0 = Math.max(0, Math.floor(minZ));
+    const x1 = Math.min(world.w - 1, Math.floor(maxX));
+    const y1 = Math.min(world.h - 1, Math.floor(maxY));
+    const z1 = Math.min(world.d - 1, Math.floor(maxZ));
+    if (x0 > x1 || y0 > y1 || z0 > z1) return false;
+    const minCx = Math.floor(x0 / CHUNK_SIZE);
+    const maxCx = Math.floor(x1 / CHUNK_SIZE);
+    const minCy = Math.floor(y0 / CHUNK_SIZE);
+    const maxCy = Math.floor(y1 / CHUNK_SIZE);
+    const minCz = Math.floor(z0 / CHUNK_SIZE);
+    const maxCz = Math.floor(z1 / CHUNK_SIZE);
+    for (let cz = minCz; cz <= maxCz; cz += 1) {
+      for (let cx = minCx; cx <= maxCx; cx += 1) {
+        for (let cy = minCy; cy <= maxCy; cy += 1) {
+          if (cx < 0 || cy < 0 || cz < 0 || cx >= counts.x || cy >= counts.y || cz >= counts.z) return false;
+          if (!hasTerrainChunk(state, cx, cy, cz)) return false;
+        }
+      }
+    }
+    return true;
   }
 
   function queueTerrainChunk3D(state, cx, cy, cz, mandatory = false) {
@@ -2292,16 +3618,16 @@
     return true;
   }
 
-  function queueChunksAroundPlayer3D(state, radius) {
+  function queueChunksAroundPoint3D(state, centerX, centerY, centerZ, radius, options = {}) {
     const counts = chunkCounts(state.world);
     const loading = ensureChunkLoading(state);
     const seed = worldSeed(state);
     const manualDistance = isManualChunkRenderDistance(state.worldMeta);
     const usingSyncFallback = !chunkWorker && (!chunkWorkerAvailable || typeof Worker === 'undefined');
     const effectiveRadius = usingSyncFallback && !manualDistance ? Math.min(radius, CHUNK_SYNC_FALLBACK_RADIUS || radius) : radius;
-    const pcx = Math.floor(state.player.x / CHUNK_SIZE);
-    const pcy = Math.max(0, Math.min(counts.y - 1, Math.floor(state.player.y / CHUNK_SIZE)));
-    const pcz = Math.floor(state.player.z / CHUNK_SIZE);
+    const pcx = Math.max(0, Math.min(counts.x - 1, Math.floor(centerX / CHUNK_SIZE)));
+    const pcy = Math.max(0, Math.min(counts.y - 1, Math.floor(centerY / CHUNK_SIZE)));
+    const pcz = Math.max(0, Math.min(counts.z - 1, Math.floor(centerZ / CHUNK_SIZE)));
     const surfaceRangeCache = new Map();
     const surfaceChunkRange = (cx, cz) => {
       const key = `${cx},${cz}`;
@@ -2330,10 +3656,15 @@
       const distanceDelta = (adx * adx + adz * adz) - (bdx * bdx + bdz * bdz);
       const playerYDelta = Math.abs(a.cy - pcy) - Math.abs(b.cy - pcy);
       const verticalDelta = verticalPriorityFor(a.cx, a.cy, a.cz) - verticalPriorityFor(b.cx, b.cy, b.cz);
-      if (!usingSyncFallback) return distanceDelta || verticalDelta || playerYDelta;
+      if (!usingSyncFallback) {
+        const aSurfaceScore = verticalPriorityFor(a.cx, a.cy, a.cz) + (adx * adx + adz * adz) * TERRAIN_SURFACE_PRIORITY_WEIGHT;
+        const bSurfaceScore = verticalPriorityFor(b.cx, b.cy, b.cz) + (bdx * bdx + bdz * bdz) * TERRAIN_SURFACE_PRIORITY_WEIGHT;
+        return (aSurfaceScore - bSurfaceScore) || playerYDelta || distanceDelta;
+      }
       return verticalDelta || distanceDelta || playerYDelta;
     };
-    const queueKey = `${currentStorageWorldId(state)}:${seed}:${pcx}:${pcz}:${effectiveRadius}:${chunkWorker ? 'worker' : 'sync'}:${manualDistance ? 'manual' : 'auto'}`;
+    const queueKeyPrefix = options.queueKeyPrefix || 'player';
+    const queueKey = `${queueKeyPrefix}:${currentStorageWorldId(state)}:${seed}:${pcx}:${pcy}:${pcz}:${effectiveRadius}:${chunkWorker ? 'worker' : 'sync'}:${manualDistance ? 'manual' : 'auto'}`;
     if (loading.lastQueueKey === queueKey && loading.queue.length > 0) {
       loading.queue.sort(compareTerrainJobs);
       state.world.lastQueuedChunks = loading.queue.length;
@@ -2359,22 +3690,32 @@
     for (const item of candidates) {
       if (queueTerrainChunk3D(state, item.cx, item.cy, item.cz, item.mandatory)) queued += 1;
     }
-    loading.queue = loading.queue.filter((job) => {
-      const dx = job.cx - pcx;
-      const dz = job.cz - pcz;
-      const keepRadius = manualDistance
-        ? effectiveRadius + 1
-        : (usingSyncFallback ? effectiveRadius : CHUNK_UNLOAD_DISTANCE);
-      const keep = dx * dx + dz * dz <= keepRadius * keepRadius && shouldQueueVerticalChunk(job.cx, job.cy, job.cz);
-      if (!keep) loading.queued.delete(job.key);
-      return keep;
-    });
+    if (options.pruneQueue !== false) {
+      loading.queue = loading.queue.filter((job) => {
+        const dx = job.cx - pcx;
+        const dz = job.cz - pcz;
+        const keepRadius = manualDistance
+          ? effectiveRadius + 1
+          : (usingSyncFallback ? effectiveRadius : CHUNK_UNLOAD_DISTANCE);
+        const keep = dx * dx + dz * dz <= keepRadius * keepRadius && shouldQueueVerticalChunk(job.cx, job.cy, job.cz);
+        if (!keep) loading.queued.delete(job.key);
+        return keep;
+      });
+    }
     loading.queue.sort(compareTerrainJobs);
     return queued;
   }
 
+  function queueChunksAroundPlayer3D(state, radius) {
+    return queueChunksAroundPoint3D(state, state.player.x, state.player.y, state.player.z, radius, { queueKeyPrefix: 'player' });
+  }
+
   function postWorkerChunkJob(state, job, seed) {
     const loading = ensureChunkLoading(state);
+    const workers = chunkWorkers.length ? chunkWorkers : (chunkWorker ? [chunkWorker] : []);
+    if (!workers.length) return false;
+    const worker = workers[nextWorkerIndex % workers.length];
+    nextWorkerIndex += 1;
     const id = nextWorkerJobId;
     nextWorkerJobId += 1;
     loading.pendingIds.set(id, {
@@ -2383,7 +3724,7 @@
       seed,
     });
     loading.pendingKeys.add(job.key);
-    chunkWorker.postMessage({
+    worker.postMessage({
       type: 'generate',
       id,
       seed,
@@ -2393,6 +3734,7 @@
       cy: job.cy,
       cz: job.cz,
     });
+    return true;
   }
 
   function beginSyncTerrainJob(state, job) {
@@ -2443,7 +3785,7 @@
       const index = syncLocalIndex(job, job.x, job.y, job.z);
       job.blocks[index] = block;
       if (block === BLOCK.WATER) job.fluidLevel[index] = 8;
-      else if (block === BLOCK.LAVA) job.fluidLevel[index] = 0;
+      else if (block === BLOCK.LAVA || block === BLOCK.VOLCANIC_LAVA) job.fluidLevel[index] = 0;
       else if (block === BLOCK.DIRT && hasInitialGrass(seed, job.x, job.y, job.z, state.world)) job.grassLevel[index] = 1;
 
       job.x += 1;
@@ -2492,8 +3834,7 @@
           processed += 1;
           continue;
         }
-        postWorkerChunkJob(state, job, seed);
-        processed += 1;
+        if (postWorkerChunkJob(state, job, seed)) processed += 1;
       }
       state.world.lastQueuedChunks = loading.queue.length;
       state.world.lastPendingChunks = loading.pendingIds.size + loading.loadingSaved.size;
@@ -2543,6 +3884,7 @@
     if (state.world.modifiedChunks && state.world.modifiedChunks.has(key)) return false;
     if (state.world.savedChunks && state.world.savedChunks.has(key)) return false;
     state.world.suppressChunkModification = (state.world.suppressChunkModification || 0) + 1;
+    state.world.allowChunkCreationWrites = (state.world.allowChunkCreationWrites || 0) + 1;
     try {
       for (let y = bounds.minY; y < bounds.maxY; y += 1) {
         for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
@@ -2550,6 +3892,7 @@
             const block = terrainBlockAt(seed, x, y, z, state.world);
             if (block === BLOCK.WATER) setStaticWater3D(state, x, y, z);
             else if (block === BLOCK.LAVA) setLava3D(state, x, y, z, 0, true);
+            else if (block === BLOCK.VOLCANIC_LAVA) setVolcanicLava3D(state, x, y, z, 0, true);
             else {
               setBlock3D(state, x, y, z, block);
               if (block === BLOCK.DIRT && hasInitialGrass(seed, x, y, z, state.world)) {
@@ -2560,6 +3903,7 @@
         }
       }
     } finally {
+      state.world.allowChunkCreationWrites -= 1;
       state.world.suppressChunkModification -= 1;
     }
     if (!state.world.generatedChunks) state.world.generatedChunks = new Set();
@@ -2761,6 +4105,8 @@
         setBlock3D(state, x + dx, groundY, z + dz, wallBlock);
       }
     }
+    if (Game.fluids3d && Game.fluids3d.activateFluidAround3D) Game.fluids3d.activateFluidAround3D(state, x, groundY - 1, z);
+    if (Game.fluids3d && Game.fluids3d.stepImmediateFluid3D) Game.fluids3d.stepImmediateFluid3D(state);
     return true;
   }
 
@@ -3117,26 +4463,33 @@
       maxZ: Math.min(world.d, (cz + 1) * CHUNK_SIZE),
     };
     const villages = VILLAGE_BLOCK_GENERATION_ENABLED ? getVillages3D(state) : [];
+    const treasuries = getTreasuries3D(state);
     const hasVillageInColumn = VILLAGE_BLOCK_GENERATION_ENABLED && villages.some((village) => (
       village.x + village.radius >= bounds.minX
       && village.x - village.radius < bounds.maxX
       && village.z + village.radius >= bounds.minZ
       && village.z - village.radius < bounds.maxZ
     ));
+    const treasuriesInColumn = treasuries.filter((treasury) => treasuryIntersectsBounds(treasury, bounds));
+    const hasTreasuryInColumn = treasuriesInColumn.length > 0;
     if (hasVillageInColumn) {
       if (!isDecorationReady(world, cx, cz, counts)) return false;
+    } else if (hasTreasuryInColumn) {
+      if (!treasuriesInColumn.every((treasury) => isTreasuryDecorationReady(world, treasury, cx, cz, counts))) return false;
     } else if (!isSurfaceDecorationReady(state, seed, cx, cz, counts)) {
       return false;
     }
 
     world.suppressChunkModification = (world.suppressChunkModification || 0) + 1;
-    if (hasVillageInColumn) world.suppressChunkDirty = (world.suppressChunkDirty || 0) + 1;
-    if (hasVillageInColumn) {
+    if (hasVillageInColumn || hasTreasuryInColumn) world.suppressChunkDirty = (world.suppressChunkDirty || 0) + 1;
+    if (hasVillageInColumn || hasTreasuryInColumn) {
       if (!world.suppressedDirtyChunks) world.suppressedDirtyChunks = new Set();
       else world.suppressedDirtyChunks.clear();
     }
     try {
       generateBlasterMinerHousesForColumn(state, bounds);
+      generateTreeHousesForColumn(state, bounds);
+      if (hasTreasuryInColumn) decorateTreasuriesForColumn(state, treasuriesInColumn, bounds);
       for (let x = Math.max(4, bounds.minX); x < Math.min(world.w - 4, bounds.maxX); x += 1) {
         for (let z = Math.max(4, bounds.minZ); z < Math.min(world.d - 4, bounds.maxZ); z += 1) {
           const biome = biomeAt(seed, x, z);
@@ -3180,19 +4533,33 @@
       generateBearDecorationsForColumn(state, seed, cx, cz, bounds);
     } finally {
       world.suppressChunkModification -= 1;
-      if (hasVillageInColumn) world.suppressChunkDirty -= 1;
+      if (hasVillageInColumn || hasTreasuryInColumn) world.suppressChunkDirty -= 1;
     }
 
     generateMobsForColumn(state, seed, cx, cz, bounds);
     world.decoratedColumns.add(key);
-    if (hasVillageInColumn) flushSuppressedDirtyChunks(state);
+    if (hasVillageInColumn || hasTreasuryInColumn) flushSuppressedDirtyChunks(state);
     return true;
+  }
+
+  function decorationBudgetForFrame(state) {
+    const base = Math.max(1, Math.floor(CHUNK_DECORATE_BUDGET || 1));
+    const maxBudget = Math.max(base, Math.floor(CHUNK_DECORATE_MAX_BUDGET || base));
+    const fps = state && state.ui ? state.ui.fps : 0;
+    const dirtyCount = state && state.world && state.world.dirtyChunks ? state.world.dirtyChunks.size : 0;
+    if (!Number.isFinite(fps) || fps <= 0) return base;
+    if (fps >= 75 && dirtyCount < 96) return maxBudget;
+    if (fps >= 60 && dirtyCount < 64) return Math.min(maxBudget, base + 2);
+    if (fps >= 50) return Math.min(maxBudget, base + 1);
+    return base;
   }
 
   function decorateReadyColumnsAround(state, seed, pcx, pcz, radius, budget = CHUNK_DECORATE_BUDGET) {
     const counts = chunkCounts(state.world);
     const world = state.world;
     let decorated = 0;
+    const startedAt = performance.now();
+    const timeBudget = Math.max(1, CHUNK_DECORATE_TIME_BUDGET_MS || 3);
     const candidates = [];
     for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
       for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {
@@ -3206,6 +4573,7 @@
     candidates.sort((a, b) => a.distanceSq - b.distanceSq);
     for (const item of candidates) {
       if (decorated >= budget) break;
+      if (decorated > 0 && performance.now() - startedAt >= timeBudget) break;
       const key = columnKey(item.cx, item.cz);
       const failures = world.decorationFailedColumns && world.decorationFailedColumns.get(key);
       if (failures && failures >= DECORATION_COLUMN_MAX_FAILURES) continue;
@@ -3345,8 +4713,10 @@
     generated += processTerrainQueue3D(state, seed);
     perf.terrainMs = performance.now() - t0;
     t0 = performance.now();
-    if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, effectiveRadius);
+    if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, effectiveRadius, decorationBudgetForFrame(state));
     if (currentDimension(state) !== 'underground') generated += ensureBlasterMinerHousesAroundPlayer3D(state);
+    if (currentDimension(state) !== 'underground') generated += ensureTreasuriesAroundPlayer3D(state);
+    if (currentDimension(state) !== 'underground') generated += ensureTreeHousesAroundPlayer3D(state);
     perf.decorateMs = performance.now() - t0;
     t0 = performance.now();
     unloadDistantChunks3D(state, manualDistance ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE);
@@ -3354,12 +4724,49 @@
     const loading = state.world.chunkLoading;
     perf.terrainQueue = loading ? loading.queue.length : 0;
     perf.terrainPending = loading ? loading.pendingIds.size + loading.loadingSaved.size + (loading.syncJob ? 1 : 0) : 0;
-    perf.worker = chunkWorker ? 'on' : 'off';
+    perf.worker = chunkWorkers.length > 0 ? `x${chunkWorkers.length}` : 'off';
     perf.syncProgress = state.world.lastSyncChunkProgress || 0;
     perf.dirtyChunks = state.world.dirtyChunks ? state.world.dirtyChunks.size : 0;
     perf.generationError = state.world.lastGenerationError || null;
     perf.renderDistanceChunks = effectiveRadius;
     perf.renderDistanceMode = manualDistance ? 'manual' : 'auto';
+    return generated;
+  }
+
+  function chunksAroundPointReady3D(state, centerX, centerY, centerZ, radius = 1) {
+    const world = state && state.world;
+    if (!world) return false;
+    const counts = chunkCounts(world);
+    const pcx = Math.max(0, Math.min(counts.x - 1, Math.floor(centerX / CHUNK_SIZE)));
+    const pcy = Math.max(0, Math.min(counts.y - 1, Math.floor(centerY / CHUNK_SIZE)));
+    const pcz = Math.max(0, Math.min(counts.z - 1, Math.floor(centerZ / CHUNK_SIZE)));
+    const effectiveRadius = Math.max(0, Math.floor(radius));
+    for (let cz = Math.max(0, pcz - effectiveRadius); cz < Math.min(counts.z, pcz + effectiveRadius + 1); cz += 1) {
+      for (let cx = Math.max(0, pcx - effectiveRadius); cx < Math.min(counts.x, pcx + effectiveRadius + 1); cx += 1) {
+        const dx = cx - pcx;
+        const dz = cz - pcz;
+        if (dx * dx + dz * dz > effectiveRadius * effectiveRadius) continue;
+        for (let cy = Math.max(0, pcy - 1); cy <= Math.min(counts.y - 1, pcy + 1); cy += 1) {
+          if (!hasTerrainChunk(state, cx, cy, cz)) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  function ensureChunksAroundPoint3D(state, centerX, centerY, centerZ, radius = 1) {
+    if (!state || !state.world) return 0;
+    const effectiveRadius = Math.max(0, Math.floor(Number.isFinite(radius) ? radius : 1));
+    const seed = worldSeed(state);
+    const counts = chunkCounts(state.world);
+    const pcx = Math.max(0, Math.min(counts.x - 1, Math.floor(centerX / CHUNK_SIZE)));
+    const pcz = Math.max(0, Math.min(counts.z - 1, Math.floor(centerZ / CHUNK_SIZE)));
+    let generated = 0;
+    activeState = state;
+    initChunkWorker(state);
+    queueChunksAroundPoint3D(state, centerX, centerY, centerZ, effectiveRadius, { queueKeyPrefix: 'teleport', pruneQueue: false });
+    generated += processTerrainQueue3D(state, seed);
+    if (currentDimension(state) !== 'underground') generated += decorateReadyColumnsAround(state, seed, pcx, pcz, effectiveRadius, 1);
     return generated;
   }
 
@@ -3413,22 +4820,35 @@
     generateWorld3D,
     generateChunk3D,
     ensureChunksAroundPlayer3D,
+    ensureChunksAroundPoint3D,
+    chunksAroundPointReady3D,
     unloadDistantChunks3D,
     saveAllModifiedChunks3D,
     saveModifiedChunks3D,
     getBiomeAt3D,
+    getVolcanoAt3D,
+    isVolcanoVentCell3D,
+    updateVolcanoes3D,
+    getActiveVolcanicEruption3D,
+    getVolcanicSkyInfluence3D,
+    getActiveVolcanicVents3D,
+    getVolcanicCoolingWave3D,
     getWorldSpawn3D,
     seedHasDefaultSpawnBiome3D,
     getCaveEntrancesInArea3D,
     getPortalRuins3D,
     getVillages3D,
     getVillageRoadLinks3D,
+    getTreasuries3D,
+    ensureTreasuriesAroundPlayer3D,
     getSurfaceSpawnY3D,
     createBearDenAt3D,
     getBearDens3D,
     createBlasterMinerHouseAt3D,
     getBlasterMinerHouses3D,
     ensureBlasterMinerHousesAroundPlayer3D,
+    getTreeHouses3D,
+    ensureTreeHousesAroundPlayer3D,
     dimensionWorldId,
     currentStorageWorldId,
     BIOME_LABELS,

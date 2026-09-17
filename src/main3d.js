@@ -25,6 +25,7 @@
   const MAP_BITMAP_SIZE = 512;
   const MAP_MIN_ZOOM = 0.65;
   const MAP_MAX_ZOOM = 16;
+  const MAP_TELEPORT_CHUNK_RADIUS = 1;
   const MAP_BIOME_COLORS = {
     plains: '#6aa354',
     forest: '#2f6b42',
@@ -41,6 +42,27 @@
     deep_cavern: '#35353a',
   };
   const SPAWN_SEED_SEARCH_ATTEMPTS = 3000;
+  const PLAYER_SKIN_STORAGE_KEY = 'cubdep-player-skin';
+  const PLAYER_SKINS = [
+    {
+      id: 'explorer',
+      label: 'Cubic Explorer',
+      description: 'Короткие волосы, синие глаза, черная худи.',
+      hair: '#4a2f1d',
+      eye: '#1459b5',
+      accent: '#25b8c5',
+      pants: '#1b2630',
+    },
+    {
+      id: 'explorer_female',
+      label: 'Cubic Explorer Female',
+      description: 'Длинные волосы, бирюзовые глаза, черная худи.',
+      hair: '#6b4428',
+      eye: '#2aa7ad',
+      accent: '#25b8c5',
+      pants: '#4c586c',
+    },
+  ];
   const SPAWN_BIOME_OPTIONS = [
     { id: 'any', label: 'Любой' },
     { id: 'plains', label: 'Равнина' },
@@ -88,6 +110,82 @@
     )).join('');
   }
 
+  function normalizePlayerSkin(value) {
+    return Game.state3d && Game.state3d.normalizePlayerSkin
+      ? Game.state3d.normalizePlayerSkin(value)
+      : (value === 'explorer_female' ? 'explorer_female' : 'explorer');
+  }
+
+  function getStoredPlayerSkin() {
+    try {
+      return normalizePlayerSkin(window.localStorage && window.localStorage.getItem(PLAYER_SKIN_STORAGE_KEY));
+    } catch (error) {
+      return 'explorer';
+    }
+  }
+
+  function setStoredPlayerSkin(id) {
+    const normalized = normalizePlayerSkin(id);
+    try {
+      if (window.localStorage) window.localStorage.setItem(PLAYER_SKIN_STORAGE_KEY, normalized);
+    } catch (error) {
+      // localStorage can be unavailable in some browser modes.
+    }
+    return normalized;
+  }
+
+  function skinById(id) {
+    const normalized = normalizePlayerSkin(id);
+    return PLAYER_SKINS.find((skin) => skin.id === normalized) || PLAYER_SKINS[0];
+  }
+
+  function renderSkinPreviewHtml(id, small = false) {
+    const skin = skinById(id);
+    const longHair = skin.id === 'explorer_female';
+    return `
+      <div class="skin-preview ${small ? 'skin-preview-small' : ''}" aria-label="${escapeHtml(skin.label)}">
+        <div class="skin-head" style="--hair:${skin.hair}; --eye:${skin.eye};">
+          <span class="skin-hair skin-hair-top"></span>
+          <span class="skin-hair skin-hair-left ${longHair ? 'is-long' : ''}"></span>
+          <span class="skin-hair skin-hair-right ${longHair ? 'is-long' : ''}"></span>
+          ${longHair ? '<span class="skin-bow"></span>' : ''}
+          <span class="skin-eye skin-eye-left"></span>
+          <span class="skin-eye skin-eye-right"></span>
+        </div>
+        <div class="skin-body" style="--accent:${skin.accent}; --pants:${skin.pants};">
+          <span class="skin-arm skin-arm-left"></span>
+          <span class="skin-torso"></span>
+          <span class="skin-arm skin-arm-right"></span>
+          <span class="skin-leg skin-leg-left"></span>
+          <span class="skin-leg skin-leg-right"></span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSkinChooser(context = 'start', returnView = 'main') {
+    const selected = getStoredPlayerSkin();
+    menuRoot.innerHTML = `
+      <div class="menu-panel">
+        <h1 class="menu-title">Выбор скина</h1>
+        <p class="menu-subtitle">Скин виден в шейдерном режиме при смене лица камеры.</p>
+        <div class="skin-choice-grid">
+          ${PLAYER_SKINS.map((skin) => `
+            <button class="skin-choice ${skin.id === selected ? 'is-selected' : ''}" type="button" data-action="select-skin" data-skin-id="${skin.id}" data-context="${escapeHtml(context)}" data-return-view="${escapeHtml(returnView)}">
+              ${renderSkinPreviewHtml(skin.id, true)}
+              <span class="skin-choice-name">${escapeHtml(skin.label)}</span>
+              <span class="skin-choice-desc">${escapeHtml(skin.description)}</span>
+            </button>
+          `).join('')}
+        </div>
+        <div class="menu-actions">
+          <button class="menu-btn" type="button" data-action="back-menu" data-context="${escapeHtml(context)}" data-return-view="${escapeHtml(returnView)}">Назад</button>
+        </div>
+      </div>
+    `;
+    setScreen('menu');
+  }
+
   function waitForNextFrame() {
     return new Promise((resolve) => requestAnimationFrame(resolve));
   }
@@ -122,6 +220,19 @@
     if (searchingSeed) seedInput.value = '';
   }
 
+  function syncCreativeForcedInputs() {
+    const form = document.getElementById('newWorldForm');
+    if (!form) return;
+    const expandedInput = form.querySelector('input[name="expandedBlockAssortment"]');
+    const explosionInput = form.querySelector('input[name="explosionPackEnabled"]');
+    const survivalInput = form.querySelector('input[name="mode"][value="survival"]');
+    const creativeInput = form.querySelector('input[name="mode"][value="creative"]');
+    if (!survivalInput || !creativeInput) return;
+    const forced = !!((expandedInput && expandedInput.checked) || (explosionInput && explosionInput.checked));
+    survivalInput.disabled = forced;
+    if (forced) creativeInput.checked = true;
+  }
+
   async function resolveSeedForSpawnBiome(form) {
     const spawnBiome = normalizeSpawnBiome(form && form.spawnBiome);
     if (spawnBiome === 'any') {
@@ -146,11 +257,17 @@
   function createWorldMeta(form) {
     const chunkRenderDistance = normalizeChunkRenderDistance(form.chunkRenderDistance);
     const spawnBiome = normalizeSpawnBiome(form.spawnBiome);
+    const expandedBlockAssortment = form.expandedBlockAssortment === true;
+    const explosionPackEnabled = form.explosionPackEnabled === true;
     return {
       id: `world-${Date.now().toString(36)}`,
       name: form.name && form.name.trim() ? form.name.trim() : 'Новый мир',
       seed: form.seed && form.seed.trim() ? form.seed.trim() : makeSeed(),
-      mode: form.mode === 'creative' ? 'creative' : 'survival',
+      mode: expandedBlockAssortment || explosionPackEnabled || form.mode === 'creative' ? 'creative' : 'survival',
+      shadersEnabled: form.shadersEnabled === true,
+      expandedBlockAssortment,
+      explosionPackEnabled,
+      playerSkin: normalizePlayerSkin(form.playerSkin || getStoredPlayerSkin()),
       chunkRenderDistance,
       spawnBiome,
       spawnBiomeSeedSearch: form.spawnBiomeSeedSearch === true,
@@ -466,12 +583,34 @@
 
   function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main', options = {}) {
     const isPause = context === 'pause';
+    const creatingWorld = !isPause && (view === 'world-create' || view === 'bot-world');
     const creatingBotWorld = !isPause && view === 'bot-world';
     const name = state && state.worldMeta && state.worldMeta.name ? state.worldMeta.name : 'Мир';
     const seed = state && state.worldMeta && state.worldMeta.seed ? state.worldMeta.seed : '';
     const subtitle = isPause
       ? `${escapeHtml(name)}${seed ? ` / ${escapeHtml(seed)}` : ''}`
       : (creatingBotWorld ? 'Мир с алгоритмическими ботами-игроками' : '3D voxel survival prototype');
+
+    if (!isPause && view === 'main') {
+      const currentSkin = getStoredPlayerSkin();
+      menuRoot.innerHTML = `
+        <div class="menu-panel menu-panel-main">
+          <h1 class="menu-title menu-title-cubic">Cubic Depths</h1>
+          <p class="menu-subtitle">3D voxel survival prototype</p>
+          <div class="menu-main-skin">
+            ${renderSkinPreviewHtml(currentSkin)}
+            <button class="menu-btn" type="button" data-action="show-skins" data-context="start" data-return-view="main">Выбрать скин</button>
+          </div>
+          <div class="menu-actions menu-actions-main">
+            <button class="menu-btn menu-btn-primary" type="button" data-action="show-single-world">Одиночная игра</button>
+            <button class="menu-btn" type="button" data-action="show-bot-world" data-context="start">Играть с ботами</button>
+            <button class="menu-btn" type="button" data-action="show-load" data-context="start">Загрузить мир</button>
+            <button class="menu-btn" type="button" data-action="show-education" data-context="start">Обучение</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
 
     if (view === 'load') {
       menuRoot.innerHTML = `
@@ -854,6 +993,18 @@
           ${renderSpawnBiomeOptions()}
         </select>
       </label>
+      <label class="menu-check">
+        <input type="checkbox" name="shadersEnabled" value="1" />
+        <span>Шейдеры</span>
+      </label>
+      <label class="menu-check">
+        <input type="checkbox" name="expandedBlockAssortment" value="1" />
+        <span>Расширенный ассортимент блоков</span>
+      </label>
+      <label class="menu-check">
+        <input type="checkbox" name="explosionPackEnabled" value="1" />
+        <span>Дополнение "Куча взрывов"</span>
+      </label>
       <div class="menu-field">
         <span>Режим</span>
         <div class="menu-mode-options">
@@ -884,22 +1035,22 @@
       : '';
     menuRoot.innerHTML = `
       <form class="menu-panel ${isPause ? 'pause-panel' : ''}" id="${isPause ? 'pauseMenuForm' : 'newWorldForm'}" data-bots-enabled="${creatingBotWorld ? 'true' : 'false'}">
-        <h1 class="menu-title">${isPause ? 'Пауза' : (creatingBotWorld ? 'Играть с ботами' : 'Cubic Depths')}</h1>
+        <h1 class="menu-title">${isPause ? 'Пауза' : (creatingBotWorld ? 'Играть с ботами' : 'Создание мира')}</h1>
         <p class="menu-subtitle">${subtitle}</p>
         ${fields}
         <div class="menu-actions">
           ${primary}
           ${creatorAction}
           ${editPlayAction}
-          <button class="menu-btn" type="button" data-action="show-load" data-context="${context}">Загрузить мир</button>
-          ${!isPause && !creatingBotWorld ? '<button class="menu-btn" type="button" data-action="show-bot-world" data-context="start">Играть с ботами</button>' : ''}
-          ${isPause ? '' : '<button class="menu-btn" type="button" data-action="show-education" data-context="start">Обучение</button>'}
+          ${isPause ? `<button class="menu-btn" type="button" data-action="show-load" data-context="${context}">Загрузить мир</button>` : ''}
+          ${creatingWorld ? '<button class="menu-btn" type="button" data-action="back-menu" data-context="start" data-return-view="main">Назад в главное меню</button>' : ''}
           ${pauseExit}
         </div>
         <div class="menu-hint">${isPause ? 'После продолжения клик по миру снова захватит мышь.' : (creatingBotWorld ? 'В мире появятся боты с разными характерами: они исследуют, строят, копают шахты, собирают дерево и охотятся алгоритмами без нейросетей.' : 'WASD - движение, Shift - ускорение, Space - прыжок/всплытие, F - полет в creative, ЛКМ - добыча, ПКМ - поставить, R - починить, P - предпросмотр, 1-9/0 - выбор блока.')}</div>
       </form>
     `;
     syncSpawnSeedInput();
+    syncCreativeForcedInputs();
   }
 
   function formatDate(value) {
@@ -1137,7 +1288,9 @@
   async function startWorldFromMeta(meta) {
     lastAutosaveAt = Date.now();
     autosaveBaseWorldId = meta && meta.id === AUTOSAVE_WORLD_ID ? AUTOSAVE_WORLD_ID : '';
-    state = Game.state3d.createGameState3D(meta);
+    const normalizedMeta = meta ? { ...meta } : {};
+    if (!normalizedMeta.playerSkin) normalizedMeta.playerSkin = getStoredPlayerSkin();
+    state = Game.state3d.createGameState3D(normalizedMeta);
     state.dimensionWorlds = {};
     if (Game.inventory3d) {
       if (Game.inventory3d.ensureInventory) Game.inventory3d.ensureInventory(state);
@@ -1971,6 +2124,114 @@
     }
   }
 
+  function drawTreeHouseIcon(ctx, x, y, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.44, size * 0.82, size * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#5a3820';
+    ctx.lineWidth = Math.max(2, size * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(0, size * 0.5);
+    ctx.lineTo(0, -size * 0.44);
+    ctx.stroke();
+
+    ctx.fillStyle = '#2f6b42';
+    ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+    ctx.lineWidth = Math.max(1.5, size * 0.08);
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.5, size * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#8a6236';
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.lineWidth = Math.max(1.5, size * 0.08);
+    ctx.fillRect(-size * 0.34, -size * 0.34, size * 0.68, size * 0.38);
+    ctx.strokeRect(-size * 0.34, -size * 0.34, size * 0.68, size * 0.38);
+    ctx.fillStyle = '#5f3c24';
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.44, -size * 0.34);
+    ctx.lineTo(0, -size * 0.68);
+    ctx.lineTo(size * 0.44, -size * 0.34);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = '#a87c45';
+    ctx.lineWidth = Math.max(1, size * 0.07);
+    ctx.beginPath();
+    ctx.moveTo(size * 0.22, size * 0.34);
+    ctx.lineTo(size * 0.02, size * 0.12);
+    ctx.lineTo(size * 0.22, -size * 0.08);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawTreeHouses(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getTreeHouses3D) return;
+    const houses = generation.getTreeHouses3D(state);
+    if (!houses.length) return;
+    const iconSize = Math.max(12 * window.devicePixelRatio, Math.min(28 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const house of houses) {
+      if (!house || house.x < 0 || house.x > world.w || house.z < 0 || house.z > world.d) continue;
+      drawTreeHouseIcon(ctx, mapX + house.x * scale, mapY + house.z * scale, iconSize);
+    }
+  }
+
+  function drawTreasuryIcon(ctx, x, y, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'square';
+    ctx.fillStyle = 'rgba(0,0,0,0.48)';
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.44, size * 0.9, size * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#2d3130';
+    ctx.strokeStyle = 'rgba(0,0,0,0.82)';
+    ctx.lineWidth = Math.max(2, size * 0.12);
+    ctx.fillRect(-size * 0.58, -size * 0.58, size * 1.16, size * 1.16);
+    ctx.strokeRect(-size * 0.58, -size * 0.58, size * 1.16, size * 1.16);
+
+    ctx.fillStyle = '#7a542f';
+    ctx.strokeStyle = '#1c1209';
+    ctx.lineWidth = Math.max(1.5, size * 0.08);
+    ctx.fillRect(-size * 0.38, -size * 0.12, size * 0.76, size * 0.42);
+    ctx.strokeRect(-size * 0.38, -size * 0.12, size * 0.76, size * 0.42);
+    ctx.fillStyle = '#5a3921';
+    ctx.fillRect(-size * 0.38, -size * 0.26, size * 0.76, size * 0.2);
+    ctx.strokeRect(-size * 0.38, -size * 0.26, size * 0.76, size * 0.2);
+    ctx.fillStyle = '#f1c85c';
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = Math.max(1, size * 0.05);
+    ctx.fillRect(-size * 0.08, -size * 0.08, size * 0.16, size * 0.18);
+    ctx.strokeRect(-size * 0.08, -size * 0.08, size * 0.16, size * 0.18);
+    ctx.restore();
+  }
+
+  function drawCreativeTreasuries(ctx, mapX, mapY, scale, world) {
+    if (!state || !state.worldMeta || state.worldMeta.mode !== 'creative') return;
+    if (state.worldMeta.currentDimension === 'underground') return;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getTreasuries3D) return;
+    const treasuries = generation.getTreasuries3D(state);
+    if (!treasuries.length) return;
+    const iconSize = Math.max(12 * window.devicePixelRatio, Math.min(28 * window.devicePixelRatio, 9 * window.devicePixelRatio * Math.sqrt(scale)));
+    for (const treasury of treasuries) {
+      if (!treasury || treasury.x < 0 || treasury.x > world.w || treasury.z < 0 || treasury.z > world.d) continue;
+      drawTreasuryIcon(ctx, mapX + treasury.x * scale, mapY + treasury.z * scale, iconSize);
+    }
+  }
+
   function drawSpawnTentIcon(ctx, x, y, size) {
     ctx.save();
     ctx.translate(x, y);
@@ -2154,6 +2415,7 @@
       drawCreativeVillages(ctx, x, y, scale, world);
       drawBearDens(ctx, x, y, scale, world);
       drawBlasterMinerHouses(ctx, x, y, scale, world);
+      drawTreeHouses(ctx, x, y, scale, world);
       drawSpawnTentMarker(ctx, x, y, scale, world);
     }
     drawMapWaypoint(ctx, x, y, scale);
@@ -2190,6 +2452,7 @@
     if (!mapRoot || !state || !state.worldMeta) return;
     const labels = Game.generation3d && Game.generation3d.BIOME_LABELS ? Game.generation3d.BIOME_LABELS : {};
     const itemStack = state.ui.openItemMapStack || null;
+    const canTeleport = !itemStack && state.worldMeta.mode === 'creative' && !!state.ui.mapWaypoint;
     const name = escapeHtml(state.worldMeta.name || 'Мир');
     const seed = escapeHtml(state.worldMeta.seed || '');
     mapRoot.innerHTML = `
@@ -2200,6 +2463,7 @@
         </div>
         <div class="map-actions">
           <button class="map-btn" type="button" data-map-action="center">К игроку</button>
+          ${canTeleport ? '<button class="map-btn" type="button" data-map-action="teleport">Телепортироваться</button>' : ''}
           <button class="map-btn" type="button" data-map-action="close">Закрыть</button>
         </div>
       </div>
@@ -2225,6 +2489,10 @@
             <span>Дом взрывальщика-шахтера</span>
           </div>
           <div class="map-legend-item">
+            <span class="map-legend-swatch" style="background:#2f6b42"></span>
+            <span>Домик на дереве</span>
+          </div>
+          <div class="map-legend-item">
             <span class="map-legend-swatch" style="background:#f2d28a"></span>
             <span>Спавн</span>
           </div>
@@ -2233,7 +2501,7 @@
             <span>Боты</span>
           </div>`}
         </div>
-        <div class="map-hint">ЛКМ - поставить цель, C - сбросить цель, колесо мыши - масштаб, перетаскивание - сдвиг, M или Escape - закрыть.</div>
+        <div class="map-hint">ЛКМ - поставить цель, C - сбросить цель${canTeleport ? ', кнопка вверху - телепорт' : ''}, колесо мыши - масштаб, перетаскивание - сдвиг, M или Escape - закрыть.</div>
       </div>
     `;
     ensureMapCanvas();
@@ -2302,14 +2570,73 @@
       z: clamp(pos.z, 0, state.world.d),
     };
     setNotice('Цель поставлена');
-    renderMap();
+    renderMapRoot();
   }
 
   function clearMapWaypoint() {
     if (!state || !state.ui || !state.ui.mapWaypoint) return;
     state.ui.mapWaypoint = null;
     setNotice('Цель сброшена');
-    renderMap();
+    if (screen === 'map') renderMapRoot();
+    else renderMap();
+  }
+
+  function creativeMapTeleportToWaypoint() {
+    if (!state || !state.ui || !state.player || !state.world || !state.worldMeta || state.worldMeta.mode !== 'creative') return;
+    const waypoint = state.ui.mapWaypoint;
+    if (!waypoint) return;
+    const bx = Math.floor(clamp(waypoint.x, 1, state.world.w - 2));
+    const bz = Math.floor(clamp(waypoint.z, 1, state.world.d - 2));
+    const generation = Game.generation3d;
+    const y = generation && generation.getSurfaceSpawnY3D
+      ? generation.getSurfaceSpawnY3D(state, bx, bz)
+      : Math.min(state.world.h - 1, Math.max(2, state.player.y));
+    state.ui.pendingMapTeleport = {
+      x: bx + 0.5,
+      y: clamp(Number.isFinite(y) ? y : state.player.y, 1, state.world.h + 4),
+      z: bz + 0.5,
+      radius: MAP_TELEPORT_CHUNK_RADIUS,
+    };
+    state.ui.topNoticeText = 'Телепортация';
+    state.ui.mapWaypoint = null;
+    closeMap();
+  }
+
+  function finishPendingMapTeleport(teleport) {
+    if (!state || !state.ui || !state.player || !teleport) return;
+    state.player.x = teleport.x;
+    state.player.y = teleport.y;
+    state.player.z = teleport.z;
+    state.player.vx = 0;
+    state.player.vy = 0;
+    state.player.vz = 0;
+    state.player.onGround = false;
+    state.ui.mapCenterX = state.player.x;
+    state.ui.mapCenterZ = state.player.z;
+    state.ui.pendingMapTeleport = null;
+    state.ui.topNoticeText = '';
+    const generation = Game.generation3d;
+    if (generation && generation.ensureChunksAroundPlayer3D) generation.ensureChunksAroundPlayer3D(state);
+    setNotice('Телепортация выполнена');
+  }
+
+  function processPendingMapTeleport() {
+    const teleport = state && state.ui ? state.ui.pendingMapTeleport : null;
+    if (!teleport || !state.worldMeta || state.worldMeta.mode !== 'creative') {
+      if (state && state.ui) state.ui.topNoticeText = '';
+      return;
+    }
+    const generation = Game.generation3d;
+    if (!generation || !generation.ensureChunksAroundPoint3D || !generation.chunksAroundPointReady3D) {
+      finishPendingMapTeleport(teleport);
+      return;
+    }
+    state.ui.topNoticeText = 'Телепортация';
+    const radius = Number.isFinite(teleport.radius) ? teleport.radius : MAP_TELEPORT_CHUNK_RADIUS;
+    generation.ensureChunksAroundPoint3D(state, teleport.x, teleport.y, teleport.z, radius);
+    if (generation.chunksAroundPointReady3D(state, teleport.x, teleport.y, teleport.z, radius)) {
+      finishPendingMapTeleport(teleport);
+    }
   }
 
   function playerTouchingActivePortal() {
@@ -2457,6 +2784,20 @@
     return true;
   }
 
+  function toggleShaderCamera() {
+    if (!state || !state.ui) return;
+    if (!state.worldMeta || !state.worldMeta.shadersEnabled) {
+      state.ui.noticeText = 'Смена лица доступна только с шейдерами';
+      state.ui.noticeTimer = 1.6;
+      return;
+    }
+    const current = state.ui.cameraMode || 'first';
+    const next = current === 'first' ? 'second' : (current === 'second' ? 'third' : 'first');
+    state.ui.cameraMode = next;
+    state.ui.noticeText = next === 'first' ? 'Первое лицо' : (next === 'second' ? 'Вид со спины' : 'Вид на лицо');
+    state.ui.noticeTimer = 1.2;
+  }
+
   async function returnToMainMenu() {
     const canLeave = await askSaveCurrentWorld();
     if (!canLeave) return;
@@ -2491,14 +2832,17 @@
     let t0 = performance.now();
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt, actions);
     state.perf.playerMs = performance.now() - t0;
+    if (Game.generation3d.updateVolcanoes3D) Game.generation3d.updateVolcanoes3D(state, dt);
     t0 = performance.now();
     if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
+    processPendingMapTeleport();
     state.ui.mapRevealTimer = Math.max(0, (state.ui.mapRevealTimer || 0) - dt);
     if (state.ui.mapRevealTimer <= 0 && Game.inventory3d && Game.inventory3d.updateInventoryMaps) {
       Game.inventory3d.updateInventoryMaps(state);
       state.ui.mapRevealTimer = 1;
     }
     state.perf.chunksMs = performance.now() - t0;
+    if (actions.cameraTogglePressed) toggleShaderCamera();
     updatePortalTravel(dt);
     t0 = performance.now();
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
@@ -2557,6 +2901,10 @@
       name: data.get('name') || '',
       seed: data.get('seed') || '',
       mode: data.get('mode') || 'survival',
+      shadersEnabled: data.get('shadersEnabled') === '1',
+      expandedBlockAssortment: data.get('expandedBlockAssortment') === '1',
+      explosionPackEnabled: data.get('explosionPackEnabled') === '1',
+      playerSkin: getStoredPlayerSkin(),
       chunkRenderDistance: data.get('chunkRenderDistance') || 'auto',
       spawnBiome: data.get('spawnBiome') || 'any',
       botsEnabled: event.target.dataset.botsEnabled === 'true',
@@ -2570,10 +2918,17 @@
       resumeWorld();
     } else if (action === 'main-menu') {
       returnToMainMenu();
+    } else if (action === 'show-single-world') {
+      renderUnifiedMenu('start', 'world-create');
     } else if (action === 'show-load') {
       renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'load');
+    } else if (action === 'show-skins') {
+      renderSkinChooser(target.dataset.context || 'start', target.dataset.returnView || 'main');
+    } else if (action === 'select-skin') {
+      setStoredPlayerSkin(target.dataset.skinId || 'explorer');
+      renderUnifiedMenu(target.dataset.context || 'start', target.dataset.returnView || 'main');
     } else if (action === 'back-menu') {
-      renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), 'main');
+      renderUnifiedMenu(target.dataset.context || (screen === 'paused' ? 'pause' : 'start'), target.dataset.returnView || 'main');
     } else if (action === 'show-bot-world') {
       renderUnifiedMenu('start', 'bot-world');
     } else if (action === 'show-education') {
@@ -2719,6 +3074,9 @@
     if (element && element.name === 'spawnBiome') {
       syncSpawnSeedInput();
     }
+    if (element && (element.name === 'expandedBlockAssortment' || element.name === 'explosionPackEnabled')) {
+      syncCreativeForcedInputs();
+    }
     if (action === 'education-custom-code-select') {
       renderCustomLessonCodeMenuFromTarget(target, Number(target.value) || 1);
     } else if (action === 'education-custom-code-thumbnail') {
@@ -2804,6 +3162,7 @@
       const action = target && target.dataset ? target.dataset.mapAction : '';
       if (action === 'close') closeMap();
       if (action === 'center') centerMapOnPlayer();
+      if (action === 'teleport') creativeMapTeleportToWaypoint();
     });
     mapRoot.addEventListener('wheel', (event) => {
       if (!state || screen !== 'map') return;

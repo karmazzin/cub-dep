@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK, BREAK_TIME } = Game.blocks;
-  const { getBlock3D, setBlock3D, inBounds3D, isSolidBlock3D } = Game.world3d;
+  const { getBlock3D, setBlock3D, isBlockChunkLoaded3D, inBounds3D, isSolidBlock3D } = Game.world3d;
 
   const BOT_BLUEPRINTS = [
     { id: 'builder', label: 'Строитель', name: 'Саша', color: 0x4fa66a, weights: { build: 58, gather: 20, explore: 8, dig: 5, mine: 4, wander: 3, hunt: 2 } },
@@ -47,6 +47,10 @@
     return `${Math.floor(x / CHUNK_SIZE)},${Math.floor(y / CHUNK_SIZE)},${Math.floor(z / CHUNK_SIZE)}`;
   }
 
+  function isLoadedBotCell(world, x, y, z) {
+    return !isBlockChunkLoaded3D || isBlockChunkLoaded3D(world, x, y, z);
+  }
+
   function getBreakDuration(blockId) {
     const base = BREAK_TIME && BREAK_TIME[blockId];
     if (!Number.isFinite(base)) return Infinity;
@@ -73,7 +77,7 @@
   }
 
   function isFluid(id) {
-    return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
+    return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA;
   }
 
   function isBuilderBot(bot) {
@@ -153,13 +157,17 @@
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           if (!inBounds3D(world, xx, yy, zz)) return false;
+          if (!isLoadedBotCell(world, xx, yy, zz)) return false;
           const id = getBlock3D(state, xx, yy, zz);
-          if (isSolidBlock3D(id) || id === BLOCK.LAVA || id === BLOCK.HOT_WATER) return false;
+          if (isSolidBlock3D(id) || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA || id === BLOCK.HOT_WATER) return false;
         }
       }
     }
     if (!requireSupport) return true;
-    return isSolidBlock3D(getBlock3D(state, Math.floor(x), Math.floor(y - 0.08), Math.floor(z)));
+    const supportX = Math.floor(x);
+    const supportY = Math.floor(y - 0.08);
+    const supportZ = Math.floor(z);
+    return isLoadedBotCell(world, supportX, supportY, supportZ) && isSolidBlock3D(getBlock3D(state, supportX, supportY, supportZ));
   }
 
   function canStandAt(state, x, y, z) {
@@ -214,6 +222,7 @@
 
   function tryPlace(state, x, y, z, id) {
     if (!state || !state.world || !inBounds3D(state.world, x, y, z)) return false;
+    if (!isLoadedBotCell(state.world, x, y, z)) return false;
     if (getBlock3D(state, x, y, z) !== BLOCK.AIR) return false;
     return setBlock3D(state, x, y, z, id);
   }
@@ -302,7 +311,7 @@
       for (let z = minZ; z <= maxZ; z += 1) {
         for (let x = minX; x <= maxX; x += 1) {
           if (!isUngeneratedModifiedChunk(state, x, y, z)) continue;
-          if (getBlock3D(state, x, y, z) !== BLOCK.LAVA) continue;
+          if (getBlock3D(state, x, y, z) !== BLOCK.LAVA && getBlock3D(state, x, y, z) !== BLOCK.VOLCANIC_LAVA) continue;
           setBlock3D(state, x, y, z, naturalPatchBlock(state, x, y, z));
           fixed += 1;
           if (fixed >= 160) return true;
@@ -744,6 +753,7 @@
     if (!gen) return false;
     if (gen.getVillages3D && pointNearAnyStructure(gen.getVillages3D(state), x, z, 18, 8)) return true;
     if (gen.getPortalRuins3D && pointNearAnyStructure(gen.getPortalRuins3D(state), x, z, 18, 8)) return true;
+    if (gen.getTreasuries3D && pointNearAnyStructure(gen.getTreasuries3D(state), x, z, 42, 10)) return true;
     if (gen.getBearDens3D && pointNearAnyStructure(gen.getBearDens3D(state), x, z, 14, 8)) return true;
     const spawn = gen.getWorldSpawn3D ? gen.getWorldSpawn3D(state) : null;
     if (spawn && Number.isFinite(spawn.x) && Number.isFinite(spawn.z) && Math.hypot(x - spawn.x, z - spawn.z) < 18) return true;
@@ -964,6 +974,7 @@
       const z = mostlyX ? centerZ + side : centerZ;
       if (!inBounds3D(state.world, x, y0, z)) continue;
       for (let yy = y0; yy <= y1; yy += 1) {
+        if (!isLoadedBotCell(state.world, x, yy, z)) continue;
         const id = getBlock3D(state, x, yy, z);
         if (id === BLOCK.AIR || isFluid(id) || id === BLOCK.BEDROCK) continue;
         touched = true;
@@ -1444,6 +1455,7 @@
     const x = clamp(Math.floor(bot.x), 1, state.world.w - 2);
     const z = clamp(Math.floor(bot.z), 1, state.world.d - 2);
     const supportY = clamp(nextY - 1, 0, state.world.h - 2);
+    if (!isLoadedBotCell(state.world, x, supportY, z)) return false;
     const supportId = getBlock3D(state, x, supportY, z);
     if (supportId === BLOCK.AIR || isFluid(supportId)) setBlock3D(state, x, supportY, z, BLOCK.PLANK);
     bot.x = x + 0.5;
@@ -1487,7 +1499,7 @@
     else if (!consumeBuildStepMaterial(state, bot, goal, step)) {
       bot.goal = { type: 'gather_build_resources', target: goalTargetAround(bot, 8, 28), stage: 0, cursor: 0, buildGoal: goal };
       return false;
-    } else if (step.replace) setBlock3D(state, step.x, step.y, step.z, step.id);
+    } else if (step.replace && isLoadedBotCell(state.world, step.x, step.y, step.z)) setBlock3D(state, step.x, step.y, step.z, step.id);
     else tryPlaceFromInventory(state, bot, step.x, step.y, step.z, step.id);
     goal.cursor = (goal.cursor || 0) + 1;
     return false;
@@ -1825,10 +1837,25 @@
     return true;
   }
 
+  function updateExplosionKnockbackBot(state, bot, dt) {
+    if (!bot || !(bot.explosionKnockbackTimer > 0)) return false;
+    bot.explosionKnockbackTimer = Math.max(0, bot.explosionKnockbackTimer - dt);
+    bot.thinkTimer = Math.max(bot.thinkTimer || 0, bot.explosionKnockbackTimer);
+    bot.actionTimer = Math.max(bot.actionTimer || 0, Math.min(0.25, bot.explosionKnockbackTimer));
+    if (state.worldMeta && state.worldMeta.mode === 'creative') applyCreativeFlight(state, bot, dt);
+    else applyPhysics(state, bot, dt);
+    if (bot.explosionKnockbackTimer <= 0) {
+      bot.vx *= 0.35;
+      bot.vz *= 0.35;
+    }
+    return true;
+  }
+
   function updateBot(state, bot, dt) {
     initBot(bot);
     ensureBotHealth(state, bot);
     bot.damageFlash = Math.max(0, (bot.damageFlash || 0) - dt);
+    if (updateExplosionKnockbackBot(state, bot, dt)) return;
     bot.thinkTimer -= dt;
     bot.actionTimer -= dt;
     bot.lookTimer -= dt;

@@ -116,7 +116,7 @@
       const dist = Math.hypot(x - guaranteed.x, z - guaranteed.z) + edgeNoise;
       if (dist <= guaranteed.radius + 28) {
         const edge = guaranteed.radius - dist;
-        best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+        best = { inVolcanic: edge >= 0, fringe: edge < 0, edge, centerX: guaranteed.x, centerZ: guaranteed.z, radius: guaranteed.radius, key: 'guaranteed' };
       }
     }
     if (mountainStrength(seed, x, z) < 0.58) return best || { inVolcanic: false, fringe: false, edge: 99 };
@@ -136,10 +136,44 @@
         const dist = Math.hypot(x - centerX, z - centerZ) + edgeNoise;
         if (dist > radius + 28) continue;
         const edge = radius - dist;
-        if (!best || edge > best.edge) best = { inVolcanic: edge >= 0, fringe: edge < 0, edge };
+        if (!best || edge > best.edge) best = { inVolcanic: edge >= 0, fringe: edge < 0, edge, centerX, centerZ, radius, key: `${cx},${cz}` };
       }
     }
     return best || { inVolcanic: false, fringe: false, edge: 99 };
+  }
+
+  function volcanoInfo(seed, x, z) {
+    const volcanic = volcanicInfo(seed, x, z);
+    if (!volcanic.inVolcanic || !Number.isFinite(volcanic.centerX) || !Number.isFinite(volcanic.centerZ)) return null;
+    const radius = Math.max(16, Math.min(28, volcanic.radius * 0.42));
+    const dx = x - volcanic.centerX;
+    const dz = z - volcanic.centerZ;
+    const dist = Math.hypot(dx, dz);
+    if (dist > radius + 2) return null;
+    const height = 22 + Math.floor(noise2(seed + 2741, Math.floor(volcanic.centerX), Math.floor(volcanic.centerZ)) * 12);
+    return {
+      x: volcanic.centerX,
+      z: volcanic.centerZ,
+      key: volcanic.key || `${Math.floor(volcanic.centerX)},${Math.floor(volcanic.centerZ)}`,
+      radius,
+      craterRadius: 5 + noise2(seed + 2743, Math.floor(volcanic.centerX), Math.floor(volcanic.centerZ)) * 2.5,
+      ventRadius: 2.2 + noise2(seed + 2745, Math.floor(volcanic.centerX), Math.floor(volcanic.centerZ)) * 1.2,
+      height,
+      dist,
+    };
+  }
+
+  function volcanoTerrainOffset(info) {
+    if (!info) return 0;
+    const slope = Math.max(0, 1 - info.dist / info.radius);
+    const cone = Math.pow(slope, 1.45) * info.height;
+    const rim = info.dist >= info.craterRadius && info.dist <= info.craterRadius + 3
+      ? (1 - Math.abs(info.dist - (info.craterRadius + 1.5)) / 1.5) * 4
+      : 0;
+    const crater = info.dist < info.craterRadius
+      ? (1 - info.dist / Math.max(1, info.craterRadius)) * 8
+      : 0;
+    return Math.floor(Math.max(0, cone + Math.max(0, rim) - crater));
   }
 
   function baseLandBiome(seed, x, z) {
@@ -370,7 +404,7 @@
   function terrainHeight(seed, x, z) {
     const river = riverInfo(seed, x, z);
     const riverCut = river.inRiver ? river.depth + 2 : (river.shore ? 1 : 0);
-    return Math.max(5, Math.min(58, terrainBaseHeight(seed, x, z) - riverCut));
+    return Math.max(5, Math.min(92, terrainBaseHeight(seed, x, z) - riverCut + volcanoTerrainOffset(volcanoInfo(seed, x, z))));
   }
 
   function biomeAt(seed, x, z) {
@@ -786,6 +820,10 @@
     const waterLevel = lake.inLake && Number.isFinite(lake.waterLevel) ? lake.waterLevel : WATER_LEVEL;
     const groundH = lake.inLake ? waterLevel - lake.depth : h;
     if (y === 0) return blockIds.BEDROCK;
+    const volcano = volcanoInfo(seed, x, z);
+    if (volcano && volcano.dist <= volcano.ventRadius && y <= groundH + 1) {
+      return y <= Math.max(2, groundH - 4) ? blockIds.VOLCANIC_LAVA : blockIds.AIR;
+    }
     if (y <= groundH) {
       const portalRuin = portalRuinBlockAt(seed, x, y, z, groundH, world, blockIds);
       if (portalRuin !== null) return portalRuin;
@@ -870,7 +908,7 @@
           const block = terrainBlockAt(seed, x, y, z, world, blockIds);
           blocks[index] = block;
           if (block === blockIds.WATER) fluidLevel[index] = STATIC_WATER_LEVEL;
-          else if (block === blockIds.LAVA) fluidLevel[index] = 0;
+          else if (block === blockIds.LAVA || block === blockIds.VOLCANIC_LAVA) fluidLevel[index] = 0;
           else if (block === blockIds.DIRT && hasInitialGrass(seed, x, y, z, world, blockIds)) grassLevel[index] = 1;
         }
       }

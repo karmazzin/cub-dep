@@ -272,6 +272,10 @@
       const text = noteTextFromStack(stack).trim();
       return text ? `Записка: ${text.slice(0, 32)}${text.length > 32 ? '...' : ''}` : 'Записка';
     }
+    const block = Game.blocks && Game.blocks.BLOCK;
+    if (block && stack.id === block.CUSTOM_TNT && Game.interaction3d && Game.interaction3d.customTntLabel) {
+      return Game.interaction3d.customTntLabel(stack.data);
+    }
     if (item && stack.id === item.MAP) return 'Карта';
     return getLabel(stack.id);
   }
@@ -604,6 +608,22 @@
       { id: () => Game.blocks.BLOCK.GOLDEN_FLOWER, chance: 0.25, min: 1, max: 2 },
       { id: () => Game.blocks.BLOCK.WOOL, chance: 0.4, min: 2, max: 5 },
     ],
+    tree_house: [
+      { id: () => Game.blocks.BLOCK.WOOD, chance: 0.9, min: 6, max: 14 },
+      { id: () => Game.blocks.BLOCK.PLANK, chance: 0.85, min: 8, max: 18 },
+      { id: () => Game.blocks.BLOCK.LEAF, chance: 0.55, min: 4, max: 10 },
+      { id: () => Game.blocks.BLOCK.MOSS, chance: 0.42, min: 2, max: 6 },
+      { id: () => Game.interaction3d.ITEM.PAPER, chance: 0.45, min: 2, max: 6 },
+      { id: () => Game.blocks.BLOCK.WOOL, chance: 0.28, min: 1, max: 3 },
+      {
+        id: () => Game.interaction3d.ITEM.NOTE,
+        chance: 0.22,
+        min: 1,
+        max: 1,
+        data: () => createNoteData('Если нашел этот домик - лес уже принял тебя.', true),
+      },
+      { id: () => Game.interaction3d.ITEM.MAP, chance: 0.12, min: 1, max: 1, data: () => createMapData() },
+    ],
   };
 
   const SPAWN_TENT_LOOT_BY_BIOME = {
@@ -645,7 +665,10 @@
       if (index >= slots.length || rng() > entry.chance) continue;
       const id = typeof entry.id === 'function' ? entry.id() : entry.id;
       if (!Number.isFinite(id)) continue;
-      slots[index] = { id, count: rollCount(rng, entry.min, entry.max) };
+      const stack = { id, count: rollCount(rng, entry.min, entry.max) };
+      const data = typeof entry.data === 'function' ? entry.data() : entry.data;
+      if (data && typeof data === 'object') stack.data = cloneData(data) || data;
+      slots[index] = stack;
       index += 1;
     }
     return normalizeSlots(slots, CHEST_SIZE);
@@ -1003,8 +1026,21 @@
 
   function creativeItems(state = null) {
     if (isEducationCreativeEditor(state)) return educationCreativeItems();
+    if (state && state.worldMeta && state.worldMeta.expandedBlockAssortment) {
+      const block = Game.blocks && Game.blocks.BLOCK;
+      if (block) {
+        return Array.from(new Set(Object.values(block)
+          .filter((id) => Number.isFinite(id) && id !== block.AIR)))
+          .sort((a, b) => a - b);
+      }
+    }
     const items = Game.interaction3d && Game.interaction3d.CREATIVE_ITEMS;
-    return Array.isArray(items) ? items.filter((id) => Number.isFinite(id)) : defaultHotbarItems();
+    const list = Array.isArray(items) ? items.filter((id) => Number.isFinite(id)) : defaultHotbarItems();
+    const block = Game.blocks && Game.blocks.BLOCK;
+    if (state && state.worldMeta && state.worldMeta.explosionPackEnabled && block) {
+      return Array.from(new Set([...list, block.TNT_TABLE]));
+    }
+    return list;
   }
 
   function renderStack(stack) {
@@ -1040,7 +1076,7 @@
     if (!isSurvival && activeTab === 'craft') activeTab = 'inventory';
     const carriedLabel = carried ? `${getStackLabel(carried)} x${carried.count}` : 'Пусто';
     root.innerHTML = `
-      <section class="inventory-panel">
+      <section class="inventory-panel ${state.worldMeta && state.worldMeta.shadersEnabled ? 'inventory-panel-shader' : ''}">
         <div class="inventory-head">
           <h2>Инвентарь</h2>
           <button class="inventory-close" type="button" data-inventory-action="close">x</button>
@@ -1057,7 +1093,7 @@
         ${renderCarriedCursor()}
       </section>
     `;
-    drawInventoryIcons(root);
+    drawInventoryIcons(root, state);
   }
 
   function renderCarriedCursor() {
@@ -1086,11 +1122,15 @@
     return `
       <div class="inventory-section-title">Творческий инвентарь</div>
       <div class="inventory-grid inventory-grid-creative">
-        ${creativeItems(state).map((id) => `
-          <button class="inventory-slot" type="button" data-creative-item="${id}" title="${escapeHtml(getLabel(id))}">
+        ${creativeItems(state).map((id) => {
+          const label = getLabel(id);
+          return `
+          <button class="inventory-slot inventory-creative-slot" type="button" data-creative-item="${id}" title="${escapeHtml(label)}">
             ${renderStack({ id, count: MAX_STACK })}
+            <span class="inventory-creative-label">${escapeHtml(label)}</span>
           </button>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     `;
   }
@@ -1160,14 +1200,14 @@
     `;
   }
 
-  function drawInventoryIcons(root) {
+  function drawInventoryIcons(root, state) {
     const canvases = root.querySelectorAll('canvas[data-inventory-icon]');
     canvases.forEach((canvas) => {
       const id = Number(canvas.dataset.inventoryIcon);
       const ctx = canvas.getContext('2d');
       if (!ctx || !Game.ui3d || !Game.ui3d.drawItemIcon) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      Game.ui3d.drawItemIcon(ctx, id, 0, 0, canvas.width);
+      Game.ui3d.drawItemIcon(ctx, id, 0, 0, canvas.width, state);
     });
   }
 

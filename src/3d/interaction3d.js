@@ -2,7 +2,7 @@
   const Game = window.CubDep;
   const { BLOCK, BREAK_TIME } = Game.blocks;
   const { EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_RADIUS, REACH_DISTANCE } = Game.constants3d;
-  const { getBlock3D, setBlock3D, inBounds3D, isSolidBlock3D } = Game.world3d;
+  const { getBlock3D, setBlock3D, inBounds3D, isSolidBlock3D, isBlockChunkLoaded3D } = Game.world3d;
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 1024;
   const MIN_PLAYER_COLLISION_RADIUS = 0.05;
@@ -73,6 +73,7 @@
     BLOCK.DIRT,
     BLOCK.RED_EARTH,
     BLOCK.STONE,
+    BLOCK.BROKEN_STONE,
     BLOCK.WOOD,
     BLOCK.PLANK,
     BLOCK.WATER,
@@ -136,12 +137,14 @@
     [BLOCK.RED_EARTH]: 'Каменистая земля',
     [BLOCK.SCORCHED_DIRT]: 'Обгоревшая земля',
     [BLOCK.STONE]: 'Камень',
+    [BLOCK.BROKEN_STONE]: 'Ломанный камень',
     [BLOCK.WOOD]: 'Дерево',
     [BLOCK.LEAF]: 'Листья',
     [BLOCK.PLANK]: 'Доски',
     [BLOCK.WATER]: 'Вода',
     [BLOCK.HOT_WATER]: 'Горячая вода',
     [BLOCK.LAVA]: 'Лава',
+    [BLOCK.VOLCANIC_LAVA]: 'Вулканическая лава',
     [BLOCK.BEDROCK]: 'Коренная порода',
     [BLOCK.SAND]: 'Песок',
     [BLOCK.CACTUS]: 'Кактус',
@@ -209,6 +212,8 @@
     [BLOCK.DYNAMITE_POWER_75]: 'ТНТ мощность 75',
     [BLOCK.DYNAMITE_POWER_100]: 'ТНТ мощность 100',
     [BLOCK.TNT_REMOTE]: 'Пульт от ТНТ',
+    [BLOCK.TNT_TABLE]: 'Стол для ТНТ',
+    [BLOCK.CUSTOM_TNT]: 'ТНТ со свойствами',
     [BLOCK.STRANGE_PORTAL_STONE]: 'Камень странного портала',
     [BLOCK.STRANGE_PORTAL_CORE]: 'Сломанное ядро портала',
     [BLOCK.STRANGE_PORTAL_RUNE]: 'Руна странного портала',
@@ -289,7 +294,24 @@
     [BLOCK.DYNAMITE_POWER_75]: { radius: 75, fuse: 7, chunked: true },
     [BLOCK.DYNAMITE_POWER_100]: { radius: 100, fuse: 8, chunked: true },
   };
+  const CUSTOM_TNT_DEFAULTS = {
+    power: 1,
+    chainReaction: false,
+    knockback: false,
+    mobileTnt: false,
+    movingBlocks: false,
+  };
   const CHUNKED_EXPLOSION_CHECK_BUDGET = 18000;
+  const CUSTOM_EXPLOSION_CHECK_BUDGET = 24000;
+  const CUSTOM_EXPLOSION_IMMEDIATE_CHECK_BUDGET = 52000;
+  const CUSTOM_EXPLOSION_TOTAL_CHECK_LIMIT = 480000;
+  const CUSTOM_EXPLOSION_BLOCK_LIMIT = 4096;
+  const CUSTOM_NEGATIVE_PLACE_LIMIT = 2048;
+  const CUSTOM_EXPLOSION_MAX_BLOCK_LIMIT = 120000;
+  const CUSTOM_NEGATIVE_MAX_PLACE_LIMIT = 32000;
+  const CUSTOM_EXPLOSION_LOAD_CHUNK_RADIUS_MAX = 7;
+  const MOVING_BLOCK_LIMIT = 600;
+  const EXPLOSION_EFFECT_LIMIT = 24;
   const PREVIEW_FLUID_LIMIT = 1200;
   const PREVIEW_SIDE_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
@@ -547,6 +569,100 @@
     });
   }
 
+  function openTntTableForm(state) {
+    if (!state || !state.worldMeta || !state.worldMeta.explosionPackEnabled) {
+      setNotice(state, 'Нужно дополнение "Куча взрывов"');
+      return false;
+    }
+    if (typeof document === 'undefined' || !document.body) return false;
+    if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
+    let root = document.getElementById('tntTableRoot');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'tntTableRoot';
+      document.body.appendChild(root);
+    }
+    root.className = 'calculator-root tnt-table-root';
+    if (state.pause) state.pause.open = true;
+    root.classList.remove('is-hidden');
+    root.innerHTML = `
+      <form class="calculator-panel tnt-table-panel">
+        <div class="calculator-title">Создать ТНТ</div>
+        <label class="tnt-table-field">
+          <span>Сила ТНТ</span>
+          <input class="calculator-input" name="power" type="number" step="1" value="10" autocomplete="off" />
+        </label>
+        <label class="tnt-table-check">
+          <input type="checkbox" name="chainReaction" value="1" />
+          <span>Цепная реакция</span>
+        </label>
+        <label class="tnt-table-check">
+          <input type="checkbox" name="knockback" value="1" />
+          <span>Отталкивание</span>
+        </label>
+        <label class="tnt-table-check">
+          <input type="checkbox" name="mobileTnt" value="1" />
+          <span>Подвижное ТНТ</span>
+        </label>
+        <label class="tnt-table-check">
+          <input type="checkbox" name="movingBlocks" value="1" />
+          <span>Движущиеся блоки</span>
+        </label>
+        <div class="calculator-result">Будет создан один блок ТНТ со свойствами.</div>
+        <div class="calculator-actions">
+          <button type="submit">Создать</button>
+          <button class="calculator-close" type="button">Закрыть</button>
+        </div>
+      </form>
+    `;
+    const form = root.querySelector('form');
+    const result = root.querySelector('.calculator-result');
+    const close = () => {
+      root.classList.add('is-hidden');
+      root.innerHTML = '';
+      if (state.pause) state.pause.open = false;
+    };
+    root.onkeydown = (event) => {
+      event.stopPropagation();
+    };
+    const sync = () => {
+      const chain = !!(form && form.chainReaction && form.chainReaction.checked);
+      if (form && form.mobileTnt) {
+        form.mobileTnt.disabled = !chain;
+        if (!chain) form.mobileTnt.checked = false;
+      }
+    };
+    const closeButton = root.querySelector('.calculator-close');
+    if (closeButton) closeButton.addEventListener('click', close);
+    if (!form) return true;
+    form.addEventListener('change', sync);
+    sync();
+    const powerInput = form.querySelector('input[name="power"]');
+    if (powerInput) powerInput.focus();
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const power = Number(data.get('power'));
+      if (!Number.isFinite(power) || power === 0) {
+        if (result) result.textContent = 'Введите любую силу, кроме 0.';
+        return;
+      }
+      const stackData = customTntStackData({
+        power,
+        chainReaction: data.get('chainReaction') === '1',
+        knockback: data.get('knockback') === '1',
+        mobileTnt: data.get('mobileTnt') === '1',
+        movingBlocks: data.get('movingBlocks') === '1',
+      });
+      const added = Game.inventory3d && Game.inventory3d.addMinedItem
+        ? Game.inventory3d.addMinedItem(state, BLOCK.CUSTOM_TNT, 1, stackData)
+        : { added: 0, remaining: 1 };
+      if (result) result.textContent = added.remaining > 0 ? 'В инвентаре нет места.' : `Создано: ${customTntLabel(stackData)}`;
+      if (added.remaining <= 0) setNotice(state, 'Создано ТНТ со свойствами');
+    });
+    return true;
+  }
+
   function targetKey(hit) {
     return hit ? `${hit.x},${hit.y},${hit.z}` : '';
   }
@@ -566,8 +682,65 @@
     return !!DYNAMITE_CONFIG[id];
   }
 
+  function isAnyTntBlock(id) {
+    return isDynamiteBlock(id) || id === BLOCK.CUSTOM_TNT;
+  }
+
+  function cloneData(data) {
+    if (!data) return null;
+    try {
+      return JSON.parse(JSON.stringify(data));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function normalizeCustomTntData(data) {
+    const source = data && typeof data === 'object' ? data : {};
+    const rawPower = Number(source.power);
+    const power = Number.isFinite(rawPower) ? Math.max(-1000000, Math.min(1000000, Math.trunc(rawPower))) : 1;
+    return {
+      power: power === 0 ? 1 : power,
+      chainReaction: source.chainReaction === true,
+      knockback: source.knockback === true,
+      mobileTnt: source.mobileTnt === true && source.chainReaction === true,
+      movingBlocks: source.movingBlocks === true,
+    };
+  }
+
+  function customTntDataAt(state, x, y, z) {
+    const key = coordKey(x, y, z);
+    const stored = state && state.world && state.world.blockData ? state.world.blockData[key] : null;
+    if (stored && stored.type === 'customTnt') return normalizeCustomTntData(stored);
+    return normalizeCustomTntData(CUSTOM_TNT_DEFAULTS);
+  }
+
+  function setBlockDataAt(state, x, y, z, data) {
+    if (!state || !state.world) return;
+    if (!state.world.blockData) state.world.blockData = {};
+    const key = coordKey(x, y, z);
+    if (data) state.world.blockData[key] = cloneData(data);
+    else delete state.world.blockData[key];
+    if (Game.world3d && Game.world3d.markChunkModified3D) Game.world3d.markChunkModified3D(state, x, y, z);
+  }
+
+  function customTntStackData(data) {
+    const normalized = normalizeCustomTntData(data);
+    return { type: 'customTnt', ...normalized };
+  }
+
+  function customTntLabel(data) {
+    const normalized = normalizeCustomTntData(data);
+    const flags = [];
+    if (normalized.chainReaction) flags.push('цепь');
+    if (normalized.knockback) flags.push('толчок');
+    if (normalized.mobileTnt) flags.push('подвижное');
+    if (normalized.movingBlocks) flags.push('блоки');
+    return `ТНТ со свойствами: ${normalized.power}${flags.length ? ` (${flags.join(', ')})` : ''}`;
+  }
+
   function isPreviewFluid(id) {
-    return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
+    return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA;
   }
 
   function maxPreviewFluidLevel(fluidId) {
@@ -583,7 +756,7 @@
 
   function isPreviewFluidSupport(state, x, y, z) {
     const id = getBlock3D(state, x, y, z);
-    return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA;
+    return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA && id !== BLOCK.VOLCANIC_LAVA;
   }
 
   function ensureActiveDynamite(state) {
@@ -596,16 +769,46 @@
     return state.world.activeExplosions;
   }
 
+  function recordExplosionEffect(state, item) {
+    if (!state || !state.world || !item) return;
+    if (!Array.isArray(state.world.explosionEffects)) state.world.explosionEffects = [];
+    const radius = Math.max(1, Math.abs(Number(item.radius) || 1));
+    state.world.explosionEffects.push({
+      x: item.x + 0.5,
+      y: item.y + 0.5,
+      z: item.z + 0.5,
+      radius,
+      age: 0,
+    });
+    if (state.world.explosionEffects.length > EXPLOSION_EFFECT_LIMIT) {
+      state.world.explosionEffects.splice(0, state.world.explosionEffects.length - EXPLOSION_EFFECT_LIMIT);
+    }
+  }
+
   function activateDynamite(state, x, y, z, id) {
-    const config = DYNAMITE_CONFIG[id];
-    if (!config) return false;
+    const custom = id === BLOCK.CUSTOM_TNT ? customTntDataAt(state, x, y, z) : null;
+    const config = custom ? null : DYNAMITE_CONFIG[id];
+    if (!custom && !config) return false;
     const list = ensureActiveDynamite(state);
     const key = coordKey(x, y, z);
     if (list.some((item) => item.key === key)) {
       setNotice(state, 'Динамит уже активирован');
       return true;
     }
-    list.push({ key, x, y, z, id, radius: config.radius, fuse: config.fuse, timer: config.fuse, chunked: !!config.chunked });
+    const radius = custom ? Math.max(1, Math.abs(custom.power)) : config.radius;
+    const fuse = custom ? 0.8 : config.fuse;
+    list.push({
+      key,
+      x,
+      y,
+      z,
+      id,
+      radius,
+      fuse,
+      timer: fuse,
+      chunked: custom ? true : !!config.chunked,
+      custom,
+    });
     setNotice(state, 'Динамит активирован');
     return true;
   }
@@ -782,13 +985,14 @@
       setNotice(state, preview.truncated ? 'Предпросмотр жидкости ограничен' : 'Предпросмотр жидкости');
       return;
     }
-    if (isDynamiteBlock(hit.id)) {
+    if (isAnyTntBlock(hit.id)) {
+      const custom = hit.id === BLOCK.CUSTOM_TNT ? customTntDataAt(state, hit.x, hit.y, hit.z) : null;
       state.ui.preview = {
         type: 'tnt',
         x: hit.x,
         y: hit.y,
         z: hit.z,
-        radius: DYNAMITE_CONFIG[hit.id].radius,
+        radius: custom ? Math.max(1, Math.abs(custom.power)) : DYNAMITE_CONFIG[hit.id].radius,
       };
       setNotice(state, 'Предпросмотр взрыва');
       return;
@@ -801,7 +1005,247 @@
       && id !== BLOCK.BEDROCK
       && id !== BLOCK.WATER
       && id !== BLOCK.HOT_WATER
-      && id !== BLOCK.LAVA;
+      && id !== BLOCK.LAVA
+      && id !== BLOCK.VOLCANIC_LAVA;
+  }
+
+  function movingBlocks(state) {
+    if (!state.world.movingBlocks) state.world.movingBlocks = [];
+    return state.world.movingBlocks;
+  }
+
+  function canSpawnMovingBlock(state) {
+    return movingBlocks(state).length < MOVING_BLOCK_LIMIT;
+  }
+
+  function pushVelocityFromCenter(item, x, y, z, speed) {
+    const dx = x + 0.5 - (item.x + 0.5);
+    const dy = y + 0.5 - (item.y + 0.5);
+    const dz = z + 0.5 - (item.z + 0.5);
+    const len = Math.max(0.01, Math.hypot(dx, dy, dz));
+    return {
+      vx: dx / len * speed,
+      vy: dy / len * speed + Math.min(2.5, speed * 0.28),
+      vz: dz / len * speed,
+    };
+  }
+
+  function spawnMovingBlock(state, x, y, z, id, data, velocity, options = {}) {
+    if (!canSpawnMovingBlock(state)) return false;
+    movingBlocks(state).push({
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+      blockId: id,
+      data: cloneData(data),
+      x: x + 0.5,
+      y: y + 0.5,
+      z: z + 0.5,
+      vx: velocity.vx || 0,
+      vy: velocity.vy || 0,
+      vz: velocity.vz || 0,
+      gravitySuspendedRadius: Number.isFinite(options.gravitySuspendedRadius) ? Math.max(0, options.gravitySuspendedRadius) : 0,
+      ox: Number.isFinite(options.ox) ? options.ox : x + 0.5,
+      oy: Number.isFinite(options.oy) ? options.oy : y + 0.5,
+      oz: Number.isFinite(options.oz) ? options.oz : z + 0.5,
+      mobileTnt: options.mobileTnt === true,
+    });
+    return true;
+  }
+
+  function entityNearPoint(state, x, y, z, radius) {
+    const r = Math.max(0.1, radius || 0.7);
+    const rSq = r * r;
+    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
+    for (const mob of sheep) {
+      const dx = (mob.x || 0) - x;
+      const dy = ((mob.y || 0) + 0.7) - y;
+      const dz = (mob.z || 0) - z;
+      if (dx * dx + dy * dy + dz * dz <= rSq) return true;
+    }
+    const bots = state.entities && Array.isArray(state.entities.bots) ? state.entities.bots : [];
+    for (const bot of bots) {
+      const dx = (bot.x || 0) - x;
+      const dy = ((bot.y || 0) + 0.9) - y;
+      const dz = (bot.z || 0) - z;
+      if (dx * dx + dy * dy + dz * dz <= rSq) return true;
+    }
+    return false;
+  }
+
+  function placeMovingBlock(state, item, bx, by, bz) {
+    if (!inBounds3D(state.world, bx, by, bz)) return false;
+    const target = getBlock3D(state, bx, by, bz);
+    if (target !== BLOCK.AIR) return false;
+    if (!setBlock3D(state, bx, by, bz, item.blockId)) return false;
+    if (item.blockId === BLOCK.CUSTOM_TNT) setBlockDataAt(state, bx, by, bz, item.data);
+    return true;
+  }
+
+  function applyExplosionKnockback(state, item) {
+    const radius = Math.max(1, Number(item && item.radius) || 1);
+    const push = (entity, height = PLAYER_HEIGHT * 0.5, options = {}) => {
+      if (!entity) return;
+      let dx = entity.x - (item.x + 0.5);
+      const dy = (entity.y + height) - (item.y + 0.5);
+      let dz = entity.z - (item.z + 0.5);
+      const horizontal = Math.hypot(dx, dz);
+      if (horizontal < 0.001) {
+        dx = 1;
+        dz = 0;
+      }
+      const dist = Math.max(0.01, Math.hypot(dx, dy, dz));
+      if (dist > radius + 1) return;
+      const targetDist = Math.max(1.8, radius + 0.8);
+      const remaining = Math.max(0.8, targetDist - dist);
+      const maxSpeed = options.maxSpeed || 44;
+      const speed = Math.min(maxSpeed, Math.max(6, remaining / 0.55));
+      const dirLen = Math.max(0.001, Math.hypot(dx, dz));
+      entity.vx = dx / dirLen * speed;
+      entity.vz = dz / dirLen * speed;
+      entity.vy = Math.min(options.maxY || 32, Math.max(entity.vy || 0, 3.5 + Math.min(18, speed * 0.26)));
+      if (options.markMob) {
+        entity.explosionKnockbackTimer = Math.min(1.4, Math.max(0.35, remaining / Math.max(1, speed)));
+        entity.panicTimer = Math.max(entity.panicTimer || 0, entity.explosionKnockbackTimer);
+        entity.pauseTimer = 0;
+        entity.eating = false;
+        entity.sleeping = false;
+      }
+      entity.onGround = false;
+    };
+    push(state.player, PLAYER_HEIGHT * 0.5, { maxSpeed: 38, maxY: 28 });
+    const sheep = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
+    sheep.forEach((mob) => push(mob, 0.7, { markMob: true, maxSpeed: 62, maxY: 34 }));
+    const bots = state.entities && Array.isArray(state.entities.bots) ? state.entities.bots : [];
+    bots.forEach((bot) => push(bot, 0.9, { markMob: true, maxSpeed: 62, maxY: 34 }));
+  }
+
+  function queueChainReaction(state, sourceItem, x, y, z, id, data) {
+    if (!sourceItem.custom || !sourceItem.custom.chainReaction) return false;
+    if (!isAnyTntBlock(id)) return false;
+    const key = coordKey(x, y, z);
+    const active = ensureActiveDynamite(state);
+    if (active.some((item) => item.key === key)) return true;
+    if (id === BLOCK.CUSTOM_TNT) {
+      const tntData = normalizeCustomTntData(data || customTntDataAt(state, x, y, z));
+      if (tntData.mobileTnt) {
+        const speed = Math.min(34, Math.max(7, Math.sqrt(Math.abs(sourceItem.custom.power)) * 1.8));
+        const velocity = pushVelocityFromCenter(sourceItem, x, y, z, speed);
+        if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
+          spawnMovingBlock(state, x, y, z, BLOCK.CUSTOM_TNT, customTntStackData(tntData), velocity, { mobileTnt: true });
+          return true;
+        }
+      }
+      active.push({
+        key,
+        x,
+        y,
+        z,
+        id,
+        radius: Math.max(1, Math.abs(tntData.power)),
+        fuse: 0.25,
+        timer: 0.25,
+        chunked: true,
+        custom: tntData,
+      });
+      return true;
+    }
+    const config = DYNAMITE_CONFIG[id];
+    if (!config) return false;
+    active.push({ key, x, y, z, id, radius: config.radius, fuse: 0.25, timer: 0.25, chunked: !!config.chunked });
+    return true;
+  }
+
+  function processCustomExplosionBlock(state, explosion, x, y, z, id) {
+    const custom = normalizeCustomTntData(explosion.custom);
+    const data = id === BLOCK.CUSTOM_TNT ? customTntStackData(customTntDataAt(state, x, y, z)) : null;
+    if (queueChainReaction(state, explosion, x, y, z, id, data)) return true;
+    if (custom.power < 0) {
+      if (explosion.spawned >= (explosion.placeLimit || CUSTOM_NEGATIVE_PLACE_LIMIT) || id !== BLOCK.AIR) return false;
+      if (setBlock3D(state, x, y, z, BLOCK.CUSTOM_TNT)) {
+        setBlockDataAt(state, x, y, z, customTntStackData({ ...custom, power: Math.abs(custom.power) }));
+        explosion.spawned += 1;
+        return true;
+      }
+      return false;
+    }
+    if (!canExplodeBlock(id) || explosion.broken >= (explosion.blockLimit || CUSTOM_EXPLOSION_BLOCK_LIMIT)) return false;
+    if (custom.movingBlocks && id !== BLOCK.CUSTOM_TNT && !isDynamiteBlock(id) && canSpawnMovingBlock(state)) {
+      const speed = Math.min(30, Math.max(5, Math.sqrt(Math.abs(custom.power)) * 1.4));
+      const velocity = pushVelocityFromCenter(explosion, x, y, z, speed);
+      if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
+        spawnMovingBlock(state, x, y, z, id, null, velocity, {
+          gravitySuspendedRadius: Math.min(Math.max(1, Math.abs(custom.power)), 96),
+          ox: explosion.x + 0.5,
+          oy: explosion.y + 0.5,
+          oz: explosion.z + 0.5,
+        });
+        activateFluidAroundChange(state, x, y, z);
+        return true;
+      }
+      return false;
+    }
+    if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1, data);
+    if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
+      activateFluidAroundChange(state, x, y, z);
+      return true;
+    }
+    return false;
+  }
+
+  function explodeMovingTnt(state, item) {
+    const bx = Math.max(0, Math.min(state.world.w - 1, Math.floor(item.x)));
+    const by = Math.max(1, Math.min(state.world.h - 1, Math.floor(item.y)));
+    const bz = Math.max(0, Math.min(state.world.d - 1, Math.floor(item.z)));
+    const data = customTntStackData(item.data);
+    setBlock3D(state, bx, by, bz, BLOCK.CUSTOM_TNT);
+    setBlockDataAt(state, bx, by, bz, data);
+    explodeDynamite(state, {
+      key: coordKey(bx, by, bz),
+      x: bx,
+      y: by,
+      z: bz,
+      id: BLOCK.CUSTOM_TNT,
+      radius: Math.max(1, Math.abs(data.power)),
+      custom: normalizeCustomTntData(data),
+      chunked: true,
+    });
+    return true;
+  }
+
+  function updateMovingBlocks(state, dt) {
+    const list = state && state.world && Array.isArray(state.world.movingBlocks) ? state.world.movingBlocks : [];
+    if (!list.length) return;
+    const next = [];
+    for (const item of list) {
+      const ox = Number.isFinite(item.ox) ? item.ox : item.x;
+      const oy = Number.isFinite(item.oy) ? item.oy : item.y;
+      const oz = Number.isFinite(item.oz) ? item.oz : item.z;
+      const suspended = item.gravitySuspendedRadius > 0
+        && Math.hypot(item.x - ox, item.y - oy, item.z - oz) <= item.gravitySuspendedRadius;
+      if (!suspended) item.vy -= 18 * dt;
+      item.x += item.vx * dt;
+      item.y += item.vy * dt;
+      item.z += item.vz * dt;
+      const bx = Math.floor(item.x);
+      const by = Math.floor(item.y);
+      const bz = Math.floor(item.z);
+      const hitWorld = !inBounds3D(state.world, bx, by, bz) || getBlock3D(state, bx, by, bz) !== BLOCK.AIR;
+      const hitMob = entityNearPoint(state, item.x, item.y, item.z, 0.7);
+      if (item.mobileTnt && (hitWorld || hitMob || isAnyTntBlock(getBlock3D(state, bx, by, bz)))) {
+        explodeMovingTnt(state, item);
+        continue;
+      }
+      if (hitWorld || hitMob) {
+        const px = Math.floor(item.x - item.vx * dt);
+        const py = Math.floor(item.y - item.vy * dt);
+        const pz = Math.floor(item.z - item.vz * dt);
+        if (!placeMovingBlock(state, item, px, py, pz)) {
+          Game.inventory3d && Game.inventory3d.addMinedItem && Game.inventory3d.addMinedItem(state, item.blockId, 1, item.data);
+        }
+        continue;
+      }
+      next.push(item);
+    }
+    state.world.movingBlocks = next.slice(0, MOVING_BLOCK_LIMIT);
   }
 
   function chunkBounds(world, chunk) {
@@ -828,32 +1272,113 @@
     return dx * dx + dy * dy + dz * dz <= item.radius * item.radius;
   }
 
+  function chunkDistanceScore(world, chunk, item) {
+    const bounds = chunkBounds(world, chunk);
+    const cx = (bounds.minX + bounds.maxX - 1) * 0.5;
+    const cy = (bounds.minY + bounds.maxY - 1) * 0.5;
+    const cz = (bounds.minZ + bounds.maxZ - 1) * 0.5;
+    const dx = cx - item.x;
+    const dy = cy - item.y;
+    const dz = cz - item.z;
+    return dx * dx + dy * dy + dz * dz;
+  }
+
+  function customExplosionScale(radius) {
+    return Math.max(1, Math.log10(Math.max(1, Number(radius) || 1) + 1));
+  }
+
+  function customExplosionBlockLimit(radius) {
+    const scale = customExplosionScale(radius);
+    return Math.min(CUSTOM_EXPLOSION_MAX_BLOCK_LIMIT, Math.max(CUSTOM_EXPLOSION_BLOCK_LIMIT, Math.floor(2200 * scale * scale * scale)));
+  }
+
+  function customNegativePlaceLimit(radius) {
+    const scale = customExplosionScale(radius);
+    return Math.min(CUSTOM_NEGATIVE_MAX_PLACE_LIMIT, Math.max(CUSTOM_NEGATIVE_PLACE_LIMIT, Math.floor(850 * scale * scale * scale)));
+  }
+
+  function customExplosionTotalCheckLimit(radius) {
+    const scale = customExplosionScale(radius);
+    return Math.min(1800000, Math.max(CUSTOM_EXPLOSION_TOTAL_CHECK_LIMIT, Math.floor(160000 * scale * scale)));
+  }
+
+  function customExplosionLoadChunkRadius(radius) {
+    if (!Number.isFinite(radius) || radius <= 0) return 1;
+    const chunkSize = Game.constants3d && Game.constants3d.CHUNK_SIZE ? Game.constants3d.CHUNK_SIZE : 16;
+    return Math.min(CUSTOM_EXPLOSION_LOAD_CHUNK_RADIUS_MAX, Math.max(1, Math.ceil(Math.min(radius, 112) / chunkSize)));
+  }
+
+  function collectExplosionChunks(state, explosion) {
+    const world = state && state.world;
+    if (!world || !world.chunks || !explosion) return;
+    const seen = explosion.chunkSet || (explosion.chunkSet = {});
+    const entries = [];
+    for (const [key, chunk] of world.chunks || []) {
+      if (seen[key] || !chunk || !chunk.blocks || !chunkIntersectsSphere(world, chunk, explosion)) continue;
+      entries.push({ key, score: chunkDistanceScore(world, chunk, explosion) });
+    }
+    entries.sort((a, b) => a.score - b.score);
+    if (!Array.isArray(explosion.chunks)) explosion.chunks = [];
+    for (const entry of entries) {
+      seen[entry.key] = true;
+      explosion.chunks.push(entry.key);
+    }
+  }
+
+  function ensureCustomExplosionChunks(state, explosion) {
+    if (!explosion || !explosion.custom || !Game.generation3d || !Game.generation3d.ensureChunksAroundPoint3D) return;
+    const radius = Number.isFinite(explosion.loadChunkRadius) ? explosion.loadChunkRadius : customExplosionLoadChunkRadius(explosion.radius);
+    Game.generation3d.ensureChunksAroundPoint3D(state, explosion.x + 0.5, explosion.y + 0.5, explosion.z + 0.5, radius);
+    collectExplosionChunks(state, explosion);
+  }
+
   function beginChunkedExplosion(state, item) {
     const world = state.world;
+    const custom = item.custom ? normalizeCustomTntData(item.custom) : null;
+    recordExplosionEffect(state, item);
     const chunks = [];
-    for (const [key, chunk] of world.chunks || []) {
-      if (!chunk || !chunk.blocks || !chunkIntersectsSphere(world, chunk, item)) continue;
-      chunks.push(key);
+    const chunkSet = {};
+    const temporaryExplosion = { ...item, chunks, chunkSet };
+    if (custom && Game.generation3d && Game.generation3d.ensureChunksAroundPoint3D) {
+      temporaryExplosion.loadChunkRadius = customExplosionLoadChunkRadius(item.radius);
+      Game.generation3d.ensureChunksAroundPoint3D(state, item.x + 0.5, item.y + 0.5, item.z + 0.5, temporaryExplosion.loadChunkRadius);
     }
-    if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, item.id, 1);
+    collectExplosionChunks(state, temporaryExplosion);
+    if (!custom && Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, item.id, 1);
     if (setBlock3D(state, item.x, item.y, item.z, BLOCK.AIR)) activateFluidAroundChange(state, item.x, item.y, item.z);
     damageEntitiesFromExplosion(state, item);
-    ensureActiveExplosions(state).push({
+    if (custom && custom.knockback) applyExplosionKnockback(state, item);
+    const explosion = {
       x: item.x,
       y: item.y,
       z: item.z,
       radius: item.radius,
       radiusSq: item.radius * item.radius,
+      custom,
       chunks,
+      chunkSet,
+      loadChunkRadius: custom ? customExplosionLoadChunkRadius(item.radius) : 0,
+      blockLimit: custom ? customExplosionBlockLimit(item.radius) : 0,
+      placeLimit: custom ? customNegativePlaceLimit(item.radius) : 0,
+      totalCheckLimit: custom ? customExplosionTotalCheckLimit(item.radius) : 0,
       chunkIndex: 0,
       blockIndex: 0,
       broken: 0,
-    });
-    setNotice(state, `Взрыв начался: чанков ${chunks.length}`);
+      checks: 0,
+      spawned: 0,
+    };
+    ensureActiveExplosions(state).push(explosion);
+    if (custom) processChunkedExplosions(state, { budgetOverride: CUSTOM_EXPLOSION_IMMEDIATE_CHECK_BUDGET });
+    const changed = custom ? (explosion.broken || explosion.spawned || 0) : 0;
+    setNotice(state, custom && changed > 0 ? `Взрыв начался: сразу ${changed}` : `Взрыв начался: чанков ${chunks.length}`);
     if (Game.audio && Game.audio.playHit) Game.audio.playHit();
   }
 
   function explodeDynamite(state, item) {
+    if (item.custom) {
+      item.radius = Math.max(1, Math.abs(normalizeCustomTntData(item.custom).power));
+      item.chunked = true;
+    }
     if (item.chunked) {
       beginChunkedExplosion(state, item);
       return;
@@ -863,6 +1388,7 @@
     const radiusSq = radius * radius;
     let broken = 0;
     const destroyedActiveKeys = new Set();
+    recordExplosionEffect(state, item);
     damageEntitiesFromExplosion(state, item);
     for (let y = Math.max(1, item.y - radius); y <= Math.min(world.h - 1, item.y + radius); y += 1) {
       for (let z = Math.max(0, item.z - radius); z <= Math.min(world.d - 1, item.z + radius); z += 1) {
@@ -873,6 +1399,11 @@
           if (dx * dx + dy * dy + dz * dz > radiusSq) continue;
           const id = getBlock3D(state, x, y, z);
           if (!canExplodeBlock(id)) continue;
+          if (item.custom && processCustomExplosionBlock(state, item, x, y, z, id)) {
+            broken += 1;
+            destroyedActiveKeys.add(coordKey(x, y, z));
+            continue;
+          }
           if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
           if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
             broken += 1;
@@ -928,6 +1459,7 @@
   }
 
   function updateDynamite3D(state, dt) {
+    updateMovingBlocks(state, dt);
     processChunkedExplosions(state);
     const list = state && state.world ? ensureActiveDynamite(state) : [];
     if (!list.length) return;
@@ -945,14 +1477,18 @@
     });
   }
 
-  function processChunkedExplosions(state) {
+  function processChunkedExplosions(state, options = {}) {
     const world = state && state.world;
     const active = world && world.activeExplosions;
     if (!active || !active.length) return;
     const next = [];
     for (const explosion of active) {
+      if (explosion.custom) ensureCustomExplosionChunks(state, explosion);
       let checks = 0;
-      while (explosion.chunkIndex < explosion.chunks.length && checks < CHUNKED_EXPLOSION_CHECK_BUDGET) {
+      const budget = Number.isFinite(options.budgetOverride)
+        ? Math.max(1, options.budgetOverride | 0)
+        : (explosion.custom ? CUSTOM_EXPLOSION_CHECK_BUDGET : CHUNKED_EXPLOSION_CHECK_BUDGET);
+      while (explosion.chunkIndex < explosion.chunks.length && checks < budget) {
         const key = explosion.chunks[explosion.chunkIndex];
         const chunk = world.chunks && world.chunks.get(key);
         if (!chunk || !chunk.blocks) {
@@ -962,7 +1498,7 @@
         }
         const bounds = chunkBounds(world, chunk);
         const maxIndex = chunk.blocks.length;
-        while (explosion.blockIndex < maxIndex && checks < CHUNKED_EXPLOSION_CHECK_BUDGET) {
+        while (explosion.blockIndex < maxIndex && checks < budget) {
           const index = explosion.blockIndex;
           explosion.blockIndex += 1;
           checks += 1;
@@ -978,6 +1514,14 @@
           const dz = z - explosion.z;
           if (dx * dx + dy * dy + dz * dz > explosion.radiusSq) continue;
           const id = getBlock3D(state, x, y, z);
+          if (explosion.custom) {
+            if (processCustomExplosionBlock(state, explosion, x, y, z, id)) explosion.broken += 1;
+            if (explosion.broken >= (explosion.blockLimit || CUSTOM_EXPLOSION_BLOCK_LIMIT) || explosion.spawned >= (explosion.placeLimit || CUSTOM_NEGATIVE_PLACE_LIMIT)) {
+              explosion.chunkIndex = explosion.chunks.length;
+              break;
+            }
+            continue;
+          }
           if (!canExplodeBlock(id)) continue;
           if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
           if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
@@ -990,14 +1534,31 @@
           explosion.blockIndex = 0;
         }
       }
+      explosion.checks = (explosion.checks || 0) + checks;
+      if (explosion.custom && explosion.checks >= (explosion.totalCheckLimit || CUSTOM_EXPLOSION_TOTAL_CHECK_LIMIT)) explosion.chunkIndex = explosion.chunks.length;
       if (explosion.chunkIndex < explosion.chunks.length) next.push(explosion);
       else setNotice(state, `Взрыв: разрушено ${explosion.broken}`);
     }
     world.activeExplosions = next;
   }
 
-  function getBreakDuration(blockId) {
+  function isExpandedBlockAssortmentWorld(state) {
+    return !!(state && state.worldMeta
+      && state.worldMeta.mode === 'creative'
+      && state.worldMeta.expandedBlockAssortment);
+  }
+
+  function isRegisteredBlockId(blockId) {
+    return !!(Number.isFinite(blockId)
+      && blockId !== BLOCK.AIR
+      && Object.values(BLOCK).includes(blockId));
+  }
+
+  function getBreakDuration(state, blockId) {
     const base = BREAK_TIME && BREAK_TIME[blockId];
+    if (isExpandedBlockAssortmentWorld(state) && isRegisteredBlockId(blockId)) {
+      return Number.isFinite(base) && base > 0 ? Math.max(0.18, base * 0.32) : 0.35;
+    }
     if (!Number.isFinite(base)) return Infinity;
     if (base > 0) return Math.max(0.18, base * 0.32);
     return 0.35;
@@ -1047,13 +1608,15 @@
   function breakBlockAt(state, x, y, z) {
     if (!inBounds3D(state.world, x, y, z)) return null;
     const id = getBlock3D(state, x, y, z);
-    if (id === BLOCK.AIR || id === BLOCK.BEDROCK || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) return null;
+    const expandedBreakable = isExpandedBlockAssortmentWorld(state) && isRegisteredBlockId(id);
+    if (id === BLOCK.AIR) return null;
+    if (!expandedBreakable && (id === BLOCK.BEDROCK || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA)) return null;
     const dropId = isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
       ? (id === BLOCK.STONE_CHEST ? ITEM.FILLED_STONE_CHEST : ITEM.FILLED_CHEST)
       : (id === BLOCK.BASALT ? BLOCK.BLACKSTONE : id);
     const dropData = isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
       ? Game.inventory3d.filledChestDataFromWorld(state, x, y, z)
-      : null;
+      : (id === BLOCK.CUSTOM_TNT ? customTntStackData(customTntDataAt(state, x, y, z)) : null);
     let collected = true;
     if (Game.inventory3d && Game.inventory3d.addMinedItem) {
       const result = Game.inventory3d.addMinedItem(state, dropId, 1, dropData);
@@ -1074,7 +1637,7 @@
 
   function finishBreakingBlock(state, hit) {
     if (!hit) return;
-    if (hit.id === BLOCK.BEDROCK) {
+    if (hit.id === BLOCK.BEDROCK && !isExpandedBlockAssortmentWorld(state)) {
       setNotice(state, 'Бедрок нельзя добыть');
       return;
     }
@@ -1110,7 +1673,7 @@
       resetMining(state);
       return;
     }
-    if (hit.id === BLOCK.BEDROCK) {
+    if (hit.id === BLOCK.BEDROCK && !isExpandedBlockAssortmentWorld(state)) {
       resetMining(state);
       setNotice(state, 'Бедрок нельзя добыть');
       return;
@@ -1125,7 +1688,7 @@
       state.ui.mineSoundTimer = 0;
     }
 
-    const duration = getBreakDuration(hit.id);
+    const duration = getBreakDuration(state, hit.id);
     if (!Number.isFinite(duration)) return;
     state.ui.mineProgress = Math.min(1, state.ui.mineProgress + dt / duration);
     if (!state.world.blockDamage) state.world.blockDamage = {};
@@ -1193,14 +1756,19 @@
   }
 
   function canReplaceForPlacement(id) {
-    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
+    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA;
   }
 
   function placeBlockAt(state, blockId, placedBlockId, stack, survival, x, y, z) {
+    placeBlockAt.lastBlockedByUnloadedChunk = false;
     if (!inBounds3D(state.world, x, y, z)) return false;
+    if (!isBlockChunkLoaded3D || !isBlockChunkLoaded3D(state.world, x, y, z)) {
+      placeBlockAt.lastBlockedByUnloadedChunk = true;
+      return false;
+    }
     const targetId = getBlock3D(state, x, y, z);
     if (!canReplaceForPlacement(targetId)) return false;
-    if (blockOverlapsPlayer(state, x, y, z)) return false;
+    if (isSolidBlock3D(placedBlockId) && blockOverlapsPlayer(state, x, y, z)) return false;
     let placed = false;
     if (blockId === BLOCK.WATER && Game.fluids3d && Game.fluids3d.addWaterSource3D) {
       placed = Game.fluids3d.addWaterSource3D(state, x, y, z);
@@ -1210,8 +1778,9 @@
       placed = setBlock3D(state, x, y, z, placedBlockId);
     }
     if (!placed) return false;
-    if (targetId === BLOCK.WATER || targetId === BLOCK.HOT_WATER || targetId === BLOCK.LAVA) activateFluidAroundChange(state, x, y, z);
+    if (targetId === BLOCK.WATER || targetId === BLOCK.HOT_WATER || targetId === BLOCK.LAVA || targetId === BLOCK.VOLCANIC_LAVA) activateFluidAroundChange(state, x, y, z);
     if ((blockId === ITEM.FILLED_CHEST || blockId === ITEM.FILLED_STONE_CHEST) && Game.inventory3d && Game.inventory3d.restoreFilledChest) Game.inventory3d.restoreFilledChest(state, x, y, z, stack && stack.data);
+    if (placedBlockId === BLOCK.CUSTOM_TNT) setBlockDataAt(state, x, y, z, customTntStackData(stack && stack.data));
     if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
     syncNearbyStrangePortals(state, x, y, z);
     if (Game.education3d && Game.education3d.onBlockPlaced) Game.education3d.onBlockPlaced(state, placedBlockId);
@@ -1240,6 +1809,10 @@
       openCalculatorForm(state, hit);
       return;
     }
+    if (hit.id === BLOCK.TNT_TABLE) {
+      openTntTableForm(state);
+      return;
+    }
     if (hit.id === BLOCK.GLOBE) {
       if (Game.openMap) Game.openMap({ allowAnyMode: true });
       else setNotice(state, 'Карта недоступна');
@@ -1258,9 +1831,9 @@
       setNotice(state, 'Граница доступна только в редакторе урока');
       return;
     }
-    if (isDynamiteBlock(hit.id) && blockId === BLOCK.TNT_REMOTE && bindTntRemoteTarget(state, hit)) return;
+    if (isAnyTntBlock(hit.id) && blockId === BLOCK.TNT_REMOTE && bindTntRemoteTarget(state, hit)) return;
     if (hit.id === BLOCK.TNT_REMOTE && activateTntRemoteTarget(state)) return;
-    if (isDynamiteBlock(hit.id) && activateDynamite(state, hit.x, hit.y, hit.z, hit.id)) return;
+    if (isAnyTntBlock(hit.id) && activateDynamite(state, hit.x, hit.y, hit.z, hit.id)) return;
     if (!Number.isFinite(blockId) || blockId === BLOCK.AIR) return;
     const { x, y, z } = hit.place;
     if (!inBounds3D(state.world, x, y, z)) return;
@@ -1282,7 +1855,18 @@
       }
       return;
     }
-    const canPlaceSelected = blockId === BLOCK.WATER
+    const expandedCreativeBlock = !!(state.worldMeta
+      && state.worldMeta.mode === 'creative'
+      && state.worldMeta.expandedBlockAssortment
+      && Object.values(BLOCK).includes(blockId)
+      && blockId !== BLOCK.AIR);
+    const explosionPackBlock = !!(state.worldMeta
+      && state.worldMeta.mode === 'creative'
+      && state.worldMeta.explosionPackEnabled
+      && (blockId === BLOCK.TNT_TABLE || blockId === BLOCK.CUSTOM_TNT));
+    const canPlaceSelected = expandedCreativeBlock
+      || explosionPackBlock
+      || blockId === BLOCK.WATER
       || blockId === BLOCK.LAVA
       || blockId === ITEM.FILLED_CHEST
       || blockId === ITEM.FILLED_STONE_CHEST
@@ -1298,16 +1882,21 @@
     const available = survival && stack && Number.isFinite(stack.count) ? Math.max(0, stack.count | 0) : Infinity;
     let placed = 0;
     let blockedByPlayer = false;
+    let blockedByUnloadedChunk = false;
+    const selectedBlockIsSolid = isSolidBlock3D(placedBlockId);
     for (const cell of cells) {
       if (placed >= available) break;
-      if (inBounds3D(state.world, cell.x, cell.y, cell.z) && blockOverlapsPlayer(state, cell.x, cell.y, cell.z)) blockedByPlayer = true;
+      if (selectedBlockIsSolid && inBounds3D(state.world, cell.x, cell.y, cell.z) && blockOverlapsPlayer(state, cell.x, cell.y, cell.z)) blockedByPlayer = true;
       if (placeBlockAt(state, blockId, placedBlockId, stack, survival, cell.x, cell.y, cell.z)) placed += 1;
+      if (placeBlockAt.lastBlockedByUnloadedChunk) blockedByUnloadedChunk = true;
     }
     if (placed > 0) {
       const placedLabel = Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel(stack) : (BLOCK_LABELS[blockId] || `ID ${blockId}`);
       setNotice(state, placed === 1 ? `Поставлено: ${placedLabel}` : `Поставлено блоков: ${placed}`);
     } else if (blockedByPlayer) {
       setNotice(state, 'Нельзя поставить блок внутри себя');
+    } else if (blockedByUnloadedChunk) {
+      setNotice(state, 'Этот чанк не прогружен, сюда ничего нельзя ставить и заливать');
     }
   }
 
@@ -1425,6 +2014,9 @@
     BOT_ROLE_LABELS,
     DYNAMITE_CONFIG,
     isDynamiteBlock,
+    isAnyTntBlock,
+    customTntLabel,
+    customTntStackData,
     updateDynamite3D,
   };
 })();

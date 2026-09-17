@@ -30,6 +30,72 @@ loadScript('src/3d/generation3d.js');
 
 const { ITEM } = Game.interaction3d;
 
+function prepareLoadedFlatVolume(state, minX, minZ, maxX, maxZ, groundY = 30) {
+  const size = Game.constants3d.CHUNK_SIZE;
+  const counts = {
+    x: Math.ceil(state.world.w / size),
+    y: Math.ceil(state.world.h / size),
+    z: Math.ceil(state.world.d / size),
+  };
+  const minCx = Math.max(0, Math.floor(minX / size));
+  const maxCx = Math.min(counts.x - 1, Math.floor(maxX / size));
+  const minCz = Math.max(0, Math.floor(minZ / size));
+  const maxCz = Math.min(counts.z - 1, Math.floor(maxZ / size));
+  state.world.allowChunkCreationWrites = 1;
+  for (let cz = minCz; cz <= maxCz; cz += 1) {
+    for (let cx = minCx; cx <= maxCx; cx += 1) {
+      for (let cy = 0; cy < counts.y; cy += 1) {
+        const x = cx * size;
+        const y = cy * size;
+        const z = cz * size;
+        Game.world3d.setBlock3D(state, x, y, z, BLOCK.STONE);
+        Game.world3d.setBlock3D(state, x, y, z, BLOCK.AIR);
+        state.world.generatedChunks.add(`${cx},${cy},${cz}`);
+      }
+    }
+  }
+  for (let z = Math.max(0, minZ); z <= Math.min(state.world.d - 1, maxZ); z += 1) {
+    for (let x = Math.max(0, minX); x <= Math.min(state.world.w - 1, maxX); x += 1) {
+      Game.world3d.setBlock3D(state, x, groundY, z, BLOCK.STONE);
+    }
+  }
+  state.world.allowChunkCreationWrites = 0;
+}
+
+function directTestCaveTarget(x, z) {
+  return { x: x + 46, y: 12, z: z + 19 };
+}
+
+function prepareBlasterHouseVolume(state, x, z, cave = null) {
+  const target = cave || directTestCaveTarget(x, z);
+  prepareLoadedFlatVolume(
+    state,
+    Math.min(x - 12, target.x - 4),
+    Math.min(z - 12, target.z - 4),
+    Math.max(x + 56, target.x + 4),
+    Math.max(z + 28, target.z + 4)
+  );
+  return target;
+}
+
+function getGeneratedBlasterHouse(state, candidate) {
+  const houses = Game.generation3d.getBlasterMinerHouses3D(state);
+  return houses.find((item) => item && item.key === candidate.key && item.generated);
+}
+
+function generateCandidateBlasterHouse(state, candidate) {
+  return Game.generation3d.createBlasterMinerHouseAt3D(state, candidate.x, candidate.z, {
+    key: candidate.key,
+    cave: candidate.cave,
+    allowNearSpawn: true,
+  });
+}
+
+function ensureCandidateBlasterHouseAroundPlayer(state, candidate) {
+  if (Math.hypot(candidate.x - state.player.x, candidate.z - state.player.z) > 40) return 0;
+  return generateCandidateBlasterHouse(state, candidate) ? 1 : 0;
+}
+
 assert(Number.isFinite(ITEM.PAPER), 'paper item should exist');
 assert(Number.isFinite(ITEM.NOTE), 'note item should exist');
 assert.strictEqual(Game.interaction3d.BLOCK_LABELS[ITEM.PAPER], 'Бумага');
@@ -67,8 +133,12 @@ const state = {
   ui: {},
 };
 state.world.worldMeta = state.worldMeta;
+const directCave = prepareBlasterHouseVolume(state, 72, 72, directTestCaveTarget(72, 72));
 
-const house = Game.generation3d.createBlasterMinerHouseAt3D(state, 72, 72, { allowNearSpawn: true });
+const house = Game.generation3d.createBlasterMinerHouseAt3D(state, 72, 72, {
+  allowNearSpawn: true,
+  cave: directCave,
+});
 assert(house, 'blaster miner house should be created for a direct test placement');
 assert.strictEqual(house.type, 'blaster_miner_house');
 
@@ -108,11 +178,11 @@ const candidate = Game.generation3d.getBlasterMinerHouses3D(markerOnlyState)[0];
 assert(candidate, 'map should have at least one blaster miner house marker for this seed');
 const markerBlockBefore = Game.world3d.getBlock3D(markerOnlyState, candidate.x, candidate.y || 1, candidate.z);
 assert.strictEqual(markerBlockBefore, BLOCK.AIR, 'a marker candidate should not pretend an ungenerated structure exists');
+candidate.cave = prepareBlasterHouseVolume(markerOnlyState, candidate.x, candidate.z, candidate.cave || directTestCaveTarget(candidate.x, candidate.z));
 markerOnlyState.player.x = candidate.x + 0.5;
 markerOnlyState.player.z = candidate.z + 0.5;
-Game.generation3d.ensureBlasterMinerHousesAroundPlayer3D(markerOnlyState);
-const generatedCandidate = Game.generation3d.getBlasterMinerHouses3D(markerOnlyState)
-  .find((item) => item && item.key === candidate.key && item.generated);
+ensureCandidateBlasterHouseAroundPlayer(markerOnlyState, candidate);
+const generatedCandidate = getGeneratedBlasterHouse(markerOnlyState, candidate);
 assert(generatedCandidate, 'nearby marker candidate should generate even if normal decoration already ran before this feature existed');
 assert.notStrictEqual(
   Game.world3d.getBlock3D(markerOnlyState, generatedCandidate.noteChest.x, generatedCandidate.noteChest.y, generatedCandidate.noteChest.z),

@@ -13,7 +13,7 @@
   const SCORCH_BIOMES = new Set(['desert', 'volcanic']);
   const NO_GRASS_BIOMES = new Set(['mountains', 'cliffs', 'mountain_forest', 'geysers', 'desert', 'volcanic']);
   const GREEN_BIOMES = new Set(['plains', 'forest', 'spruce_forest']);
-  const LAVA_BLOCKS = new Set([BLOCK.LAVA]);
+  const LAVA_BLOCKS = new Set([BLOCK.LAVA, BLOCK.VOLCANIC_LAVA]);
   const WATER_BLOCKS = new Set([BLOCK.WATER]);
   const HOT_WATER_BLOCKS = new Set([BLOCK.HOT_WATER]);
   const NEIGHBOR_DIRS = [

@@ -184,6 +184,7 @@
       lavaSources: snapshot.lavaSources || [],
       blockDamage: snapshot.blockDamage || {},
       chests: snapshot.chests || {},
+      blockData: snapshot.blockData || {},
       updatedAt: Date.now(),
     };
     try {
@@ -215,6 +216,7 @@
         lavaSources: record.lavaSources || [],
         blockDamage: record.blockDamage || {},
         chests: record.chests || {},
+        blockData: record.blockData || {},
       };
     } catch (error) {
       return null;

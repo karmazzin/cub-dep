@@ -2,7 +2,7 @@
   const Game = window.CubDep;
   const { PLAYER_RADIUS, PLAYER_HEIGHT, GRAVITY, WALK_SPEED, SPRINT_MULTIPLIER, JUMP_SPEED, MOUSE_SENSITIVITY, MAX_PITCH } = Game.constants3d;
   const { BLOCK } = Game.blocks;
-  const { getBlock3D, isSolidBlock3D } = Game.world3d;
+  const { getBlock3D, setBlock3D, isBlockChunkLoaded3D, isSolidBlock3D } = Game.world3d;
 
   const PHYSICS_STEP = 1 / 120;
   const FLIGHT_SPEED_MULTIPLIER = 1.45;
@@ -67,6 +67,9 @@
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           const blockId = getBlock3D(state, xx, yy, zz);
+          if (isBlockChunkLoaded3D && !isBlockChunkLoaded3D(world, xx, yy, zz)) {
+            continue;
+          }
           if (blockId === BLOCK.BORDER && state && state.worldMeta && state.worldMeta.customLessonEditor) continue;
           if (isSolidBlock3D(blockId)) return true;
           if (isCustomLessonBorderColumn(state, xx, zz)) return true;
@@ -168,7 +171,7 @@
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           const id = getBlock3D(state, xx, yy, zz);
-          if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) return true;
+          if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) return true;
         }
       }
     }
@@ -273,7 +276,7 @@
     const blocks = getOverlappingBlocks(state);
     player.hazardTimer = Math.max(0, (player.hazardTimer || 0) - dt);
     if (player.hazardTimer <= 0) {
-      if (blocks.has(BLOCK.LAVA)) {
+      if (blocks.has(BLOCK.LAVA) || blocks.has(BLOCK.VOLCANIC_LAVA)) {
         applyPlayerDamage3D(state, 8, 'лава', { ignoreCooldown: true, cooldown: 0.2 });
         player.hazardTimer = HAZARD_TICK;
       } else if (blocks.has(BLOCK.CACTUS)) {
@@ -283,6 +286,21 @@
     }
     if (inLiquid || player.vy >= 0) player.fallSpeed = 0;
     else player.fallSpeed = Math.max(player.fallSpeed || 0, -player.vy);
+  }
+
+  function breakBrokenStoneUnderPlayer(state) {
+    const player = state && state.player;
+    if (!player || !state.world || player.flying) return false;
+    const bx = Math.floor(player.x);
+    const by = Math.floor(player.y - 0.08);
+    const bz = Math.floor(player.z);
+    if (getBlock3D(state, bx, by, bz) !== BLOCK.BROKEN_STONE) return false;
+    if (setBlock3D(state, bx, by, bz, BLOCK.AIR)) {
+      player.onGround = false;
+      player.vy = Math.min(player.vy || 0, -1.5);
+      return true;
+    }
+    return false;
   }
 
   function overlapsColumn(player, x, z) {
@@ -323,14 +341,38 @@
     return best;
   }
 
+  function getPlayerVolcanicSteamLift(state) {
+    const generation = Game.generation3d;
+    if (!generation || !generation.getActiveVolcanicVents3D) return null;
+    const player = state.player;
+    const radius = scaledRadius(player);
+    const height = scaledHeight(player);
+    const vents = generation.getActiveVolcanicVents3D(state);
+    let best = null;
+    for (const vent of vents) {
+      const liftRadius = Math.max(1.2, (vent.radius || 2.4) + radius);
+      const dx = player.x - (vent.x + 0.5);
+      const dz = player.z - (vent.z + 0.5);
+      if (dx * dx + dz * dz > liftRadius * liftRadius) continue;
+      const baseY = vent.y + 0.6;
+      const topY = baseY + (vent.height || 15);
+      if (player.y + height < baseY || player.y > topY + 0.32) continue;
+      const lift = { ...vent, baseY, topY, volcanic: true };
+      if (!best || topY > best.topY) best = lift;
+    }
+    return best;
+  }
+
   function applyGeyserLift(state) {
     const player = state.player;
-    const lift = getPlayerGeyserLift(state);
+    const lift = getPlayerVolcanicSteamLift(state) || getPlayerGeyserLift(state);
     if (!lift) return false;
     const remaining = lift.topY - player.y;
     if (remaining > 0.08) {
       const ratio = clamp(remaining / Math.max(0.1, lift.height), 0, 1);
-      player.vy = Math.max(player.vy, 5.5 + ratio * 5.2);
+      const base = lift.volcanic ? 7.2 : 5.5;
+      const boost = lift.volcanic ? 7.4 : 5.2;
+      player.vy = Math.max(player.vy, base + ratio * boost);
       player.onGround = false;
       return true;
     }
@@ -444,6 +486,7 @@
       applyPlayerDamage3D(state, (impactSpeed - 10) * 4, 'падение', { cooldown: 0.35 });
       player.fallSpeed = 0;
     }
+    breakBrokenStoneUnderPlayer(state);
 
     if (player.y < -12) {
       const spawn = respawnPosition(state);

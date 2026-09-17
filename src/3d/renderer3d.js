@@ -1,8 +1,8 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK, BLOCK_COLORS } = Game.blocks;
-  const { EYE_HEIGHT, CHUNK_SIZE, CAMERA_FAR_CHUNKS, CHUNK_MESH_REBUILD_TIME_BUDGET_MS, getChunkRenderDistanceValue } = Game.constants3d;
-  const { getBlock3D, getFluidLevel3D, getGrassLevel3D } = Game.world3d;
+  const { EYE_HEIGHT, CHUNK_SIZE, CAMERA_FAR_CHUNKS, CHUNK_MESH_REBUILD_TIME_BUDGET_MS, CHUNK_MESH_REBUILD_MAX_TIME_BUDGET_MS, getChunkRenderDistanceValue } = Game.constants3d;
+  const { getBlock3D, getFluidLevel3D, getGrassLevel3D, isSolidBlock3D } = Game.world3d;
   const { drawUI3D } = Game.ui3d;
 
   let renderer = null;
@@ -10,14 +10,29 @@
   let camera = null;
   let chunkMeshes = new Map();
   let solidMaterial = null;
+  let shaderSolidMaterial = null;
   let waterMaterial = null;
+  let shaderWaterMaterial = null;
   let lavaMaterial = null;
+  let shaderLavaMaterial = null;
+  let shaderSolidUniforms = null;
   let waterTexture = null;
   let lavaTexture = null;
   let light = null;
+  let hemiLight = null;
+  let sunMesh = null;
+  let sunGlowMesh = null;
+  let skyDome = null;
+  let firstPersonGroup = null;
+  let firstPersonItem = null;
+  let heldItemTexture = null;
+  let playerModel = null;
+  let playerModelSkin = '';
+  let shaderProfileEnabled = false;
   let skyGroup = null;
   let cloudMaterial = null;
   let cloudPuffGeometry = null;
+  let shaderCloudPuffGeometry = null;
   let cloudCells = [];
   let cloudCellMap = new Map();
   let cloudDriftX = 0;
@@ -30,6 +45,7 @@
   let dynamiteOverlayGroup = null;
   let dynamiteOverlayGeometry = null;
   let dynamiteOverlayMaterials = null;
+  let shaderDynamiteOverlayMaterial = null;
   let dynamiteOverlayMeshes = [];
   let previewFluidMesh = null;
   let previewFluidGeometry = null;
@@ -42,6 +58,8 @@
   let previewTntMesh = null;
   let sheepMeshes = new Map();
   let botMeshes = new Map();
+  let movingBlockMeshes = new Map();
+  let customTntLabelSprites = new Map();
   let sheepMaterials = null;
   let textureAtlas = null;
   let atlasMeta = null;
@@ -52,6 +70,18 @@
   let steamGeometry = null;
   let steamParticles = [];
   let lastSteamUpdate = 0;
+  let lavaEmberGroup = null;
+  let lavaEmberMaterial = null;
+  let lavaEmberGeometry = null;
+  let lavaEmbers = [];
+  let lastLavaEmberUpdate = 0;
+  let explosionMushroomGroup = null;
+  let explosionMushroomMeshes = new Map();
+  let explosionMushroomStemGeometry = null;
+  let explosionMushroomCapGeometry = null;
+  let explosionMushroomFlashGeometry = null;
+  let explosionMushroomRingGeometry = null;
+  let lastExplosionMushroomUpdate = 0;
 
   const faces = [
     { dir: [1, 0, 0], type: 'side', corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], shade: 0.86 },
@@ -65,6 +95,8 @@
   const uvCorners = [[1, 0], [1, 1], [0, 1], [0, 0]];
   const SKY_COLOR = 0x87bfe8;
   const SKY_FOG_COLOR = 0x87bfe8;
+  const ERUPTION_SKY_COLOR = 0x3b3d40;
+  const ERUPTION_FOG_COLOR = 0x2c2b2a;
   const CLOUD_HEIGHT = 88;
   const CLOUD_CELL_SIZE = 76;
   const CLOUD_GRID_RADIUS = 3;
@@ -74,8 +106,14 @@
   const CLOUD_WIND_CYCLE = 46;
   const CLOUD_FADE_START = 118;
   const CLOUD_FADE_END = 182;
-  const STEAM_PARTICLE_LIMIT = 90;
+  const STEAM_PARTICLE_LIMIT = 160;
   const STEAM_GEYSER_SCAN_RADIUS = 24;
+  const LAVA_EMBER_LIMIT = 64;
+  const LAVA_EMBER_SCAN_RADIUS = 18;
+  const EXPLOSION_MUSHROOM_LIFE = 3.8;
+  const EXPLOSION_MUSHROOM_RENDER_LIMIT = 12;
+  const SUN_POSITION = new THREE.Vector3(0.18, 0.84, -0.32).normalize();
+  const MESH_VERTICAL_PRIORITY_WEIGHT = 0.35;
   const crackSegments = [
     [0.50, 0.50, 0.38, 0.48],
     [0.38, 0.48, 0.28, 0.36],
@@ -137,15 +175,19 @@
     if (id === B.PLANK || id === B.SEQUOIA_PLANK || id === B.DOOR || id === B.LADDER) return 'plank';
     if (id === B.LEAF || id === B.SPRUCE_LEAF || id === B.SEQUOIA_LEAF || id === B.DRY_BUSH || id === B.CACTUS) return 'leaf';
     if (id === B.WATER || id === B.HOT_WATER || id === B.STEAM_WATER) return 'water';
-    if (id === B.LAVA || id === B.FIRE_PORTAL || id === B.AIR_DIMENSION_PORTAL || id === B.AIR_THIEF_PORTAL || id === B.AIR_HOME_PORTAL || id === B.ELEMENTAL_RETURN_PORTAL || id === B.END_GATE || id === B.WATER_DIMENSION_PORTAL) return 'glow';
+    if (id === B.LAVA || id === B.VOLCANIC_LAVA || id === B.FIRE_PORTAL || id === B.AIR_DIMENSION_PORTAL || id === B.AIR_THIEF_PORTAL || id === B.AIR_HOME_PORTAL || id === B.ELEMENTAL_RETURN_PORTAL || id === B.END_GATE || id === B.WATER_DIMENSION_PORTAL) return 'glow';
     if (id === B.COAL_ORE || id === B.GOLD_ORE || id === B.IRON_ORE || id === B.DIAMOND_ORE || id === B.DEEP_ORE || id === B.FRIENDSHIP_ORE || id === B.STEAM_ORE || id === B.INVISIBLE_ORE) return 'ore';
     if (id === B.GOLDEN_FLOWER || id === B.EMBER_FLOWER || id === B.EMBER_SHRUB || id === B.GLOW_ALGAE || id === B.TALL_GLOW_ALGAE || id === B.ALGAE || id === B.TALL_ALGAE || id === B.SMALL_GLOW_MUSHROOM) return 'plant';
     if (id === B.WHITE_MUSHROOM_STEM || id === B.WHITE_MUSHROOM_CAP || id === B.FLY_AGARIC_STEM || id === B.FLY_AGARIC_CAP || id === B.GLOW_MUSHROOM_STEM || id === B.GLOW_MUSHROOM_CAP || id === B.SMALL_WHITE_MUSHROOM || id === B.SMALL_FLY_AGARIC) return 'mushroom';
     if (id === B.PINK_CORAL || id === B.BLUE_CORAL || id === B.GOLD_CORAL || id === B.CORAL_STONE) return 'coral';
     if (id === B.WATER_CRYSTAL || id === B.AIR_CRYSTAL || id === B.ECHO_CORE || id === B.ROOT_CORE || id === B.FRIENDSHIP_AMULET) return 'crystal';
     if (id === B.COBWEB) return 'web';
-    if (id === B.BEDROCK || id === B.STONE || id === B.BLACKSTONE || id === B.DEEPSTONE || id === B.BASALT || id === B.ROOT_STONE || id === B.ASH_STONE || id === B.WATER_FRAME || id === B.WATER_WELL_FRAME || id === B.MAIN_WELL_FRAME || id === B.AIR_ENTRANCE_FRAME || id === B.GOLDEN_GARDEN_SHELL || id === B.FIRE_SEAL || id === B.ROOT_PLATFORM || id === B.ECHO_SHARD_PEDESTAL || id === B.ROOT_NODE) return 'stone';
+    if (id === B.BEDROCK || id === B.STONE || id === B.BROKEN_STONE || id === B.BLACKSTONE || id === B.DEEPSTONE || id === B.BASALT || id === B.ROOT_STONE || id === B.ASH_STONE || id === B.WATER_FRAME || id === B.WATER_WELL_FRAME || id === B.MAIN_WELL_FRAME || id === B.AIR_ENTRANCE_FRAME || id === B.GOLDEN_GARDEN_SHELL || id === B.FIRE_SEAL || id === B.ROOT_PLATFORM || id === B.ECHO_SHARD_PEDESTAL || id === B.ROOT_NODE) return 'stone';
     return 'generic';
+  }
+
+  function isLeafBlock(id) {
+    return id === BLOCK.LEAF || id === BLOCK.SPRUCE_LEAF || id === BLOCK.SEQUOIA_LEAF;
   }
 
   function dirtPalette(id) {
@@ -339,7 +381,7 @@
     const base = hexToRgb(BLOCK_COLORS[id] || '#b43a2f');
     ctx.fillStyle = rgbToCss(base);
     ctx.fillRect(x, y, size, size);
-    const stickCount = id === BLOCK.DYNAMITE_POWER_100 ? 7 : (id === BLOCK.DYNAMITE_POWER_75 ? 6 : (id === BLOCK.DYNAMITE_MEGA_HUGE ? 5 : (id === BLOCK.DYNAMITE_HUGE ? 4 : 3)));
+    const stickCount = id === BLOCK.CUSTOM_TNT ? 5 : (id === BLOCK.DYNAMITE_POWER_100 ? 7 : (id === BLOCK.DYNAMITE_POWER_75 ? 6 : (id === BLOCK.DYNAMITE_MEGA_HUGE ? 5 : (id === BLOCK.DYNAMITE_HUGE ? 4 : 3))));
     const stickW = Math.max(4, Math.floor(size / (stickCount + 2)));
     const startX = x + Math.floor((size - stickW * stickCount) / 2);
     for (let i = 0; i < stickCount; i += 1) {
@@ -363,6 +405,20 @@
       ctx.fillStyle = `rgba(0,0,0,${0.05 + rng() * 0.08})`;
       ctx.fillRect(x + Math.floor(rng() * size), y + Math.floor(rng() * size), 1, 1);
     }
+  }
+
+  function drawTntTableTile(ctx, rng, x, y, size) {
+    const base = hexToRgb(BLOCK_COLORS[BLOCK.TNT_TABLE] || '#5a4638');
+    fillPixelNoise(ctx, rng, base, x, y, size, 28, 2);
+    ctx.fillStyle = '#2c241f';
+    ctx.fillRect(x + Math.floor(size * 0.12), y + Math.floor(size * 0.16), Math.floor(size * 0.76), Math.floor(size * 0.20));
+    ctx.fillStyle = '#c43b31';
+    ctx.fillRect(x + Math.floor(size * 0.22), y + Math.floor(size * 0.46), Math.floor(size * 0.56), Math.floor(size * 0.32));
+    ctx.fillStyle = '#f1d06a';
+    ctx.fillRect(x + Math.floor(size * 0.48), y + Math.floor(size * 0.34), Math.max(2, Math.floor(size * 0.08)), Math.floor(size * 0.16));
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
   }
 
   function drawTntRemoteTile(ctx, rng, x, y, size) {
@@ -453,9 +509,11 @@
 
     if (id === BLOCK.STRANGE_PORTAL_STONE || id === BLOCK.STRANGE_PORTAL_CORE || id === BLOCK.STRANGE_PORTAL_RUNE || id === BLOCK.ACTIVE_STRANGE_PORTAL) {
       drawStrangePortalTile(ctx, rng, id, x, y, size);
+    } else if (id === BLOCK.TNT_TABLE) {
+      drawTntTableTile(ctx, rng, x, y, size);
     } else if (id === BLOCK.TNT_REMOTE) {
       drawTntRemoteTile(ctx, rng, x, y, size);
-    } else if (id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE || id === BLOCK.DYNAMITE_POWER_75 || id === BLOCK.DYNAMITE_POWER_100) {
+    } else if (id === BLOCK.CUSTOM_TNT || id === BLOCK.DYNAMITE_SMALL || id === BLOCK.DYNAMITE_MEDIUM || id === BLOCK.DYNAMITE_LARGE || id === BLOCK.DYNAMITE_HUGE || id === BLOCK.DYNAMITE_MEGA_HUGE || id === BLOCK.DYNAMITE_POWER_75 || id === BLOCK.DYNAMITE_POWER_100) {
       drawDynamiteTile(ctx, rng, id, x, y, size);
     } else if (id === BLOCK.GRASS) {
       if (faceType === 'top') drawGrassTop(ctx, rng, x, y, size, variant);
@@ -684,6 +742,53 @@
     return lavaTexture;
   }
 
+  function createSkyTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    const vertical = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    vertical.addColorStop(0, '#1e73c8');
+    vertical.addColorStop(0.28, '#4ea3df');
+    vertical.addColorStop(0.58, '#93cfee');
+    vertical.addColorStop(0.82, '#dceff6');
+    vertical.addColorStop(1, '#f5e2bc');
+    ctx.fillStyle = vertical;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const sunX = canvas.width * 0.62;
+    const sunY = canvas.height * 0.27;
+    let glow = ctx.createRadialGradient(sunX, sunY, 2, sunX, sunY, canvas.width * 0.42);
+    glow.addColorStop(0, 'rgba(255,255,245,0.92)');
+    glow.addColorStop(0.1, 'rgba(255,239,188,0.5)');
+    glow.addColorStop(0.35, 'rgba(255,210,126,0.18)');
+    glow.addColorStop(1, 'rgba(255,210,126,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    glow = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 1.05, 8, canvas.width * 0.5, canvas.height * 1.05, canvas.width * 0.62);
+    glow.addColorStop(0, 'rgba(255,244,210,0.38)');
+    glow.addColorStop(0.5, 'rgba(255,244,210,0.18)');
+    glow.addColorStop(1, 'rgba(255,244,210,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.globalAlpha = 0.06;
+    for (let y = 0; y < canvas.height; y += 2) {
+      const t = y / canvas.height;
+      ctx.fillStyle = t < 0.55 ? '#ffffff' : '#f8e8c8';
+      ctx.fillRect(0, y, canvas.width, 1);
+    }
+    ctx.globalAlpha = 1;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   function createFluidTexture(r, g, b) {
     const size = 2;
     const canvas = document.createElement('canvas');
@@ -755,12 +860,22 @@
     if (x < 0 || x >= world.w || y < 0 || y >= world.h || z < 0 || z >= world.d) return true;
     const id = getBlock3D(state, x, y, z);
     if (mode === 'water') return id !== BLOCK.WATER && id !== BLOCK.HOT_WATER;
-    if (mode === 'lava') return id !== BLOCK.LAVA;
-    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
+    if (mode === 'lava') return id !== BLOCK.LAVA && id !== BLOCK.VOLCANIC_LAVA;
+    return id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA;
   }
 
   function isFluidMode(mode) {
     return mode === 'water' || mode === 'lava';
+  }
+
+  function waterOpenToSky(state, x, y, z) {
+    if (!state || !state.world) return 1;
+    for (let yy = y + 1; yy < state.world.h; yy += 1) {
+      const id = getBlock3D(state, x, yy, z);
+      if (id === BLOCK.AIR || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.STEAM_WATER) continue;
+      if (isSolidBlock3D(id)) return 0;
+    }
+    return 1;
   }
 
   function isSameRenderedFluid(a, b) {
@@ -775,7 +890,7 @@
   }
 
   function pushBlockPosition(positions, id, state, x, y, z, corner) {
-    const height = (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) && corner[1] === 1 ? getFluidSurfaceHeight(state, id, x, y, z) : corner[1];
+    const height = (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) && corner[1] === 1 ? getFluidSurfaceHeight(state, id, x, y, z) : corner[1];
     positions.push(x + corner[0], y + height, z + corner[2]);
   }
 
@@ -927,6 +1042,8 @@
     const normals = [];
     const colors = [];
     const uvs = [];
+    const leafWind = [];
+    const waterSun = [];
     const indices = [];
     const world = state.world;
     const range = bounds || { minX: 0, minY: 0, minZ: 0, maxX: world.w, maxY: world.h, maxZ: world.d };
@@ -936,9 +1053,9 @@
           const id = getBlock3D(state, x, y, z);
           if (id === BLOCK.AIR) continue;
           const fluidMode = isFluidMode(mode);
-          if (mode === 'solid' && (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA)) continue;
+          if (mode === 'solid' && (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA)) continue;
           if (mode === 'water' && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER) continue;
-          if (mode === 'lava' && id !== BLOCK.LAVA) continue;
+          if (mode === 'lava' && id !== BLOCK.LAVA && id !== BLOCK.VOLCANIC_LAVA) continue;
           for (const face of faces) {
             const nx = x + face.dir[0];
             const ny = y + face.dir[1];
@@ -948,11 +1065,15 @@
             if (!fluidMode && !isNeighborOpen(state, nx, ny, nz, mode)) continue;
             const base = positions.length / 3;
             const color = faceShade(face.shade);
+            const leaf = !fluidMode && isLeafBlock(id) ? 1 : 0;
+            const sun = mode === 'water' ? waterOpenToSky(state, x, y, z) : 1;
             for (const corner of face.corners) {
               if (fluidMode) pushFluidBlockPosition(positions, x, y, z, corner, fluidRange);
               else pushBlockPosition(positions, id, state, x, y, z, corner);
               normals.push(face.dir[0], face.dir[1], face.dir[2]);
               colors.push(color.r, color.g, color.b);
+              leafWind.push(leaf);
+              waterSun.push(sun);
             }
             if (fluidMode) pushWaterUv(uvs, face, x, y, z);
             else pushTileUv(uvs, getRenderedBlockId(state, id, x, y, z), face, x, y, z);
@@ -967,6 +1088,8 @@
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute('leafWind', new THREE.Float32BufferAttribute(leafWind, 1));
+    geometry.setAttribute('waterSun', new THREE.Float32BufferAttribute(waterSun, 1));
     geometry.setIndex(indices);
     if (positions.length > 0) geometry.computeBoundingSphere();
     return geometry;
@@ -990,10 +1113,33 @@
       const cameraFar = Math.max(terrainFar, CLOUD_FADE_END + 24);
       scene.fog = new THREE.Fog(SKY_FOG_COLOR, Math.max(24, terrainFar * 0.34), Math.max(48, terrainFar * 0.74));
       camera = new THREE.PerspectiveCamera(72, 1, 0.05, cameraFar);
+      scene.add(camera);
       light = new THREE.DirectionalLight(0xffffff, 1.3);
       light.position.set(0.35, 1, 0.45);
       scene.add(light);
-      scene.add(new THREE.HemisphereLight(0xbfe4ff, 0x3e3428, 1.35));
+      hemiLight = new THREE.HemisphereLight(0xbfe4ff, 0x3e3428, 1.35);
+      scene.add(hemiLight);
+      skyDome = new THREE.Mesh(
+        new THREE.SphereGeometry(180, 32, 16),
+        new THREE.MeshBasicMaterial({ map: createSkyTexture(), side: THREE.BackSide, fog: false, depthWrite: false })
+      );
+      skyDome.visible = false;
+      scene.add(skyDome);
+      sunMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(11, 32, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfff0a6, fog: false })
+      );
+      sunMesh.visible = false;
+      scene.add(sunMesh);
+      sunGlowMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(18, 32, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffd67a, transparent: true, opacity: 0.22, fog: false, depthWrite: false })
+      );
+      sunGlowMesh.visible = false;
+      scene.add(sunGlowMesh);
+      firstPersonGroup = new THREE.Group();
+      firstPersonGroup.visible = false;
+      camera.add(firstPersonGroup);
       createSkyLayer();
       targetBox = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(1.02, 1.02, 1.02)),
@@ -1013,6 +1159,13 @@
         new THREE.MeshBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.34, depthWrite: false }),
         new THREE.MeshBasicMaterial({ color: 0xff3b28, transparent: true, opacity: 0.46, depthWrite: false }),
       ];
+      shaderDynamiteOverlayMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffb45a,
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
       scene.add(dynamiteOverlayGroup);
       previewFluidGeometry = new THREE.BoxGeometry(1.02, 1.02, 1.02);
       previewFluidMaterial = new THREE.MeshBasicMaterial({
@@ -1042,6 +1195,7 @@
       dynamiteOverlayMeshes.push(mesh);
     }
     const now = performance.now() * 0.001;
+    const shaders = shaderMode(state);
     for (let i = 0; i < dynamiteOverlayMeshes.length; i += 1) {
       const mesh = dynamiteOverlayMeshes[i];
       const item = active[i];
@@ -1050,10 +1204,33 @@
         continue;
       }
       const urgent = item.fuse > 0 ? 1 - Math.max(0, Math.min(1, item.timer / item.fuse)) : 1;
-      const flash = Math.floor(now * (4 + urgent * 10)) % 2;
-      mesh.material = dynamiteOverlayMaterials[flash];
-      mesh.material.opacity = flash ? 0.35 + urgent * 0.28 : 0.18 + urgent * 0.18;
-      mesh.position.set(item.x + 0.5, item.y + 0.5, item.z + 0.5);
+      if (shaders && shaderDynamiteOverlayMaterial) {
+        const pulseRate = 3.5 + urgent * 12;
+        const pulse = 0.5 + 0.5 * Math.sin(now * pulseRate * Math.PI * 2);
+        const heat = 0.26 + urgent * 0.42 + pulse * (0.08 + urgent * 0.14);
+        const shake = urgent * urgent * 0.035;
+        shaderDynamiteOverlayMaterial.color.setRGB(1, 0.42 + urgent * 0.28, 0.12);
+        shaderDynamiteOverlayMaterial.opacity = Math.min(0.72, heat);
+        mesh.material = shaderDynamiteOverlayMaterial;
+        mesh.scale.setScalar(1.02 + urgent * 0.08 + pulse * (0.01 + urgent * 0.04));
+        mesh.rotation.set(
+          Math.sin(now * 19 + i) * urgent * 0.035,
+          Math.cos(now * 17 + i * 2) * urgent * 0.035,
+          Math.sin(now * 13 + i * 3) * urgent * 0.025
+        );
+        mesh.position.set(
+          item.x + 0.5 + Math.sin(now * 31 + i) * shake,
+          item.y + 0.5 + Math.sin(now * 37 + i) * shake * 0.55,
+          item.z + 0.5 + Math.cos(now * 29 + i) * shake
+        );
+      } else {
+        const flash = Math.floor(now * (4 + urgent * 10)) % 2;
+        mesh.material = dynamiteOverlayMaterials[flash];
+        mesh.material.opacity = flash ? 0.35 + urgent * 0.28 : 0.18 + urgent * 0.18;
+        mesh.scale.setScalar(1);
+        mesh.rotation.set(0, 0, 0);
+        mesh.position.set(item.x + 0.5, item.y + 0.5, item.z + 0.5);
+      }
       mesh.visible = true;
     }
   }
@@ -1104,9 +1281,294 @@
     }
   }
 
+  function skinPalette(id) {
+    if (id === 'explorer_female') {
+      return {
+        skin: 0xefb77f,
+        hair: 0x6b4428,
+        eye: 0x2aa7ad,
+        hoodie: 0x111518,
+        accent: 0x25b8c5,
+        pants: 0x4c586c,
+        shoe: 0x111518,
+        denimPatch: 0xd79a67,
+      };
+    }
+    return {
+      skin: 0xefb77f,
+      hair: 0x4a2f1d,
+      eye: 0x1459b5,
+      hoodie: 0x111518,
+      accent: 0x25b8c5,
+      pants: 0x1b2630,
+      shoe: 0x111518,
+      denimPatch: 0x16202a,
+    };
+  }
+
+  function makeMat(color, lit = true) {
+    return lit
+      ? new THREE.MeshLambertMaterial({ color })
+      : new THREE.MeshBasicMaterial({ color });
+  }
+
+  function addBox(parent, color, size, pos, lit = true) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), makeMat(color, lit));
+    mesh.position.set(pos[0], pos[1], pos[2]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+
+  function disposeObject3D(root) {
+    if (!root) return;
+    root.traverse((child) => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((mat) => {
+          if (mat.map) mat.map.dispose && mat.map.dispose();
+          mat.dispose && mat.dispose();
+        });
+      }
+    });
+  }
+
+  function disposePlayerModel() {
+    if (playerModel) {
+      scene.remove(playerModel);
+      disposeObject3D(playerModel);
+      playerModel = null;
+      playerModelSkin = '';
+    }
+  }
+
+  function buildPlayerModel(skinId) {
+    const p = skinPalette(skinId);
+    const root = new THREE.Group();
+    addBox(root, p.pants, [0.32, 0.78, 0.28], [-0.18, 0.39, 0]);
+    addBox(root, p.pants, [0.32, 0.78, 0.28], [0.18, 0.39, 0]);
+    if (skinId === 'explorer_female') {
+      addBox(root, p.denimPatch, [0.13, 0.12, 0.03], [-0.18, 0.52, 0.155]);
+      addBox(root, p.denimPatch, [0.13, 0.12, 0.03], [0.18, 0.52, 0.155]);
+    }
+    addBox(root, 0xf4f4f4, [0.34, 0.09, 0.3], [-0.18, 0.03, -0.03]);
+    addBox(root, 0xf4f4f4, [0.34, 0.09, 0.3], [0.18, 0.03, -0.03]);
+    addBox(root, p.accent, [0.22, 0.05, 0.31], [-0.18, 0.12, -0.02]);
+    addBox(root, p.accent, [0.22, 0.05, 0.31], [0.18, 0.12, -0.02]);
+    addBox(root, p.hoodie, [0.72, 0.82, 0.32], [0, 1.14, 0]);
+    addBox(root, p.accent, [0.07, 0.54, 0.035], [-0.12, 1.22, 0.18]);
+    addBox(root, p.accent, [0.07, 0.3, 0.035], [0.1, 1.05, 0.18]);
+    addBox(root, p.accent, [0.28, 0.08, 0.035], [0.1, 1.24, -0.18]);
+    addBox(root, p.hoodie, [0.24, 0.76, 0.26], [-0.52, 1.12, 0]);
+    addBox(root, p.hoodie, [0.24, 0.76, 0.26], [0.52, 1.12, 0]);
+    addBox(root, p.accent, [0.25, 0.08, 0.27], [-0.52, 0.84, 0]);
+    addBox(root, p.accent, [0.25, 0.08, 0.27], [0.52, 0.84, 0]);
+    addBox(root, p.accent, [0.2, 0.09, 0.035], [-0.52, 1.26, 0.15]);
+    addBox(root, p.accent, [0.2, 0.09, 0.035], [0.52, 1.26, 0.15]);
+    addBox(root, p.skin, [0.24, 0.14, 0.25], [-0.52, 0.72, 0]);
+    addBox(root, p.skin, [0.24, 0.14, 0.25], [0.52, 0.72, 0]);
+    addBox(root, p.skin, [0.52, 0.52, 0.52], [0, 1.82, 0]);
+    addBox(root, p.hair, [0.58, 0.2, 0.58], [0, 2.1, 0]);
+    addBox(root, p.hair, [0.14, skinId === 'explorer_female' ? 0.82 : 0.34, 0.56], [-0.28, skinId === 'explorer_female' ? 1.72 : 1.89, 0]);
+    addBox(root, p.hair, [0.14, skinId === 'explorer_female' ? 0.82 : 0.34, 0.56], [0.28, skinId === 'explorer_female' ? 1.72 : 1.89, 0]);
+    addBox(root, p.hair, [0.48, skinId === 'explorer_female' ? 0.88 : 0.42, 0.1], [0, skinId === 'explorer_female' ? 1.66 : 1.88, -0.3]);
+    addBox(root, p.hair, [0.44, 0.18, 0.08], [-0.08, 1.98, 0.3]);
+    addBox(root, p.hair, [0.18, 0.22, 0.08], [-0.22, 1.88, 0.3]);
+    addBox(root, p.hair, [0.16, 0.18, 0.08], [0.22, 1.9, 0.3]);
+    if (skinId === 'explorer_female') {
+      addBox(root, p.accent, [0.22, 0.14, 0.08], [0.2, 2.08, -0.31]);
+      addBox(root, p.accent, [0.22, 0.16, 0.04], [0.16, 1.84, -0.31]);
+    }
+    addBox(root, 0xffffff, [0.12, 0.12, 0.035], [-0.13, 1.84, 0.275], false);
+    addBox(root, 0xffffff, [0.12, 0.12, 0.035], [0.13, 1.84, 0.275], false);
+    addBox(root, p.eye, [0.055, 0.11, 0.04], [-0.11, 1.84, 0.3], false);
+    addBox(root, p.eye, [0.055, 0.11, 0.04], [0.15, 1.84, 0.3], false);
+    scene.add(root);
+    playerModelSkin = skinId;
+    return root;
+  }
+
+  function ensurePlayerModel(state) {
+    if (!shaderMode(state)) {
+      if (playerModel) playerModel.visible = false;
+      return null;
+    }
+    const skin = state.worldMeta && state.worldMeta.playerSkin ? state.worldMeta.playerSkin : 'explorer';
+    if (!playerModel || playerModelSkin !== skin) {
+      disposePlayerModel();
+      playerModel = buildPlayerModel(skin);
+    }
+    return playerModel;
+  }
+
+  function setPlayerModelShadowOnly(root, shadowOnly) {
+    if (!root) return;
+    root.traverse((child) => {
+      if (!child.material) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        material.colorWrite = !shadowOnly;
+        material.depthWrite = !shadowOnly;
+        material.needsUpdate = true;
+      }
+      child.castShadow = true;
+      child.receiveShadow = !shadowOnly;
+    });
+  }
+
+  function buildFirstPersonHands(state) {
+    if (!firstPersonGroup) return;
+    firstPersonGroup.clear();
+    firstPersonItem = null;
+    const p = skinPalette(state && state.worldMeta ? state.worldMeta.playerSkin : 'explorer');
+    const leftSleeve = addBox(firstPersonGroup, p.hoodie, [0.1, 0.1, 0.58], [-0.82, -0.78, -0.95], false);
+    leftSleeve.rotation.set(-0.5, -0.2, 0.08);
+    const rightSleeve = addBox(firstPersonGroup, p.hoodie, [0.1, 0.1, 0.58], [0.82, -0.78, -0.95], false);
+    rightSleeve.rotation.set(-0.5, 0.2, -0.08);
+    addBox(firstPersonGroup, p.accent, [0.11, 0.11, 0.06], [-0.76, -0.58, -1.2], false);
+    addBox(firstPersonGroup, p.accent, [0.11, 0.11, 0.06], [0.76, -0.58, -1.2], false);
+    addBox(firstPersonGroup, p.skin, [0.1, 0.1, 0.11], [-0.74, -0.55, -1.28], false);
+    addBox(firstPersonGroup, p.skin, [0.1, 0.1, 0.11], [0.74, -0.55, -1.28], false);
+    firstPersonGroup.traverse((child) => {
+      child.castShadow = false;
+      child.receiveShadow = false;
+    });
+  }
+
+  function selectedStack(state) {
+    return Game.inventory3d && Game.inventory3d.getSelectedHotbarStack
+      ? Game.inventory3d.getSelectedHotbarStack(state)
+      : null;
+  }
+
+  function updateFirstPersonItem(state) {
+    if (!firstPersonGroup) return;
+    const stack = selectedStack(state);
+    const itemId = stack ? stack.id : 0;
+    if (firstPersonItem && firstPersonItem.userData.itemId === itemId) return;
+    if (firstPersonItem) {
+      firstPersonGroup.remove(firstPersonItem);
+      disposeObject3D(firstPersonItem);
+      firstPersonItem = null;
+    }
+    if (heldItemTexture) {
+      if (Array.isArray(heldItemTexture)) heldItemTexture.forEach((texture) => texture.dispose && texture.dispose());
+      else heldItemTexture.dispose();
+      heldItemTexture = null;
+    }
+    if (!stack) return;
+    const item = Game.interaction3d && Game.interaction3d.ITEM;
+    const block = Game.blocks && Game.blocks.BLOCK;
+    const colors = Game.blocks && Game.blocks.BLOCK_COLORS ? Game.blocks.BLOCK_COLORS : {};
+    const group = new THREE.Group();
+    group.userData.itemId = itemId;
+    if (item && itemId === item.MAP) {
+      addBox(group, 0xd9bf82, [0.22, 0.018, 0.17], [0, 0, 0], false);
+      addBox(group, 0x5f9d63, [0.06, 0.02, 0.04], [-0.04, 0.014, -0.02], false);
+      addBox(group, 0x4d8fbd, [0.06, 0.02, 0.04], [0.045, 0.014, 0.015], false);
+    } else if (!block || itemId !== block.AIR) {
+      let blockId = itemId;
+      if (item && itemId === item.FILLED_CHEST) blockId = block.CHEST;
+      if (item && itemId === item.FILLED_STONE_CHEST) blockId = block.STONE_CHEST;
+      const materials = createHeldBlockMaterials(blockId);
+      heldItemTexture = materials.map((material) => material.map).filter(Boolean);
+      const cube = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.18), materials);
+      cube.rotation.set(0.28, 0.55, 0.08);
+      group.add(cube);
+    }
+    group.position.set(0.67, -0.53, -1.24);
+    group.rotation.set(-0.22, 0.24, 0.06);
+    firstPersonGroup.add(group);
+    firstPersonItem = group;
+  }
+
+  function createBlockFaceTexture(blockId, faceType) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    drawBlockTile(ctx, blockId, faceType, 0, 0, 0, canvas.width);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  function createHeldBlockMaterial(blockId, faceType, shade = 1) {
+    const texture = createBlockFaceTexture(blockId, faceType);
+    return new THREE.MeshBasicMaterial({ map: texture, color: new THREE.Color(shade, shade, shade) });
+  }
+
+  function createHeldBlockMaterials(blockId) {
+    return [
+      createHeldBlockMaterial(blockId, 'side', 0.86),
+      createHeldBlockMaterial(blockId, 'side', 0.72),
+      createHeldBlockMaterial(blockId, 'top', 1),
+      createHeldBlockMaterial(blockId, 'bottom', 0.56),
+      createHeldBlockMaterial(blockId, 'side', 0.9),
+      createHeldBlockMaterial(blockId, 'side', 0.8),
+    ];
+  }
+
+  function resolveThirdPersonCamera(state, target, desired) {
+    if (!state || !state.world || !isSolidBlock3D) return desired;
+    const dir = new THREE.Vector3().subVectors(desired, target);
+    const distance = dir.length();
+    if (distance <= 0.1) return desired;
+    dir.normalize();
+    const step = 0.18;
+    let lastClear = target.clone();
+    for (let d = 0.35; d <= distance; d += step) {
+      const p = target.clone().addScaledVector(dir, d);
+      const id = getBlock3D(state, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+      if (isSolidBlock3D(id)) {
+        return lastClear.addScaledVector(dir, -0.12);
+      }
+      lastClear = p;
+    }
+    return desired;
+  }
+
+  function applyThirdPersonCamera(state, player, mode, playerScale, look) {
+    const target = new THREE.Vector3(player.x, player.y + 1.35 * playerScale, player.z);
+    const eye = new THREE.Vector3(player.x, player.y + EYE_HEIGHT * playerScale, player.z);
+    const radius = mode === 'second' ? 5.2 : 4.2;
+    const sign = mode === 'second' ? -1 : 1;
+    const desired = eye.clone().addScaledVector(look, sign * radius);
+    if (mode === 'second') desired.y += 0.18;
+    else desired.y += 0.45;
+    const resolved = resolveThirdPersonCamera(state, target, desired);
+    camera.position.copy(resolved);
+    camera.lookAt(target);
+  }
+
   function ensureMaterials() {
     if (!solidMaterial) {
       solidMaterial = new THREE.MeshBasicMaterial({ map: createTextureAtlas(), vertexColors: true, side: THREE.DoubleSide });
+    }
+    if (!shaderSolidMaterial) {
+      shaderSolidMaterial = new THREE.MeshLambertMaterial({ map: createTextureAtlas(), vertexColors: true, side: THREE.DoubleSide });
+      shaderSolidUniforms = { time: { value: 0 } };
+      shaderSolidMaterial.onBeforeCompile = (shader) => {
+        shader.uniforms.leafTime = shaderSolidUniforms.time;
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nattribute float leafWind;\nuniform float leafTime;')
+          .replace('#include <begin_vertex>', `
+            #include <begin_vertex>
+            if (leafWind > 0.5) {
+              float sway = sin(leafTime * 3.0 + position.x * 0.71 + position.z * 0.53 + position.y * 0.37) * 0.075;
+              float flutter = sin(leafTime * 5.2 + position.x * 1.31 + position.z * 1.17) * 0.025;
+              transformed.x += sway;
+              transformed.z += cos(leafTime * 2.5 + position.x * 0.43 + position.z * 0.61) * 0.055;
+              transformed.y += flutter;
+            }
+          `);
+      };
     }
     if (!waterMaterial) {
       waterMaterial = new THREE.MeshBasicMaterial({
@@ -1119,6 +1581,38 @@
         depthWrite: false,
       });
     }
+    if (!shaderWaterMaterial) {
+      shaderWaterMaterial = new THREE.MeshPhongMaterial({
+        map: createWaterTexture(),
+        color: 0x4bb2e6,
+        specular: 0xfff2b2,
+        shininess: 82,
+        side: THREE.FrontSide,
+        transparent: true,
+        opacity: 0.68,
+        depthWrite: false,
+      });
+      shaderWaterMaterial.onBeforeCompile = (shader) => {
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nattribute float waterSun;\nvarying float vWaterSun;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaterSun = waterSun;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying float vWaterSun;')
+          .replace('#include <lights_fragment_end>', `
+            #include <lights_fragment_end>
+            float sunAccess = clamp(vWaterSun, 0.0, 1.0);
+            reflectedLight.directSpecular *= sunAccess;
+            reflectedLight.indirectSpecular *= mix(0.05, 1.0, sunAccess);
+            reflectedLight.directDiffuse *= mix(0.54, 1.0, sunAccess);
+            reflectedLight.indirectDiffuse *= mix(0.62, 1.0, sunAccess);
+          `)
+          .replace('#include <output_fragment>', `
+            float sunAccessOut = clamp(vWaterSun, 0.0, 1.0);
+            outgoingLight = mix(outgoingLight * vec3(0.34, 0.48, 0.58), outgoingLight, sunAccessOut);
+            #include <output_fragment>
+          `);
+      };
+    }
     if (!lavaMaterial) {
       lavaMaterial = new THREE.MeshBasicMaterial({
         map: createLavaTexture(),
@@ -1130,12 +1624,116 @@
         depthWrite: false,
       });
     }
+    if (!shaderLavaMaterial) {
+      shaderLavaMaterial = new THREE.MeshBasicMaterial({
+        map: createLavaTexture(),
+        color: 0x6e2416,
+        side: THREE.FrontSide,
+        transparent: true,
+        opacity: 0.94,
+        depthWrite: false,
+      });
+    }
+  }
+
+  function shaderMode(state) {
+    return !!(state && state.worldMeta && state.worldMeta.shadersEnabled);
+  }
+
+  function mixHexColor(a, b, t) {
+    const ar = (a >> 16) & 255;
+    const ag = (a >> 8) & 255;
+    const ab = a & 255;
+    const br = (b >> 16) & 255;
+    const bg = (b >> 8) & 255;
+    const bb = b & 255;
+    const k = Math.max(0, Math.min(1, t));
+    return ((ar + (br - ar) * k) << 16) | ((ag + (bg - ag) * k) << 8) | (ab + (bb - ab) * k);
+  }
+
+  function applyVolcanicAtmosphere(state) {
+    if (!renderer || !scene || !scene.fog) return;
+    const enabled = shaderMode(state);
+    const baseSky = enabled ? 0x9bd4f0 : SKY_COLOR;
+    const baseFog = enabled ? 0x9bd4f0 : SKY_FOG_COLOR;
+    const player = state && state.player ? state.player : { x: 0, z: 0 };
+    const influence = Game.generation3d && Game.generation3d.getVolcanicSkyInfluence3D
+      ? Game.generation3d.getVolcanicSkyInfluence3D(state, player.x || 0, player.z || 0)
+      : 0;
+    const sky = mixHexColor(baseSky, ERUPTION_SKY_COLOR, influence);
+    const fog = mixHexColor(baseFog, ERUPTION_FOG_COLOR, influence);
+    renderer.setClearColor(sky, 1);
+    scene.background = new THREE.Color(sky);
+    scene.fog.color.setHex(fog);
+    if (skyDome && skyDome.material && skyDome.material.color) skyDome.material.color.setHex(mixHexColor(0xffffff, ERUPTION_SKY_COLOR, influence));
+  }
+
+  function materialForMode(state, mode) {
+    const shaders = shaderMode(state);
+    if (mode === 'water') return shaders ? shaderWaterMaterial : waterMaterial;
+    if (mode === 'lava') return shaders ? shaderLavaMaterial : lavaMaterial;
+    return shaders ? shaderSolidMaterial : solidMaterial;
+  }
+
+  function applyShaderProfile(state) {
+    if (!renderer || !scene || !light || !hemiLight) return;
+    const enabled = shaderMode(state);
+    if (shaderProfileEnabled === enabled) return;
+    shaderProfileEnabled = enabled;
+    renderer.shadowMap.enabled = enabled;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setClearColor(enabled ? 0x9bd4f0 : SKY_COLOR, 1);
+    scene.background = new THREE.Color(enabled ? 0x9bd4f0 : SKY_COLOR);
+    if (skyDome) skyDome.visible = enabled;
+    const terrainFar = CAMERA_FAR_CHUNKS * CHUNK_SIZE;
+    scene.fog = enabled
+      ? new THREE.Fog(0x9bd4f0, Math.max(30, terrainFar * 0.42), Math.max(58, terrainFar * 0.82))
+      : new THREE.Fog(SKY_FOG_COLOR, Math.max(24, terrainFar * 0.34), Math.max(48, terrainFar * 0.74));
+    light.color.setHex(enabled ? 0xfff0c4 : 0xffffff);
+    light.intensity = enabled ? 1.85 : 1.3;
+    hemiLight.color.setHex(enabled ? 0xcdefff : 0xbfe4ff);
+    hemiLight.groundColor.setHex(enabled ? 0x5c4a36 : 0x3e3428);
+    hemiLight.intensity = enabled ? 0.78 : 1.35;
+    light.castShadow = enabled;
+    if (enabled) {
+      light.shadow.mapSize.width = 1024;
+      light.shadow.mapSize.height = 1024;
+      light.shadow.camera.near = 1;
+      light.shadow.camera.far = 96;
+      light.shadow.camera.left = -34;
+      light.shadow.camera.right = 34;
+      light.shadow.camera.top = 34;
+      light.shadow.camera.bottom = -34;
+      light.shadow.bias = -0.0007;
+    }
+    applyCloudShaderGeometry(enabled);
+    for (const cell of cloudCells) cell.key = '';
+    cloudCellMap.clear();
+  }
+
+  function applyCloudShaderGeometry(enabled) {
+    if (!cloudCells.length || !cloudPuffGeometry) return;
+    if (!shaderCloudPuffGeometry) shaderCloudPuffGeometry = new THREE.BoxGeometry(1, 1, 1, 2, 1, 2);
+    const geometry = enabled ? shaderCloudPuffGeometry : cloudPuffGeometry;
+    for (const cell of cloudCells) {
+      for (const cloud of cell.clouds) {
+        cloud.material.color.setHex(enabled ? 0xf6fbff : 0xffffff);
+        cloud.material.opacity = enabled ? 0.82 : 0.72;
+        for (const puff of cloud.puffs) puff.geometry = geometry;
+      }
+    }
   }
 
   function updateFluidTextureAnimation() {
     const time = performance.now() * 0.001;
+    if (shaderSolidUniforms) shaderSolidUniforms.time.value = time;
     if (waterTexture) waterTexture.offset.set((time * 0.045) % 1, (time * 0.025) % 1);
     if (lavaTexture) lavaTexture.offset.set((time * 0.035) % 1, (time * 0.055) % 1);
+    if (shaderWaterMaterial) shaderWaterMaterial.shininess = 72 + Math.sin(time * 1.8) * 18;
+    if (shaderLavaMaterial) {
+      const pulse = 0.5 + 0.5 * Math.sin(time * 2.1);
+      shaderLavaMaterial.color.setRGB(0.34 + pulse * 0.12, 0.1 + pulse * 0.04, 0.055);
+    }
   }
 
   function createSkyLayer() {
@@ -1267,10 +1865,11 @@
         const z = (layer - 1) * width * 0.34 + (rng() - 0.5) * 6;
         const y = (rng() - 0.5) * 1.2 + Math.max(0, centerBias) * 0.7;
         puff.position.set(x, y, z);
+        const shaderCloud = shaderProfileEnabled;
         puff.scale.set(
-          11 + rng() * 12 + Math.max(0, centerBias) * 8,
-          1.8 + rng() * 1.8 + Math.max(0, centerBias) * 0.9,
-          6 + rng() * 8 + Math.max(0, centerBias) * 4
+          (shaderCloud ? 14 : 11) + rng() * (shaderCloud ? 16 : 12) + Math.max(0, centerBias) * (shaderCloud ? 11 : 8),
+          (shaderCloud ? 1.05 : 1.8) + rng() * (shaderCloud ? 1.1 : 1.8) + Math.max(0, centerBias) * (shaderCloud ? 0.55 : 0.9),
+          (shaderCloud ? 8 : 6) + rng() * (shaderCloud ? 10 : 8) + Math.max(0, centerBias) * (shaderCloud ? 6 : 4)
         );
       }
     }
@@ -1307,7 +1906,10 @@
     if (!skyGroup || !player) return;
     const time = performance.now() * 0.001;
     updateCloudWind(time);
-    const profile = cloudProfileForTime(time);
+    const baseProfile = cloudProfileForTime(time);
+    const profile = shaderProfileEnabled
+      ? { ...baseProfile, opacity: Math.min(0.9, baseProfile.opacity + 0.08), density: Math.min(1, baseProfile.density + 0.08) }
+      : baseProfile;
     cloudMaterial.opacity = profile.opacity;
     const centerX = Math.floor((player.x + cloudDriftX) / CLOUD_CELL_SIZE);
     const centerZ = Math.floor((player.z + cloudDriftZ) / CLOUD_CELL_SIZE);
@@ -1392,6 +1994,15 @@
       geysers.push(geyser);
       if (geysers.length >= 24) return geysers;
     }
+    const generation = Game.generation3d;
+    const vents = generation && generation.getActiveVolcanicVents3D ? generation.getActiveVolcanicVents3D(state) : [];
+    for (const vent of vents) {
+      if (Math.abs(vent.x - px) > STEAM_GEYSER_SCAN_RADIUS + 16) continue;
+      if (Math.abs(vent.z - pz) > STEAM_GEYSER_SCAN_RADIUS + 16) continue;
+      if (Math.abs(vent.y - py) > 28) continue;
+      geysers.push(vent);
+      if (geysers.length >= 32) return geysers;
+    }
     return geysers;
   }
 
@@ -1399,20 +2010,20 @@
     const particle = steamParticles.find((item) => !item.active);
     if (!particle) return;
     const angle = Math.random() * Math.PI * 2;
-    const radius = Math.random() * 0.28;
+    const radius = Math.random() * (geyser.volcanic ? Math.max(0.45, (geyser.radius || 2.4) * 0.45) : 0.28);
     particle.active = true;
     particle.baseY = geyser.y + 0.9;
-    particle.maxHeight = Math.max(1, Math.min(7, geyser.height || 1));
+    particle.maxHeight = geyser.volcanic ? Math.max(8, Math.min(16, geyser.height || 15)) : Math.max(1, Math.min(7, geyser.height || 1));
     particle.x = geyser.x + 0.5 + Math.cos(angle) * radius;
     particle.y = particle.baseY;
     particle.z = geyser.z + 0.5 + Math.sin(angle) * radius;
-    particle.vx = (Math.random() - 0.5) * 0.12;
-    particle.vy = 0.65 + particle.maxHeight * 0.16 + Math.random() * 0.35;
-    particle.vz = (Math.random() - 0.5) * 0.12;
+    particle.vx = (Math.random() - 0.5) * (geyser.volcanic ? 0.22 : 0.12);
+    particle.vy = (geyser.volcanic ? 1.05 : 0.65) + particle.maxHeight * (geyser.volcanic ? 0.2 : 0.16) + Math.random() * 0.35;
+    particle.vz = (Math.random() - 0.5) * (geyser.volcanic ? 0.22 : 0.12);
     particle.life = Math.max(1, particle.maxHeight / Math.max(0.1, particle.vy)) + Math.random() * 0.25;
     particle.age = 0;
     particle.mesh.visible = true;
-    particle.mesh.scale.setScalar(0.7 + Math.random() * 0.8);
+    particle.mesh.scale.setScalar((geyser.volcanic ? 1.05 : 0.7) + Math.random() * (geyser.volcanic ? 1.05 : 0.8));
   }
 
   function updateSteamParticles(state) {
@@ -1423,10 +2034,14 @@
     lastSteamUpdate = now;
     const geysers = collectVisibleGeysers(state);
     if (geysers.length > 0 && !state.pause.open) {
-      const spawnCount = Math.min(geysers.length * 2, 8);
+      const volcanic = geysers.filter((geyser) => geyser.volcanic);
+      const spawnCount = Math.min(geysers.length * 2 + volcanic.length * 8, 16);
       for (let i = 0; i < spawnCount; i += 1) {
-        if (Math.random() > 0.72) continue;
-        spawnSteamParticle(geysers[Math.floor(Math.random() * geysers.length)]);
+        const source = volcanic.length && Math.random() < 0.7
+          ? volcanic[Math.floor(Math.random() * volcanic.length)]
+          : geysers[Math.floor(Math.random() * geysers.length)];
+        if (!source.volcanic && Math.random() > 0.72) continue;
+        spawnSteamParticle(source);
       }
     }
     for (const particle of steamParticles) {
@@ -1444,6 +2059,311 @@
       const fade = 1 - Math.max(0, height) / Math.max(0.1, particle.maxHeight);
       particle.mesh.position.set(particle.x, particle.y, particle.z);
       particle.mesh.scale.setScalar(Math.max(0.25, fade) * 1.25);
+    }
+  }
+
+  function ensureLavaEmbers() {
+    if (lavaEmberGroup || !window.THREE || !scene) return;
+    lavaEmberGroup = new THREE.Group();
+    lavaEmberMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff8a24,
+      transparent: true,
+      opacity: 0.86,
+      depthWrite: false,
+    });
+    lavaEmberGeometry = new THREE.BoxGeometry(0.055, 0.055, 0.055);
+    lavaEmbers = [];
+    for (let i = 0; i < LAVA_EMBER_LIMIT; i += 1) {
+      const mesh = new THREE.Mesh(lavaEmberGeometry, lavaEmberMaterial);
+      mesh.visible = false;
+      lavaEmberGroup.add(mesh);
+      lavaEmbers.push({ mesh, active: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, age: 0, life: 0 });
+    }
+    scene.add(lavaEmberGroup);
+  }
+
+  function collectNearbyLava(state) {
+    const cells = [];
+    if (!state || !state.player || !state.world) return cells;
+    const px = Math.floor(state.player.x);
+    const py = Math.floor(state.player.y);
+    const pz = Math.floor(state.player.z);
+    const radius = LAVA_EMBER_SCAN_RADIUS;
+    const minY = Math.max(0, py - 8);
+    const maxY = Math.min(state.world.h - 1, py + 8);
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let z = pz - radius; z <= pz + radius; z += 1) {
+        for (let x = px - radius; x <= px + radius; x += 1) {
+          if (Math.abs(x - px) + Math.abs(z - pz) > radius) continue;
+          if (getBlock3D(state, x, y, z) !== BLOCK.LAVA && getBlock3D(state, x, y, z) !== BLOCK.VOLCANIC_LAVA) continue;
+          if (getBlock3D(state, x, y + 1, z) !== BLOCK.AIR) continue;
+          cells.push({ x, y, z });
+          if (cells.length >= 36) return cells;
+        }
+      }
+    }
+    return cells;
+  }
+
+  function spawnLavaEmber(cell) {
+    const ember = lavaEmbers.find((item) => !item.active);
+    if (!ember) return;
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * 0.34;
+    ember.active = true;
+    ember.x = cell.x + 0.5 + Math.cos(angle) * radius;
+    ember.y = cell.y + 0.92;
+    ember.z = cell.z + 0.5 + Math.sin(angle) * radius;
+    ember.vx = (Math.random() - 0.5) * 0.24;
+    ember.vy = 0.55 + Math.random() * 0.75;
+    ember.vz = (Math.random() - 0.5) * 0.24;
+    ember.age = 0;
+    ember.life = 0.45 + Math.random() * 0.55;
+    ember.mesh.visible = true;
+    ember.mesh.scale.setScalar(0.7 + Math.random() * 0.9);
+  }
+
+  function updateLavaEmbers(state) {
+    ensureLavaEmbers();
+    if (!lavaEmberGroup) return;
+    const enabled = shaderMode(state);
+    lavaEmberGroup.visible = enabled;
+    const now = performance.now() * 0.001;
+    const dt = Math.min(0.05, lastLavaEmberUpdate ? now - lastLavaEmberUpdate : 0);
+    lastLavaEmberUpdate = now;
+    if (enabled && !state.pause.open && Math.random() > 0.62) {
+      const cells = collectNearbyLava(state);
+      if (cells.length) spawnLavaEmber(cells[Math.floor(Math.random() * cells.length)]);
+    }
+    for (const ember of lavaEmbers) {
+      if (!ember.active) continue;
+      ember.age += dt;
+      if (ember.age >= ember.life || !enabled) {
+        ember.active = false;
+        ember.mesh.visible = false;
+        continue;
+      }
+      ember.vy -= 0.6 * dt;
+      ember.x += ember.vx * dt;
+      ember.y += ember.vy * dt;
+      ember.z += ember.vz * dt;
+      const fade = 1 - ember.age / Math.max(0.1, ember.life);
+      ember.mesh.position.set(ember.x, ember.y, ember.z);
+      ember.mesh.scale.setScalar(Math.max(0.2, fade) * 0.9);
+    }
+  }
+
+  function ensureExplosionMushrooms() {
+    if (explosionMushroomGroup || !window.THREE || !scene) return;
+    explosionMushroomGroup = new THREE.Group();
+    explosionMushroomStemGeometry = new THREE.CylinderGeometry(0.34, 0.18, 1, 10, 1);
+    explosionMushroomCapGeometry = new THREE.SphereGeometry(1, 16, 10);
+    explosionMushroomFlashGeometry = new THREE.SphereGeometry(1, 16, 8);
+    explosionMushroomRingGeometry = new THREE.TorusGeometry(1, 0.055, 8, 24);
+    scene.add(explosionMushroomGroup);
+  }
+
+  function createExplosionMushroomMesh() {
+    const root = new THREE.Group();
+    const flash = new THREE.Mesh(
+      explosionMushroomFlashGeometry,
+      new THREE.MeshBasicMaterial({ color: 0xfff0a0, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    const stem = new THREE.Mesh(
+      explosionMushroomStemGeometry,
+      new THREE.MeshBasicMaterial({ color: 0x8b8172, transparent: true, opacity: 0.58, depthWrite: false })
+    );
+    const cap = new THREE.Mesh(
+      explosionMushroomCapGeometry,
+      new THREE.MeshBasicMaterial({ color: 0x6f695f, transparent: true, opacity: 0.62, depthWrite: false })
+    );
+    const glow = new THREE.Mesh(
+      explosionMushroomCapGeometry,
+      new THREE.MeshBasicMaterial({ color: 0xff7b2c, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    const ring = new THREE.Mesh(
+      explosionMushroomRingGeometry,
+      new THREE.MeshBasicMaterial({ color: 0xb7aca0, transparent: true, opacity: 0.35, depthWrite: false })
+    );
+    root.add(flash);
+    root.add(stem);
+    root.add(cap);
+    root.add(glow);
+    root.add(ring);
+    root.userData = { flash, stem, cap, glow, ring };
+    root.visible = false;
+    explosionMushroomGroup.add(root);
+    return root;
+  }
+
+  function explosionMushroomSize(radius) {
+    const value = Math.max(1, Number(radius) || 1);
+    const log = Math.log10(value + 1);
+    return Math.max(1.6, Math.min(140, 1.4 + log * log * 3.5));
+  }
+
+  function updateExplosionMushrooms(state) {
+    ensureExplosionMushrooms();
+    if (!explosionMushroomGroup) return;
+    const enabled = shaderMode(state);
+    explosionMushroomGroup.visible = enabled;
+    const effects = state && state.world && Array.isArray(state.world.explosionEffects) ? state.world.explosionEffects : [];
+    const now = performance.now() * 0.001;
+    const dt = Math.min(0.05, lastExplosionMushroomUpdate ? now - lastExplosionMushroomUpdate : 0);
+    lastExplosionMushroomUpdate = now;
+    for (const effect of effects) effect.age = (effect.age || 0) + dt;
+    const live = effects.filter((effect) => effect.age < EXPLOSION_MUSHROOM_LIFE);
+    if (state && state.world) state.world.explosionEffects = live.slice(-EXPLOSION_MUSHROOM_RENDER_LIMIT);
+    const visible = enabled ? state.world.explosionEffects : [];
+    const liveIds = new Set();
+    for (let i = 0; i < visible.length; i += 1) {
+      const effect = visible[i];
+      const id = effect.id || `${effect.x},${effect.y},${effect.z},${Math.round((effect.radius || 1) * 100)},${i}`;
+      effect.id = id;
+      liveIds.add(id);
+      let mesh = explosionMushroomMeshes.get(id);
+      if (!mesh) {
+        mesh = createExplosionMushroomMesh();
+        explosionMushroomMeshes.set(id, mesh);
+      }
+      const age = Math.max(0, effect.age || 0);
+      const t = Math.min(1, age / EXPLOSION_MUSHROOM_LIFE);
+      const grow = 1 - Math.pow(1 - Math.min(1, t * 1.35), 2);
+      const fade = Math.max(0, 1 - t);
+      const size = explosionMushroomSize(effect.radius);
+      const stemH = size * (1.25 + grow * 1.15);
+      const capY = stemH * (0.72 + grow * 0.18);
+      mesh.position.set(effect.x, effect.y, effect.z);
+      mesh.userData.flash.position.set(0, size * 0.16, 0);
+      mesh.userData.flash.scale.setScalar(size * (0.35 + grow * 0.42));
+      mesh.userData.flash.material.opacity = Math.max(0, 0.72 * (1 - Math.min(1, t * 3.2)));
+      mesh.userData.stem.position.set(0, stemH * 0.42, 0);
+      mesh.userData.stem.scale.set(size * (0.16 + grow * 0.08), stemH, size * (0.16 + grow * 0.08));
+      mesh.userData.stem.material.opacity = 0.42 * fade;
+      mesh.userData.cap.position.set(0, capY, 0);
+      mesh.userData.cap.scale.set(size * (0.55 + grow * 0.7), size * (0.22 + grow * 0.24), size * (0.55 + grow * 0.7));
+      mesh.userData.cap.material.opacity = 0.58 * fade;
+      mesh.userData.glow.position.copy(mesh.userData.cap.position);
+      mesh.userData.glow.scale.copy(mesh.userData.cap.scale).multiplyScalar(1.08);
+      mesh.userData.glow.material.opacity = 0.28 * fade;
+      mesh.userData.ring.position.set(0, size * 0.18, 0);
+      mesh.userData.ring.rotation.x = Math.PI * 0.5;
+      mesh.userData.ring.scale.setScalar(size * (0.45 + grow * 1.2));
+      mesh.userData.ring.material.opacity = 0.32 * fade;
+      mesh.visible = true;
+    }
+    for (const [id, mesh] of explosionMushroomMeshes) {
+      if (liveIds.has(id)) continue;
+      mesh.visible = false;
+      if (explosionMushroomMeshes.size > EXPLOSION_MUSHROOM_RENDER_LIMIT) {
+        explosionMushroomGroup.remove(mesh);
+        disposeObject3D(mesh);
+        explosionMushroomMeshes.delete(id);
+      }
+    }
+  }
+
+  function parseBlockDataKey(key) {
+    const parts = String(key).split(',').map(Number);
+    return parts.length === 3 && parts.every((part) => Number.isFinite(part))
+      ? { x: parts[0], y: parts[1], z: parts[2] }
+      : null;
+  }
+
+  function customTntLabelLines(data) {
+    const source = data && typeof data === 'object' ? data : {};
+    const power = Number.isFinite(Number(source.power)) ? Math.trunc(Number(source.power)) : 1;
+    const flags = [];
+    if (source.chainReaction === true) flags.push('цепь');
+    if (source.knockback === true) flags.push('толчок');
+    if (source.mobileTnt === true) flags.push('подвижное');
+    if (source.movingBlocks === true) flags.push('блоки');
+    return [`Сила: ${power}`, flags.length ? flags.join(' ') : 'без свойств'];
+  }
+
+  function createCustomTntLabelSprite(lines) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(20, 16, 14, 0.78)';
+    ctx.fillRect(6, 10, 244, 76);
+    ctx.strokeStyle = 'rgba(255, 224, 136, 0.82)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(8, 12, 240, 72);
+    ctx.fillStyle = '#fff1b8';
+    ctx.font = '700 24px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(lines[0] || 'Сила: 1', 128, 36, 226);
+    ctx.fillStyle = '#ffd26a';
+    ctx.font = '700 18px Arial, sans-serif';
+    ctx.fillText(lines[1] || 'без свойств', 128, 63, 226);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(2.4, 0.9, 1);
+    sprite.userData.texture = texture;
+    sprite.userData.labelKey = lines.join('|');
+    return sprite;
+  }
+
+  function disposeSprite(sprite) {
+    if (!sprite) return;
+    if (sprite.material && sprite.material.map && sprite.material.map.dispose) sprite.material.map.dispose();
+    if (sprite.material && sprite.material.dispose) sprite.material.dispose();
+  }
+
+  function updateCustomTntLabels(state) {
+    if (!scene) return;
+    const blockData = state && state.world && state.world.blockData ? state.world.blockData : {};
+    const player = state && state.player ? state.player : null;
+    const maxDistSq = 34 * 34;
+    const entries = [];
+    if (player) {
+      for (const [key, data] of Object.entries(blockData)) {
+        if (!data || data.type !== 'customTnt') continue;
+        const pos = parseBlockDataKey(key);
+        if (!pos || getBlock3D(state, pos.x, pos.y, pos.z) !== BLOCK.CUSTOM_TNT) continue;
+        const dx = pos.x + 0.5 - player.x;
+        const dy = pos.y + 0.5 - player.y;
+        const dz = pos.z + 0.5 - player.z;
+        const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq > maxDistSq) continue;
+        entries.push({ key, pos, data, distSq });
+      }
+    }
+    entries.sort((a, b) => a.distSq - b.distSq);
+    const visible = entries.slice(0, 48);
+    const live = new Set();
+    for (const item of visible) {
+      live.add(item.key);
+      const lines = customTntLabelLines(item.data);
+      const labelKey = lines.join('|');
+      let sprite = customTntLabelSprites.get(item.key);
+      if (sprite && sprite.userData.labelKey !== labelKey) {
+        scene.remove(sprite);
+        disposeSprite(sprite);
+        customTntLabelSprites.delete(item.key);
+        sprite = null;
+      }
+      if (!sprite) {
+        sprite = createCustomTntLabelSprite(lines);
+        customTntLabelSprites.set(item.key, sprite);
+        scene.add(sprite);
+      }
+      sprite.position.set(item.pos.x + 0.5, item.pos.y + 1.18, item.pos.z + 0.5);
+      sprite.visible = true;
+    }
+    for (const [key, sprite] of customTntLabelSprites) {
+      if (live.has(key)) continue;
+      scene.remove(sprite);
+      disposeSprite(sprite);
+      customTntLabelSprites.delete(key);
     }
   }
 
@@ -1856,6 +2776,16 @@
       mesh.rotation.y = -(item.yaw || 0);
       mesh.rotation.x = 0;
       mesh.rotation.z = 0;
+      const threat = Game.generation3d && Game.generation3d.getActiveVolcanicEruption3D
+        ? Game.generation3d.getActiveVolcanicEruption3D(state, item.x, item.z)
+        : null;
+      if (threat && type !== 'fish') {
+        const t = performance.now() * 0.001;
+        const shake = Math.max(0, Math.min(1, threat.intensity || 0));
+        mesh.position.x += Math.sin(t * 42 + item.x) * 0.025 * shake;
+        mesh.position.z += Math.cos(t * 39 + item.z) * 0.025 * shake;
+        mesh.rotation.z += Math.sin(t * 46 + item.z) * 0.035 * shake;
+      }
       if (type === 'bear' && item.sleeping) {
         mesh.rotation.y = -(item.yaw || 0);
         mesh.rotation.x = Math.PI * 0.5;
@@ -1960,6 +2890,37 @@
     if (debugInfo) debugInfo.bots = bots.length;
   }
 
+  function syncMovingBlockMeshes(state) {
+    if (!scene) return;
+    const items = state.world && Array.isArray(state.world.movingBlocks) ? state.world.movingBlocks : [];
+    const live = new Set();
+    for (const item of items) {
+      if (!item || !item.id) continue;
+      live.add(item.id);
+      let mesh = movingBlockMeshes.get(item.id);
+      if (!mesh || (mesh.userData && mesh.userData.blockId !== item.blockId)) {
+        if (mesh) {
+          scene.remove(mesh);
+          disposeObject3D(mesh);
+        }
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), createHeldBlockMaterials(item.blockId));
+        mesh.userData.blockId = item.blockId;
+        movingBlockMeshes.set(item.id, mesh);
+        scene.add(mesh);
+      }
+      mesh.position.set(item.x, item.y, item.z);
+      mesh.rotation.x += 0.045;
+      mesh.rotation.y += 0.065;
+      mesh.visible = true;
+    }
+    for (const [id, mesh] of movingBlockMeshes) {
+      if (live.has(id)) continue;
+      scene.remove(mesh);
+      disposeObject3D(mesh);
+      movingBlockMeshes.delete(id);
+    }
+  }
+
   function disposeChunkMeshes() {
     for (const entry of chunkMeshes.values()) {
       if (entry.solid) {
@@ -2003,11 +2964,16 @@
     } else if (previous) {
       previous.geometry.dispose();
       previous.geometry = geometry;
+      previous.material = materialForMode(state, mode);
+      previous.castShadow = shaderMode(state) && mode === 'solid';
+      previous.receiveShadow = shaderMode(state) && mode === 'solid';
       previous.frustumCulled = true;
     } else {
-      const material = mode === 'water' ? waterMaterial : (mode === 'lava' ? lavaMaterial : solidMaterial);
+      const material = materialForMode(state, mode);
       const nextMesh = new THREE.Mesh(geometry, material);
       nextMesh.frustumCulled = true;
+      nextMesh.castShadow = shaderMode(state) && mode === 'solid';
+      nextMesh.receiveShadow = shaderMode(state) && mode === 'solid';
       entry[mode] = nextMesh;
       scene.add(nextMesh);
     }
@@ -2065,7 +3031,7 @@
       const id = chunk.blocks[i];
       if (id === BLOCK.AIR) continue;
       if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) flags.water = true;
-      else if (id === BLOCK.LAVA) flags.lava = true;
+      else if (id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) flags.lava = true;
       else flags.solid = true;
       if (flags.solid && flags.water && flags.lava) break;
     }
@@ -2095,10 +3061,11 @@
     const bdx = b.cx - pcx;
     const bdz = b.cz - pcz;
     const distanceDelta = (adx * adx + adz * adz) - (bdx * bdx + bdz * bdz);
-    if (distanceDelta) return distanceDelta;
     const verticalDelta = Math.abs(a.cy - pcy) - Math.abs(b.cy - pcy);
-    if (verticalDelta) return verticalDelta;
-    return meshModePriority(a.mode) - meshModePriority(b.mode);
+    const modeDelta = meshModePriority(a.mode) - meshModePriority(b.mode);
+    const aScore = Math.abs(a.cy - pcy) + (adx * adx + adz * adz) * MESH_VERTICAL_PRIORITY_WEIGHT;
+    const bScore = Math.abs(b.cy - pcy) + (bdx * bdx + bdz * bdz) * MESH_VERTICAL_PRIORITY_WEIGHT;
+    return (aScore - bScore) || modeDelta || verticalDelta || distanceDelta;
   }
 
   function enqueueDirtyChunkMeshes(state) {
@@ -2126,7 +3093,14 @@
     const perf = state.perf || (state.perf = {});
     const totals = debugInfo || { vertices: 0, triangles: 0, chunks: 0, chunkMeshes: 0, textureTiles: atlasMeta ? atlasMeta.totalTiles : 0 };
     const start = performance.now();
-    const budget = Math.max(0.5, CHUNK_MESH_REBUILD_TIME_BUDGET_MS || 3);
+    const baseBudget = Math.max(0.5, CHUNK_MESH_REBUILD_TIME_BUDGET_MS || 3);
+    const maxBudget = Math.max(baseBudget, CHUNK_MESH_REBUILD_MAX_TIME_BUDGET_MS || baseBudget);
+    const fps = state && state.ui ? state.ui.fps : 0;
+    const backlogBoost = meshRebuildQueue.length > 80 ? 2 : (meshRebuildQueue.length > 30 ? 1 : 0);
+    const fpsBudget = Number.isFinite(fps) && fps >= 70
+      ? baseBudget + 2 + backlogBoost
+      : (Number.isFinite(fps) && fps >= 55 ? baseBudget + backlogBoost : baseBudget);
+    const budget = Math.min(maxBudget, fpsBudget);
     meshRebuildQueue.sort((a, b) => compareMeshTasksForPlayer(state, a, b));
     do {
       const task = meshRebuildQueue.shift();
@@ -2155,6 +3129,18 @@
   function setWorld(state) {
     disposeSheepMeshes();
     disposeBotMeshes();
+    applyShaderProfile(state);
+    disposePlayerModel();
+    if (firstPersonGroup) {
+      disposeObject3D(firstPersonGroup);
+      firstPersonGroup.clear();
+    }
+    firstPersonItem = null;
+    if (heldItemTexture) {
+      if (Array.isArray(heldItemTexture)) heldItemTexture.forEach((texture) => texture.dispose && texture.dispose());
+      else heldItemTexture.dispose();
+      heldItemTexture = null;
+    }
     rebuildAllChunks(state);
   }
 
@@ -2177,16 +3163,75 @@
 
   function render(state, overlayCtx, overlayCanvas) {
     if (!renderer || !scene || !camera) return;
+    applyShaderProfile(state);
+    applyVolcanicAtmosphere(state);
     if (state.world.dirtyAll) rebuildAllChunks(state);
     else if (state.world.dirtyChunks.size > 0 || meshRebuildQueue.length > 0) updateDirtyChunks(state);
     const player = state.player;
     const playerScale = Number.isFinite(player.scale) ? Math.max(0.25, Math.min(1024, player.scale)) : 1;
-    camera.position.set(player.x, player.y + EYE_HEIGHT * playerScale, player.z);
     const cosPitch = Math.cos(player.pitch);
     const lookX = Math.sin(player.yaw) * cosPitch;
     const lookY = Math.sin(player.pitch);
     const lookZ = Math.cos(player.yaw) * cosPitch;
-    camera.lookAt(camera.position.x + lookX, camera.position.y + lookY, camera.position.z + lookZ);
+    const look = new THREE.Vector3(lookX, lookY, lookZ).normalize();
+    const shaders = shaderMode(state);
+    const mode = shaders ? (state.ui.cameraMode || 'first') : 'first';
+    const eyeY = player.y + EYE_HEIGHT * playerScale;
+    if (mode === 'second') {
+      applyThirdPersonCamera(state, player, mode, playerScale, look);
+    } else if (mode === 'third') {
+      applyThirdPersonCamera(state, player, mode, playerScale, look);
+    } else {
+      camera.position.set(player.x, eyeY, player.z);
+      camera.lookAt(camera.position.x + lookX, camera.position.y + lookY, camera.position.z + lookZ);
+    }
+    const volcanicShake = state.volcanoes && Number.isFinite(state.volcanoes.shake) ? state.volcanoes.shake : 0;
+    if (volcanicShake > 0) {
+      const t = performance.now() * 0.001;
+      camera.rotation.z += Math.sin(t * 38) * 0.012 * volcanicShake + Math.sin(t * 71) * 0.006 * volcanicShake;
+      camera.position.y += Math.sin(t * 44) * 0.035 * volcanicShake;
+    }
+    if (light && shaders) {
+      light.position.set(player.x + SUN_POSITION.x * 42, player.y + 52, player.z + SUN_POSITION.z * 42);
+      light.target.position.set(player.x, player.y, player.z);
+      scene.add(light.target);
+    }
+    if (sunMesh) {
+      sunMesh.visible = shaders;
+      if (shaders) sunMesh.position.set(player.x + SUN_POSITION.x * 155, player.y + 120, player.z + SUN_POSITION.z * 155);
+    }
+    if (sunGlowMesh) {
+      sunGlowMesh.visible = shaders;
+      if (shaders) sunGlowMesh.position.copy(sunMesh.position);
+    }
+    if (skyDome) {
+      skyDome.visible = shaders;
+      if (shaders) skyDome.position.set(player.x, player.y, player.z);
+    }
+    const model = ensurePlayerModel(state);
+    if (model) {
+      model.visible = shaders;
+      setPlayerModelShadowOnly(model, mode === 'first');
+      model.position.set(player.x, player.y, player.z);
+      model.rotation.y = player.yaw;
+      const walkPulse = Math.sin(performance.now() * 0.008) * Math.min(0.08, Math.hypot(player.vx || 0, player.vz || 0) * 0.018);
+      model.children.forEach((child, index) => {
+        if (index < 2 || (index >= 7 && index <= 8)) child.rotation.x = (index % 2 ? -walkPulse : walkPulse);
+      });
+    }
+    if (firstPersonGroup) {
+      if (firstPersonGroup.children.length > 0) {
+        disposeObject3D(firstPersonGroup);
+        firstPersonGroup.clear();
+        firstPersonItem = null;
+        if (heldItemTexture) {
+          if (Array.isArray(heldItemTexture)) heldItemTexture.forEach((texture) => texture.dispose && texture.dispose());
+          else heldItemTexture.dispose();
+          heldItemTexture = null;
+        }
+      }
+      firstPersonGroup.visible = false;
+    }
     if (targetBox) {
       const target = state.ui && state.ui.targetBlock;
       targetBox.visible = !!target;
@@ -2200,10 +3245,14 @@
     updateFluidTextureAnimation();
     updateSkyLayer(player);
     updateSteamParticles(state);
+    updateLavaEmbers(state);
+    updateExplosionMushrooms(state);
     updateDynamiteOverlays(state);
     updatePreviewOverlay(state);
     syncSheepMeshes(state);
     syncBotMeshes(state);
+    syncMovingBlockMeshes(state);
+    updateCustomTntLabels(state);
     if (debugInfo) {
       debugInfo.camera = [camera.position.x, camera.position.y, camera.position.z];
       debugInfo.rotation = [camera.rotation.x, camera.rotation.y, camera.rotation.z];

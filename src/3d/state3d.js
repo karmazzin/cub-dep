@@ -3,6 +3,11 @@
   const { WORLD_W, WORLD_H, WORLD_D } = Game.constants3d;
   const { BLOCK } = Game.blocks;
   const { createWorld3D } = Game.world3d;
+  const DEFAULT_PLAYER_SKIN = 'explorer';
+
+  function normalizePlayerSkin(value) {
+    return value === 'explorer_female' ? 'explorer_female' : DEFAULT_PLAYER_SKIN;
+  }
 
   function cloneSlot(slot) {
     if (!slot) return null;
@@ -23,7 +28,11 @@
         id: worldMeta && worldMeta.id ? worldMeta.id : null,
         name: worldMeta && worldMeta.name ? worldMeta.name : 'Новый 3D мир',
         seed: worldMeta && worldMeta.seed ? worldMeta.seed : '',
-        mode: worldMeta && worldMeta.mode ? worldMeta.mode : 'survival',
+        mode: worldMeta && (worldMeta.expandedBlockAssortment || worldMeta.explosionPackEnabled) ? 'creative' : (worldMeta && worldMeta.mode ? worldMeta.mode : 'survival'),
+        shadersEnabled: !!(worldMeta && worldMeta.shadersEnabled),
+        expandedBlockAssortment: !!(worldMeta && worldMeta.expandedBlockAssortment),
+        explosionPackEnabled: !!(worldMeta && worldMeta.explosionPackEnabled),
+        playerSkin: normalizePlayerSkin(worldMeta && worldMeta.playerSkin),
         chunkRenderDistance: Game.constants3d.normalizeChunkRenderDistance(worldMeta && worldMeta.chunkRenderDistance),
         spawnBiome: worldMeta && worldMeta.spawnBiome ? worldMeta.spawnBiome : 'any',
         kind: '3d',
@@ -34,6 +43,7 @@
         currentDimension: worldMeta && worldMeta.currentDimension ? worldMeta.currentDimension : 'overworld',
         portalLinks: worldMeta && Array.isArray(worldMeta.portalLinks) ? worldMeta.portalLinks.map((link) => ({ ...link })) : [],
         dimensionPlayers: worldMeta && worldMeta.dimensionPlayers ? { ...worldMeta.dimensionPlayers } : {},
+        volcanoFirstEruptions: worldMeta && worldMeta.volcanoFirstEruptions ? { ...worldMeta.volcanoFirstEruptions } : {},
         education: worldMeta && worldMeta.education ? { ...worldMeta.education } : null,
         customLessonEditor: worldMeta && worldMeta.customLessonEditor ? { ...worldMeta.customLessonEditor } : null,
         customLessonPlay: worldMeta && worldMeta.customLessonPlay ? { ...worldMeta.customLessonPlay } : null,
@@ -102,6 +112,7 @@
         mapRevealTimer: 0,
         openItemMapStack: null,
         noteOpen: false,
+        cameraMode: 'first',
       },
       entities: {
         sheep: [],
@@ -113,5 +124,5 @@
     };
   }
 
-  Game.state3d = { createGameState3D };
+  Game.state3d = { createGameState3D, normalizePlayerSkin, DEFAULT_PLAYER_SKIN };
 })();

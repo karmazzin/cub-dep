@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { getBlock3D, setBlock3D, getGrassLevel3D, setGrassLevel3D, inBounds3D, isSolidBlock3D } = Game.world3d;
+  const { getBlock3D, setBlock3D, getGrassLevel3D, setGrassLevel3D, isBlockChunkLoaded3D, inBounds3D, isSolidBlock3D } = Game.world3d;
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 1024;
   const SCALE_SPEED = Math.log(2) * 4;
@@ -91,7 +91,73 @@
   }
 
   function isFluidBlock(id) {
-    return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA;
+    return id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA;
+  }
+
+  function eruptionThreatForMob(state, mob) {
+    if (!Game.generation3d || !Game.generation3d.getActiveVolcanicEruption3D) return null;
+    return Game.generation3d.getActiveVolcanicEruption3D(state, mob.x, mob.z);
+  }
+
+  function updateVolcanicPanicMob(state, mob, threat, dt) {
+    if (!threat || mobConfig(mob).waterMob) return false;
+    const config = mobConfig(mob);
+    const dx = mob.x - threat.x;
+    const dz = mob.z - threat.z;
+    const dist = Math.max(0.001, Math.hypot(dx, dz));
+    const targetDist = Math.max(100, (threat.radius || 0) + 100);
+    if (dist >= targetDist) return false;
+    mob.sleeping = false;
+    mob.eating = false;
+    mob.digging = false;
+    mob.panicTimer = 1.2;
+    mob.pauseTimer = 0;
+    mob.walkTimer = 0.2;
+    mob.hostileTimer = 0;
+    mob.attackCooldown = Math.max(mob.attackCooldown || 0, 0.4);
+    mob.yaw = Math.atan2(dz, dx);
+    const step = getSafeStep(state, mob, mob.yaw);
+    if (step && step.y > Math.floor(mob.y)) tryStepJump(mob);
+    const speed = step ? Math.max(config.panicSpeed || config.speed, (config.speed || 1) * 2.35) : 0;
+    mob.vx = Math.cos(mob.yaw) * speed;
+    mob.vz = Math.sin(mob.yaw) * speed;
+    if (bearCanEnterWater(mob) && mob.inWater) mob.vy = Math.max(-0.08, Math.min(0.08, mob.vy || 0));
+    else mob.vy -= config.gravity * dt;
+    mob.onGround = false;
+    if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    const movedX = moveAxis(state, mob, 'x', mob.vx * dt);
+    const movedZ = moveAxis(state, mob, 'z', mob.vz * dt);
+    if (mob.vy <= 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    if (!step || !movedX || !movedZ) {
+      mob.yaw += (Math.random() - 0.5) * 0.8;
+      tryStepJump(mob);
+    }
+    return true;
+  }
+
+  function applyVolcanicSteamLiftToMob(state, mob) {
+    if (!mob || mobConfig(mob).waterMob) return false;
+    const generation = Game.generation3d;
+    if (!generation || !generation.getActiveVolcanicVents3D) return false;
+    const config = mobConfig(mob);
+    const vents = generation.getActiveVolcanicVents3D(state);
+    for (const vent of vents) {
+      const liftRadius = Math.max(1.2, (vent.radius || 2.4) + config.radius);
+      const dx = mob.x - (vent.x + 0.5);
+      const dz = mob.z - (vent.z + 0.5);
+      if (dx * dx + dz * dz > liftRadius * liftRadius) continue;
+      const baseY = vent.y + 0.6;
+      const topY = baseY + (vent.height || 15);
+      if (mob.y + config.height < baseY || mob.y > topY + 0.32) continue;
+      const remaining = topY - mob.y;
+      const ratio = clamp(remaining / Math.max(0.1, vent.height || 15), 0, 1);
+      mob.sleeping = false;
+      mob.eating = false;
+      mob.vy = Math.max(mob.vy || 0, 6.5 + ratio * 6.2);
+      mob.onGround = false;
+      return true;
+    }
+    return false;
   }
 
   function bearCanEnterWater(mob) {
@@ -101,6 +167,10 @@
   function isBlockingMob(mob, id) {
     if (bearCanEnterWater(mob) && id === BLOCK.WATER) return false;
     return isSolidBlock3D(id) || isFluidBlock(id);
+  }
+
+  function isLoadedMobCell(world, x, y, z) {
+    return !isBlockChunkLoaded3D || isBlockChunkLoaded3D(world, x, y, z);
   }
 
   function overlapsBlocking(state, mob, x, y, z) {
@@ -119,6 +189,7 @@
       for (let zz = minZ; zz <= maxZ; zz += 1) {
         for (let xx = minX; xx <= maxX; xx += 1) {
           if (!inBounds3D(world, xx, yy, zz)) return true;
+          if (!isLoadedMobCell(world, xx, yy, zz)) return true;
           if (isBlockingMob(mob, getBlock3D(state, xx, yy, zz))) return true;
         }
       }
@@ -147,6 +218,26 @@
     return false;
   }
 
+  function updateExplosionKnockbackMob(state, mob, dt) {
+    if (!mob || !(mob.explosionKnockbackTimer > 0)) return false;
+    const config = mobConfig(mob);
+    mob.explosionKnockbackTimer = Math.max(0, mob.explosionKnockbackTimer - dt);
+    mob.eating = false;
+    mob.sleeping = false;
+    mob.pauseTimer = 0;
+    if (!config.waterMob) mob.vy -= config.gravity * dt;
+    mob.onGround = false;
+    if (mob.vy > 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    moveAxis(state, mob, 'x', mob.vx * dt);
+    moveAxis(state, mob, 'z', mob.vz * dt);
+    if (mob.vy <= 0) moveAxis(state, mob, 'y', mob.vy * dt);
+    if (mob.explosionKnockbackTimer <= 0) {
+      mob.vx *= 0.35;
+      mob.vz *= 0.35;
+    }
+    return true;
+  }
+
   function blockBelow(mob) {
     return {
       x: Math.floor(mob.x),
@@ -157,6 +248,7 @@
 
   function hasSafeSupport(state, x, groundY, z) {
     if (!inBounds3D(state.world, x, groundY, z)) return false;
+    if (!isLoadedMobCell(state.world, x, groundY, z)) return false;
     const id = getBlock3D(state, x, groundY, z);
     return isSolidBlock3D(id) && !isFluidBlock(id);
   }
@@ -395,6 +487,7 @@
   function updateFish(state, fish, dt) {
     initMob(fish);
     const config = mobConfig(fish);
+    if (updateExplosionKnockbackMob(state, fish, dt)) return;
     fish.panicTimer = Math.max(0, fish.panicTimer - dt);
     fish.walkTimer -= dt;
     const block = getBlock3D(state, Math.floor(fish.x), Math.floor(fish.y), Math.floor(fish.z));
@@ -411,7 +504,7 @@
     const nx = fish.x + Math.cos(fish.yaw) * speed * dt;
     const ny = fish.y + fish.vy * dt;
     const nz = fish.z + Math.sin(fish.yaw) * speed * dt;
-    if (getBlock3D(state, Math.floor(nx), Math.floor(ny), Math.floor(nz)) === BLOCK.WATER) {
+    if (isLoadedMobCell(state.world, Math.floor(nx), Math.floor(ny), Math.floor(nz)) && getBlock3D(state, Math.floor(nx), Math.floor(ny), Math.floor(nz)) === BLOCK.WATER) {
       fish.x = nx;
       fish.y = ny;
       fish.z = nz;
@@ -425,7 +518,10 @@
   function updateGroundMob(state, mob, dt) {
     initMob(mob);
     const config = mobConfig(mob);
+    if (updateExplosionKnockbackMob(state, mob, dt)) return;
     mob.inWater = getBlock3D(state, Math.floor(mob.x), Math.floor(mob.y), Math.floor(mob.z)) === BLOCK.WATER;
+    const eruptionThreat = eruptionThreatForMob(state, mob);
+    if (updateVolcanicPanicMob(state, mob, eruptionThreat, dt)) return;
     if (mob.sleeping) {
       mob.vx = 0;
       mob.vy = 0;
@@ -541,7 +637,10 @@
   function updateMob(state, mob, dt) {
     updateMobScale(mob, dt);
     if (mobConfig(mob).waterMob) updateFish(state, mob, dt);
-    else updateGroundMob(state, mob, dt);
+    else {
+      updateGroundMob(state, mob, dt);
+      applyVolcanicSteamLiftToMob(state, mob);
+    }
   }
 
   function damageSheep3D(state, mobId, amount = 1, sourceX = null, sourceZ = null) {
@@ -607,9 +706,11 @@
     if (Number.isFinite(options && options.yaw)) mob.yaw = options.yaw;
     initMob(mob);
     if (mobConfig(mob).waterMob) {
+      if (!isLoadedMobCell(state.world, x, y, z)) return false;
       if (getBlock3D(state, x, y, z) !== BLOCK.WATER) return false;
     } else {
       if (!inBounds3D(state.world, x, y, z)) return false;
+      if (!isLoadedMobCell(state.world, x, y, z)) return false;
       if (getBlock3D(state, x, y, z) !== BLOCK.AIR) return false;
       if (!hasSafeSupport(state, x, y - 1, z)) return false;
       if (!canOccupyAt(state, mob, mob.x, mob.y, mob.z)) return false;

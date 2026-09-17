@@ -20,6 +20,7 @@
       lavaSources: new Set(),
       blockDamage: {},
       chests: {},
+      blockData: {},
       dirtyAll: true,
       dirtyChunks: new Set(),
     };
@@ -91,6 +92,12 @@
     return chunk ? { chunk, coords, index: chunkLocalIndex3D(coords.lx, coords.ly, coords.lz) } : null;
   }
 
+  function isBlockChunkLoaded3D(world, x, y, z) {
+    if (!world || !inBounds3D(world, x, y, z)) return false;
+    const coords = chunkCoords3D(x, y, z);
+    return !!getChunk3D(world, coords.cx, coords.cy, coords.cz, false);
+  }
+
   function clearWorld3D(state) {
     const world = state && state.world;
     if (!world) return;
@@ -113,6 +120,7 @@
     else world.lavaSources = new Set();
     world.blockDamage = {};
     world.chests = {};
+    world.blockData = {};
     world.chunkLoading = null;
     world.lastQueuedChunks = 0;
     world.lastPendingChunks = 0;
@@ -202,6 +210,7 @@
     if (!world || !inBounds3D(world, x, y, z)) return false;
     let entry = getChunkForBlock3D(world, x, y, z, false);
     if (!entry && id === BLOCK.AIR) return false;
+    if (!entry && !world.allowChunkCreationWrites) return false;
     if (!entry) entry = getChunkForBlock3D(world, x, y, z, true);
     if (!entry.chunk.grassLevel) entry.chunk.grassLevel = new Uint8Array(entry.chunk.blocks.length);
     const previousId = entry.chunk.blocks[entry.index];
@@ -209,7 +218,7 @@
     entry.chunk.blocks[entry.index] = id;
     entry.chunk.grassLevel[entry.index] = 0;
     const key = `${x},${y},${z}`;
-    if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA) {
+    if (id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) {
       entry.chunk.fluidLevel[entry.index] = 0;
       if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) {
         world.waterSources.add(key);
@@ -227,6 +236,7 @@
     const previousChest = previousId === BLOCK.CHEST || previousId === BLOCK.STONE_CHEST;
     const nextChest = id === BLOCK.CHEST || id === BLOCK.STONE_CHEST;
     if (previousChest && !nextChest && world.chests) delete world.chests[key];
+    if (previousId !== id && world.blockData) delete world.blockData[key];
     markChunkDirty3D(state, x, y, z);
     markChunkDirty3D(state, x, y - 1, z);
     markChunkModified3D(state, x, y, z);
@@ -283,14 +293,16 @@
   function setFluid3D(state, x, y, z, fluidId, level = 0, source = false) {
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return false;
-    const entry = getChunkForBlock3D(world, x, y, z, true);
+    const entry = getChunkForBlock3D(world, x, y, z, !!world.allowChunkCreationWrites);
+    if (!entry) return false;
     const key = `${x},${y},${z}`;
     const requestedLevel = level | 0;
     const nextLevel = fluidId === BLOCK.WATER && requestedLevel === STATIC_WATER_LEVEL
       ? STATIC_WATER_LEVEL
       : Math.max(0, Math.min(7, requestedLevel));
-    const sources = fluidId === BLOCK.LAVA ? world.lavaSources : world.waterSources;
-    const otherSources = fluidId === BLOCK.LAVA ? world.waterSources : world.lavaSources;
+    const lavaFluid = fluidId === BLOCK.LAVA || fluidId === BLOCK.VOLCANIC_LAVA;
+    const sources = lavaFluid ? world.lavaSources : world.waterSources;
+    const otherSources = lavaFluid ? world.waterSources : world.lavaSources;
     const changed = entry.chunk.blocks[entry.index] !== fluidId || entry.chunk.fluidLevel[entry.index] !== nextLevel || (!!sources.has(key)) !== !!source;
     entry.chunk.blocks[entry.index] = fluidId;
     entry.chunk.fluidLevel[entry.index] = nextLevel;
@@ -317,13 +329,17 @@
     return setFluid3D(state, x, y, z, BLOCK.LAVA, level, source);
   }
 
+  function setVolcanicLava3D(state, x, y, z, level = 0, source = false) {
+    return setFluid3D(state, x, y, z, BLOCK.VOLCANIC_LAVA, level, source);
+  }
+
   function setHotWater3D(state, x, y, z, level = 0, source = false) {
     return setFluid3D(state, x, y, z, BLOCK.HOT_WATER, level, source);
   }
 
   function isFluidSource3D(state, x, y, z, fluidId) {
     const world = state && state.world;
-    const sources = fluidId === BLOCK.LAVA ? world && world.lavaSources : world && world.waterSources;
+    const sources = fluidId === BLOCK.LAVA || fluidId === BLOCK.VOLCANIC_LAVA ? world && world.lavaSources : world && world.waterSources;
     return !!(sources && sources.has(`${x},${y},${z}`));
   }
 
@@ -340,6 +356,7 @@
       && id !== BLOCK.WATER
       && id !== BLOCK.HOT_WATER
       && id !== BLOCK.LAVA
+      && id !== BLOCK.VOLCANIC_LAVA
       && id !== BLOCK.DRY_BUSH
       && id !== BLOCK.ALGAE
       && id !== BLOCK.TALL_ALGAE
@@ -394,6 +411,7 @@
     pruneKeySetInChunk(world.lavaSources, bounds);
     pruneObjectKeysInChunk(world.blockDamage, bounds);
     pruneObjectKeysInChunk(world.chests, bounds);
+    pruneObjectKeysInChunk(world.blockData, bounds);
     return true;
   }
 
@@ -408,6 +426,7 @@
     pruneKeySetInChunk(world.lavaSources, bounds);
     pruneObjectKeysInChunk(world.blockDamage, bounds);
     pruneObjectKeysInChunk(world.chests, bounds);
+    pruneObjectKeysInChunk(world.blockData, bounds);
     const size = Game.constants3d.CHUNK_SIZE;
     for (let ly = 0; ly < size; ly += 1) {
       const y = cy * size + ly;
@@ -422,7 +441,7 @@
           const id = chunk.blocks[index];
           const sourceKey = `${x},${y},${z}`;
           const level = chunk.fluidLevel[index];
-          if (id === BLOCK.LAVA && level === 0) world.lavaSources.add(sourceKey);
+          if ((id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) && level === 0) world.lavaSources.add(sourceKey);
         }
       }
     }
@@ -449,7 +468,32 @@
       world.modifiedChunks.add(key);
     }
     if (options.unsaved === false && world.unsavedChunks) world.unsavedChunks.delete(key);
-    return rebuildChunkDerivedState3D(state, cx, cy, cz);
+    const rebuilt = rebuildChunkDerivedState3D(state, cx, cy, cz);
+    if (rebuilt) activateFluidsAcrossChunkEdges3D(state, cx, cy, cz);
+    return rebuilt;
+  }
+
+  function activateFluidsAcrossChunkEdges3D(state, cx, cy, cz) {
+    const fluids = Game.fluids3d;
+    if (!fluids) return;
+    const world = state && state.world;
+    const bounds = chunkBounds3D(world, cx, cy, cz);
+    if (!world || !bounds) return;
+    if (fluids.activateFluidAroundLoadedChunk3D) {
+      fluids.activateFluidAroundLoadedChunk3D(state, bounds);
+      return;
+    }
+    if (!fluids.activateFluidAround3D) return;
+    for (let y = bounds.minY; y < bounds.maxY; y += 1) {
+      for (let z = bounds.minZ; z < bounds.maxZ; z += 1) {
+        fluids.activateFluidAround3D(state, bounds.minX, y, z);
+        fluids.activateFluidAround3D(state, bounds.maxX - 1, y, z);
+      }
+      for (let x = bounds.minX; x < bounds.maxX; x += 1) {
+        fluids.activateFluidAround3D(state, x, y, bounds.minZ);
+        fluids.activateFluidAround3D(state, x, y, bounds.maxZ - 1);
+      }
+    }
   }
 
   function installGeneratedChunk3D(state, cx, cy, cz, blocks, fluidLevel, grassLevel = null) {
@@ -470,11 +514,14 @@
     pruneKeySetInChunk(world.lavaSources, bounds);
     pruneObjectKeysInChunk(world.blockDamage, bounds);
     pruneObjectKeysInChunk(world.chests, bounds);
+    pruneObjectKeysInChunk(world.blockData, bounds);
     for (const key of savedState.waterSources || []) world.waterSources.add(key);
     for (const key of savedState.lavaSources || []) world.lavaSources.add(key);
     for (const [key, value] of Object.entries(savedState.blockDamage || {})) world.blockDamage[key] = value;
     if (!world.chests) world.chests = {};
     for (const [key, value] of Object.entries(savedState.chests || {})) world.chests[key] = value;
+    if (!world.blockData) world.blockData = {};
+    for (const [key, value] of Object.entries(savedState.blockData || {})) world.blockData[key] = value;
     if (world.dirtyChunks) world.dirtyChunks.add(chunkKeyFromCoords3D(cx, cy, cz));
     return true;
   }
@@ -489,6 +536,7 @@
     const lavaSources = [];
     const blockDamage = {};
     const chests = {};
+    const blockData = {};
     const isInBounds = (key) => {
       if (!bounds) return false;
       const parts = key.split(',').map(Number);
@@ -508,6 +556,9 @@
     for (const [key, value] of Object.entries(world.chests || {})) {
       if (isInBounds(key)) chests[key] = value;
     }
+    for (const [key, value] of Object.entries(world.blockData || {})) {
+      if (isInBounds(key)) blockData[key] = value;
+    }
     return {
       cx: chunk.cx,
       cy: chunk.cy,
@@ -519,6 +570,7 @@
       lavaSources,
       blockDamage,
       chests,
+      blockData,
     };
   }
 
@@ -527,6 +579,7 @@
     clearWorld3D,
     markChunkModified3D,
     getBlock3D,
+    isBlockChunkLoaded3D,
     setBlock3D,
     getGrassLevel3D,
     setGrassLevel3D,
@@ -536,6 +589,7 @@
     setWater3D,
     setStaticWater3D,
     setLava3D,
+    setVolcanicLava3D,
     setHotWater3D,
     isFluidSource3D,
     isWaterSource3D,

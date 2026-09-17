@@ -66,6 +66,7 @@
     const selected = Number.isInteger(state.player.selectedHotbarIndex)
       ? state.player.selectedHotbarIndex
       : 0;
+    const shaderMode = !!(state.worldMeta && state.worldMeta.shadersEnabled);
 
     ctx.save();
     ctx.textAlign = 'center';
@@ -76,16 +77,20 @@
       const stack = hotbar[i];
       const isSelected = i === selected;
 
-      ctx.fillStyle = stack
-        ? (isSelected ? 'rgba(255,248,216,0.28)' : 'rgba(8,12,16,0.62)')
-        : (isSelected ? 'rgba(255,248,216,0.16)' : 'rgba(8,12,16,0.34)');
-      ctx.fillRect(x, y, slot, slot);
-      ctx.strokeStyle = isSelected ? '#ffdf7a' : 'rgba(255,255,255,0.24)';
-      ctx.lineWidth = isSelected ? 3 : 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, slot - 1, slot - 1);
+      if (shaderMode) {
+        drawShaderSlot(ctx, x, y, slot, isSelected, !!stack);
+      } else {
+        ctx.fillStyle = stack
+          ? (isSelected ? 'rgba(255,248,216,0.28)' : 'rgba(8,12,16,0.62)')
+          : (isSelected ? 'rgba(255,248,216,0.16)' : 'rgba(8,12,16,0.34)');
+        ctx.fillRect(x, y, slot, slot);
+        ctx.strokeStyle = isSelected ? '#ffdf7a' : 'rgba(255,255,255,0.24)';
+        ctx.lineWidth = isSelected ? 3 : 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, slot - 1, slot - 1);
+      }
 
       if (stack) {
-        drawItemIcon(ctx, stack.id, x, y, slot);
+        drawItemIcon(ctx, stack.id, x, y, slot, state);
         ctx.fillStyle = '#ffdf7a';
         ctx.font = 'bold 11px Arial';
         ctx.textAlign = 'right';
@@ -110,6 +115,7 @@
     const selected = Number.isInteger(state.player.selectedHotbarIndex)
       ? state.player.selectedHotbarIndex
       : 0;
+    const shaderMode = !!(state.worldMeta && state.worldMeta.shadersEnabled);
 
     ctx.save();
     ctx.textAlign = 'center';
@@ -120,15 +126,19 @@
       const x = startX + local * (slot + gap);
       const stack = hotbar[i];
       const isSelected = i === selected;
-      ctx.fillStyle = stack
-        ? (isSelected ? 'rgba(255,248,216,0.3)' : 'rgba(8,12,16,0.66)')
-        : (isSelected ? 'rgba(255,248,216,0.16)' : 'rgba(8,12,16,0.36)');
-      ctx.fillRect(x, y, slot, slot);
-      ctx.strokeStyle = isSelected ? '#ffdf7a' : 'rgba(255,255,255,0.25)';
-      ctx.lineWidth = isSelected ? 3 : 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, slot - 1, slot - 1);
+      if (shaderMode) {
+        drawShaderSlot(ctx, x, y, slot, isSelected, !!stack);
+      } else {
+        ctx.fillStyle = stack
+          ? (isSelected ? 'rgba(255,248,216,0.3)' : 'rgba(8,12,16,0.66)')
+          : (isSelected ? 'rgba(255,248,216,0.16)' : 'rgba(8,12,16,0.36)');
+        ctx.fillRect(x, y, slot, slot);
+        ctx.strokeStyle = isSelected ? '#ffdf7a' : 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = isSelected ? 3 : 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, slot - 1, slot - 1);
+      }
       if (stack) {
-        drawItemIcon(ctx, stack.id, x, y, slot);
+        drawItemIcon(ctx, stack.id, x, y, slot, state);
         ctx.fillStyle = '#ffdf7a';
         ctx.font = 'bold 11px Arial';
         ctx.textAlign = 'right';
@@ -147,12 +157,31 @@
     ctx.restore();
   }
 
-  function drawItemIcon(ctx, id, x, y, slot) {
+  function drawShaderSlot(ctx, x, y, slot, selected, filled) {
+    const gradient = ctx.createLinearGradient(x, y, x + slot, y + slot);
+    gradient.addColorStop(0, filled ? 'rgba(46,64,68,0.9)' : 'rgba(24,32,34,0.74)');
+    gradient.addColorStop(1, 'rgba(4,7,8,0.82)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(x, y, slot, slot);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(x + 2, y + 2, slot - 4, Math.max(2, Math.floor(slot * 0.12)));
+    ctx.strokeStyle = selected ? '#5ee1e8' : 'rgba(150,230,232,0.3)';
+    ctx.lineWidth = selected ? 3 : 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, slot - 1, slot - 1);
+    if (selected) {
+      ctx.strokeStyle = 'rgba(255,223,122,0.78)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 4.5, y + 4.5, slot - 9, slot - 9);
+    }
+  }
+
+  function drawItemIcon(ctx, id, x, y, slot, state = null) {
     const eggTypes = Game.interaction3d && Game.interaction3d.SPAWN_EGG_TYPES;
     const botEggRoles = Game.interaction3d && Game.interaction3d.BOT_SPAWN_EGG_ROLES;
     const item = Game.interaction3d && Game.interaction3d.ITEM;
     const colors = Game.blocks && Game.blocks.BLOCK_COLORS;
     const block = Game.blocks && Game.blocks.BLOCK;
+    const shaderMode = !!(state && state.worldMeta && state.worldMeta.shadersEnabled);
     if (eggTypes && eggTypes[id]) {
       drawSpawnEggIcon(ctx, x, y, slot, eggTypes[id]);
       return;
@@ -170,7 +199,16 @@
       return;
     }
     if (item && id === item.MAP) {
-      drawMapIcon(ctx, x, y, slot);
+      if (shaderMode) drawShaderMapIcon(ctx, x, y, slot);
+      else drawMapIcon(ctx, x, y, slot);
+      return;
+    }
+    if (shaderMode && item && (id === item.FILLED_CHEST || id === item.FILLED_STONE_CHEST)) {
+      drawShaderChestIcon(ctx, x, y, slot, id === item.FILLED_STONE_CHEST);
+      return;
+    }
+    if (shaderMode && block && (id === block.CHEST || id === block.STONE_CHEST)) {
+      drawShaderChestIcon(ctx, x, y, slot, id === block.STONE_CHEST);
       return;
     }
     if (item && id === item.FILLED_CHEST && block) id = block.CHEST;
@@ -253,6 +291,69 @@
     ctx.fillRect(Math.round(px + w * 0.18), Math.round(py + h * 0.48), Math.round(w * 0.56), Math.round(h * 0.18));
     ctx.strokeStyle = 'rgba(0,0,0,0.45)';
     ctx.lineWidth = Math.max(1, Math.floor(slot * 0.04));
+    ctx.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(w) - 1, Math.round(h) - 1);
+    ctx.restore();
+  }
+
+  function drawShaderMapIcon(ctx, x, y, slot) {
+    const w = slot * 0.68;
+    const h = slot * 0.6;
+    const px = x + (slot - w) * 0.5;
+    const py = y + (slot - h) * 0.52;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.fillRect(Math.round(px + slot * 0.07), Math.round(py + slot * 0.08), Math.round(w), Math.round(h));
+    ctx.fillStyle = '#c09b62';
+    ctx.fillRect(Math.round(px - 2), Math.round(py - 2), Math.round(w + 4), Math.round(h + 4));
+    ctx.fillStyle = '#f1dfae';
+    ctx.fillRect(Math.round(px), Math.round(py), Math.round(w), Math.round(h));
+    ctx.fillStyle = 'rgba(110,82,45,0.28)';
+    ctx.fillRect(Math.round(px + w * 0.33), Math.round(py), Math.max(1, Math.floor(w * 0.04)), Math.round(h));
+    ctx.fillRect(Math.round(px + w * 0.66), Math.round(py), Math.max(1, Math.floor(w * 0.04)), Math.round(h));
+    ctx.fillRect(Math.round(px), Math.round(py + h * 0.48), Math.round(w), Math.max(1, Math.floor(h * 0.04)));
+    ctx.fillStyle = '#5f9d63';
+    ctx.fillRect(Math.round(px + w * 0.1), Math.round(py + h * 0.15), Math.round(w * 0.22), Math.round(h * 0.22));
+    ctx.fillRect(Math.round(px + w * 0.35), Math.round(py + h * 0.5), Math.round(w * 0.2), Math.round(h * 0.18));
+    ctx.fillStyle = '#4d8fbd';
+    ctx.fillRect(Math.round(px + w * 0.55), Math.round(py + h * 0.16), Math.round(w * 0.28), Math.round(h * 0.18));
+    ctx.fillRect(Math.round(px + w * 0.14), Math.round(py + h * 0.55), Math.round(w * 0.16), Math.round(h * 0.16));
+    ctx.fillStyle = '#b99b55';
+    ctx.fillRect(Math.round(px + w * 0.33), Math.round(py + h * 0.25), Math.round(w * 0.18), Math.round(h * 0.14));
+    ctx.strokeStyle = 'rgba(55,38,20,0.75)';
+    ctx.lineWidth = Math.max(1, Math.floor(slot * 0.035));
+    ctx.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(w) - 1, Math.round(h) - 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(Math.round(px + w * 0.08), Math.round(py + h * 0.08), Math.round(w * 0.42), Math.max(1, Math.floor(h * 0.07)));
+    ctx.restore();
+  }
+
+  function drawShaderChestIcon(ctx, x, y, slot, stone) {
+    const w = slot * 0.64;
+    const h = slot * 0.52;
+    const px = x + (slot - w) * 0.5;
+    const py = y + (slot - h) * 0.56;
+    const body = stone ? '#83888d' : '#805128';
+    const lid = stone ? '#555b62' : '#56351d';
+    const trim = stone ? '#32383e' : '#2c1b12';
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = 'rgba(0,0,0,0.36)';
+    ctx.fillRect(Math.round(px + slot * 0.06), Math.round(py + slot * 0.07), Math.round(w), Math.round(h));
+    ctx.fillStyle = body;
+    ctx.fillRect(Math.round(px), Math.round(py + h * 0.24), Math.round(w), Math.round(h * 0.76));
+    ctx.fillStyle = lid;
+    ctx.fillRect(Math.round(px), Math.round(py), Math.round(w), Math.round(h * 0.34));
+    ctx.fillStyle = trim;
+    ctx.fillRect(Math.round(px), Math.round(py + h * 0.32), Math.round(w), Math.max(2, Math.floor(h * 0.08)));
+    ctx.fillRect(Math.round(px + w * 0.08), Math.round(py), Math.max(2, Math.floor(w * 0.07)), Math.round(h));
+    ctx.fillRect(Math.round(px + w * 0.85), Math.round(py), Math.max(2, Math.floor(w * 0.07)), Math.round(h));
+    ctx.fillStyle = stone ? '#c7d0d4' : '#d8b04a';
+    ctx.fillRect(Math.round(px + w * 0.42), Math.round(py + h * 0.38), Math.round(w * 0.16), Math.round(h * 0.18));
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(Math.round(px + w * 0.08), Math.round(py + h * 0.08), Math.round(w * 0.56), Math.max(2, Math.floor(h * 0.08)));
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = Math.max(1, Math.floor(slot * 0.035));
     ctx.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(w) - 1, Math.round(h) - 1);
     ctx.restore();
   }
@@ -792,6 +893,19 @@
 
     drawHotbar(ctx, canvas, state);
     drawMobileControls(ctx, canvas, state);
+
+    if (state.ui.topNoticeText) {
+      ctx.font = 'bold 15px Arial';
+      const width = Math.min(canvas.width - 36, Math.max(180, ctx.measureText(state.ui.topNoticeText).width + 36));
+      const x = (canvas.width - width) / 2;
+      const y = 18;
+      ctx.fillStyle = 'rgba(8,12,16,0.68)';
+      ctx.fillRect(x, y, width, 32);
+      ctx.fillStyle = '#fff8e8';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(state.ui.topNoticeText, canvas.width / 2, y + 17);
+    }
 
     if (state.ui.noticeText) {
       const hotbar = Game.inventory3d && Game.inventory3d.ensureHotbar ? Game.inventory3d.ensureHotbar(state) : [];

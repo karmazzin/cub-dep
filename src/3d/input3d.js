@@ -16,6 +16,7 @@
       repairPressed: false,
       previewPressed: false,
       lootTablePressed: false,
+      cameraTogglePressed: false,
       jumpPressed: false,
       flyTogglePressed: false,
       boostTogglePressed: false,
@@ -67,6 +68,7 @@
       if (event.code === 'KeyR' && !input.keys.KeyR) input.repairPressed = true;
       if (event.code === 'KeyP' && !input.keys.KeyP) input.previewPressed = true;
       if (event.code === 'KeyT' && !input.keys.KeyT) input.lootTablePressed = true;
+      if (event.code === 'KeyV' && !input.keys.KeyV) input.cameraTogglePressed = true;
       if (event.code === 'KeyF' && !input.keys.KeyF) input.flyTogglePressed = true;
       if (event.code === 'Space' && !input.keys.Space) {
         const now = performance.now();
@@ -240,6 +242,7 @@
         repairPressed: input.repairPressed,
         previewPressed: input.previewPressed,
         lootTablePressed: input.lootTablePressed,
+        cameraTogglePressed: input.cameraTogglePressed,
         jumpPressed: input.jumpPressed,
         flyTogglePressed: input.flyTogglePressed,
         boostTogglePressed: input.boostTogglePressed,
@@ -249,6 +252,7 @@
       input.repairPressed = false;
       input.previewPressed = false;
       input.lootTablePressed = false;
+      input.cameraTogglePressed = false;
       input.jumpPressed = false;
       input.flyTogglePressed = false;
       input.boostTogglePressed = false;
