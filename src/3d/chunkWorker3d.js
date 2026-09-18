@@ -812,8 +812,7 @@
     return blockIds.AIR;
   }
 
-  function terrainBlockAt(seed, x, y, z, world, blockIds) {
-    if (world && world.dimension === 'underground') return undergroundTerrainBlockAt(seed, x, y, z, world, blockIds);
+  function surfaceTerrainBlockAt(seed, x, y, z, world, blockIds) {
     const h = terrainHeight(seed, x, z);
     const lake = lakeInfo(seed, x, z);
     const biome = lake.inLake ? 'lake' : (lake.shore ? 'beach' : (geyserValleyInfo(seed, x, z).inValley ? 'geysers' : baseLandBiome(seed, x, z)));
@@ -875,11 +874,33 @@
     return blockIds.AIR;
   }
 
+  function terrainBlockAt(seed, x, y, z, world, blockIds) {
+    if (world && world.dimension === 'underground') return undergroundTerrainBlockAt(seed, x, y, z, world, blockIds);
+    const meta = world && world.worldMeta;
+    let sourceX = x;
+    let sourceZ = z;
+    if (meta && meta.easterEgg === 'cavern_fall') {
+      if (meta.cavernFallAxis === 'x') sourceX = 1024;
+      else if (meta.cavernFallAxis === 'z') sourceZ = 1024;
+    }
+    const sourceWorld = sourceX === x && sourceZ === z
+      ? world
+      : { ...world, w: 2048, d: 2048 };
+    return surfaceTerrainBlockAt(seed, sourceX, y, sourceZ, sourceWorld, blockIds);
+  }
+
   function hasInitialGrass(seed, x, y, z, world, blockIds) {
-    const biome = biomeAt(seed, x, z);
-    return y === terrainHeight(seed, x, z)
+    const meta = world && world.worldMeta;
+    let sourceX = x;
+    let sourceZ = z;
+    if (world && world.dimension !== 'underground' && meta && meta.easterEgg === 'cavern_fall') {
+      if (meta.cavernFallAxis === 'x') sourceX = 1024;
+      else if (meta.cavernFallAxis === 'z') sourceZ = 1024;
+    }
+    const biome = biomeAt(seed, sourceX, sourceZ);
+    return y === terrainHeight(seed, sourceX, sourceZ)
       && (biome === 'plains' || biome === 'forest' || biome === 'spruce_forest')
-      && dryTransitionSurface(seed, x, z, biome, blockIds) === blockIds.AIR
+      && dryTransitionSurface(seed, sourceX, sourceZ, biome, blockIds) === blockIds.AIR
       && terrainBlockAt(seed, x, y + 1, z, world, blockIds) === blockIds.AIR;
   }
 

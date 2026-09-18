@@ -1030,16 +1030,15 @@
       const block = Game.blocks && Game.blocks.BLOCK;
       if (block) {
         return Array.from(new Set(Object.values(block)
-          .filter((id) => Number.isFinite(id) && id !== block.AIR)))
+          .filter((id) => Number.isFinite(id)
+            && id !== block.AIR
+            && id !== block.TNT_TABLE
+            && id !== block.CUSTOM_TNT)))
           .sort((a, b) => a - b);
       }
     }
     const items = Game.interaction3d && Game.interaction3d.CREATIVE_ITEMS;
     const list = Array.isArray(items) ? items.filter((id) => Number.isFinite(id)) : defaultHotbarItems();
-    const block = Game.blocks && Game.blocks.BLOCK;
-    if (state && state.worldMeta && state.worldMeta.explosionPackEnabled && block) {
-      return Array.from(new Set([...list, block.TNT_TABLE]));
-    }
     return list;
   }
 

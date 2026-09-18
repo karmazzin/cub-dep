@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
 
-  function createInput3D(canvas, getState) {
+  function createInput3D(canvas, getState, hudCanvas = canvas) {
     const input = {
       keys: {},
       mouseDx: 0,
@@ -11,6 +11,8 @@
       lastMouseX: 0,
       lastMouseY: 0,
       primaryDown: false,
+      secondaryDown: false,
+      secondaryReleased: false,
       breakPressed: false,
       placePressed: false,
       repairPressed: false,
@@ -32,7 +34,7 @@
     let lastShiftPressTime = -Infinity;
 
     function canvasPoint(event) {
-      const rect = canvas.getBoundingClientRect();
+      const rect = hudCanvas.getBoundingClientRect();
       return {
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
@@ -110,6 +112,10 @@
 
     window.addEventListener('mouseup', (event) => {
       if (event.button === 0) input.primaryDown = false;
+      if (event.button === 2) {
+        input.secondaryDown = false;
+        input.secondaryReleased = true;
+      }
       input.draggingLook = false;
     });
 
@@ -145,6 +151,7 @@
         if (Game.audio && Game.audio.unlock) Game.audio.unlock();
       }
       if (event.button === 2) {
+        input.secondaryDown = true;
         input.placePressed = true;
         if (Game.audio && Game.audio.unlock) Game.audio.unlock();
       }
@@ -162,7 +169,7 @@
       if (!state || state.pause.open) return;
       const point = canvasPoint(event);
       const control = Game.ui3d && Game.ui3d.getMobileHudControl
-        ? Game.ui3d.getMobileHudControl(canvas, state, point.x, point.y)
+        ? Game.ui3d.getMobileHudControl(hudCanvas, state, point.x, point.y)
         : null;
       if (Game.audio && Game.audio.unlock) Game.audio.unlock();
       if (canvas.setPointerCapture) {
@@ -246,6 +253,7 @@
         jumpPressed: input.jumpPressed,
         flyTogglePressed: input.flyTogglePressed,
         boostTogglePressed: input.boostTogglePressed,
+        secondaryReleased: input.secondaryReleased,
       };
       input.breakPressed = false;
       input.placePressed = false;
@@ -256,6 +264,7 @@
       input.jumpPressed = false;
       input.flyTogglePressed = false;
       input.boostTogglePressed = false;
+      input.secondaryReleased = false;
       return actions;
     }
 
@@ -275,6 +284,8 @@
       input.flyTogglePressed = false;
       input.boostTogglePressed = false;
       input.primaryDown = false;
+      input.secondaryDown = false;
+      input.secondaryReleased = false;
       input.mobileMoveX = 0;
       input.mobileMoveY = 0;
       input.mobileJump = false;

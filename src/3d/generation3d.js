@@ -486,20 +486,29 @@
     deep_cavern: 'Подземное измерение',
   };
 
+  function surfaceSourceCell(state, x, z) {
+    return Game.easterEggs3d
+      ? Game.easterEggs3d.getCavernFallSourceCell(state && state.worldMeta, Math.floor(x), Math.floor(z), currentDimension(state))
+      : { x: Math.floor(x), z: Math.floor(z) };
+  }
+
   function getBiomeAt3D(state, x, z) {
     if (!state || !state.worldMeta) return 'plains';
     if (state.worldMeta.currentDimension === 'underground') return 'deep_cavern';
-    return biomeAt(worldSeed(state), Math.floor(x), Math.floor(z));
+    const source = surfaceSourceCell(state, x, z);
+    return biomeAt(worldSeed(state), source.x, source.z);
   }
 
   function getVolcanoAt3D(state, x, z) {
     if (!state || !state.worldMeta || currentDimension(state) === 'underground') return null;
-    return volcanoInfo(worldSeed(state), Math.floor(x), Math.floor(z));
+    const source = surfaceSourceCell(state, x, z);
+    return volcanoInfo(worldSeed(state), source.x, source.z);
   }
 
   function isVolcanoVentCell3D(state, x, y, z) {
     if (!state || !state.worldMeta || currentDimension(state) === 'underground') return false;
-    return isVolcanoVentCell(worldSeed(state), Math.floor(x), Math.floor(y), Math.floor(z));
+    const source = surfaceSourceCell(state, x, z);
+    return isVolcanoVentCell(worldSeed(state), source.x, Math.floor(y), source.z);
   }
 
   function volcanoEruptionIntensity(state, info) {
@@ -908,22 +917,29 @@
   function getVillages3D(state) {
     const world = state && state.world;
     if (!world || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return [];
-    if (world.villagesKey === `${state.worldMeta.seed || ''}:${world.w}:${world.d}` && Array.isArray(world.villages)) {
+    const cavernAxis = state.worldMeta.easterEgg === 'cavern_fall' ? state.worldMeta.cavernFallAxis : '';
+    const planningWorld = cavernAxis ? {
+      ...world,
+      w: Game.constants3d.WORLD_W,
+      d: Game.constants3d.WORLD_D,
+    } : world;
+    const villagesKey = `${state.worldMeta.seed || ''}:${planningWorld.w}:${planningWorld.d}:${cavernAxis}`;
+    if (world.villagesKey === villagesKey && Array.isArray(world.villages)) {
       return world.villages;
     }
     const seed = worldSeed(state);
-    const halfW = world.w / 2;
-    const halfD = world.d / 2;
+    const halfW = planningWorld.w / 2;
+    const halfD = planningWorld.d / 2;
     const regions = [
       { minX: VILLAGE_MARGIN, minZ: VILLAGE_MARGIN, maxX: halfW - 48, maxZ: halfD - 48 },
-      { minX: halfW + 48, minZ: VILLAGE_MARGIN, maxX: world.w - VILLAGE_MARGIN, maxZ: halfD - 48 },
-      { minX: VILLAGE_MARGIN, minZ: halfD + 48, maxX: halfW - 48, maxZ: world.d - VILLAGE_MARGIN },
-      { minX: halfW + 48, minZ: halfD + 48, maxX: world.w - VILLAGE_MARGIN, maxZ: world.d - VILLAGE_MARGIN },
+      { minX: halfW + 48, minZ: VILLAGE_MARGIN, maxX: planningWorld.w - VILLAGE_MARGIN, maxZ: halfD - 48 },
+      { minX: VILLAGE_MARGIN, minZ: halfD + 48, maxX: halfW - 48, maxZ: planningWorld.d - VILLAGE_MARGIN },
+      { minX: halfW + 48, minZ: halfD + 48, maxX: planningWorld.w - VILLAGE_MARGIN, maxZ: planningWorld.d - VILLAGE_MARGIN },
     ];
     const villages = [];
     for (let i = 0; i < VILLAGE_COUNT; i += 1) {
-      let candidate = villageCandidateInRegion(seed, world, i, regions[i], villages);
-      if (!candidate) candidate = fallbackVillageCandidateInRegion(seed, world, i, regions[i], villages);
+      let candidate = villageCandidateInRegion(seed, planningWorld, i, regions[i], villages);
+      if (!candidate) candidate = fallbackVillageCandidateInRegion(seed, planningWorld, i, regions[i], villages);
       if (!candidate) continue;
       const professions = villageProfessionSet(seed, i);
       const style = VILLAGE_STYLES[i % VILLAGE_STYLES.length];
@@ -940,7 +956,7 @@
         residents: villageResidents(seed, i, professions),
       });
     }
-    world.villagesKey = `${state.worldMeta.seed || ''}:${world.w}:${world.d}`;
+    world.villagesKey = villagesKey;
     world.villages = villages;
     return villages;
   }
@@ -1785,11 +1801,13 @@
     if (Number.isFinite(village.buildingBaseY[rect.id])) return village.buildingBaseY[rect.id];
     let maxY = -Infinity;
     let samples = 0;
+    const sourceW = Number.isFinite(state.world.cavernFallProjectionX) ? Game.constants3d.WORLD_W : state.world.w;
+    const sourceD = Number.isFinite(state.world.cavernFallProjectionZ) ? Game.constants3d.WORLD_D : state.world.d;
     for (let dz = 0; dz < rect.d; dz += 1) {
       for (let dx = 0; dx < rect.w; dx += 1) {
         const x = village.x + rect.x + dx;
         const z = village.z + rect.z + dz;
-        if (x < 1 || z < 1 || x >= state.world.w - 1 || z >= state.world.d - 1) continue;
+        if (x < 1 || z < 1 || x >= sourceW - 1 || z >= sourceD - 1) continue;
         const y = terrainHeight(seed, x, z);
         maxY = Math.max(maxY, y);
         samples += 1;
@@ -1999,10 +2017,25 @@
     if (!world || !state.worldMeta) return [];
     const seed = worldSeed(state);
     const count = portalRuinCount(seed);
+    const cavernAxis = currentDimension(state) === 'overworld' && state.worldMeta.easterEgg === 'cavern_fall'
+      ? state.worldMeta.cavernFallAxis
+      : '';
+    const sourceWorld = cavernAxis
+      ? { ...world, w: Game.constants3d.WORLD_W, d: Game.constants3d.WORLD_D }
+      : world;
     const ruins = [];
     for (let i = 0; i < count; i += 1) {
-      const ruin = portalRuinAt(seed, world, i);
-      if (ruin) ruins.push(ruin);
+      const ruin = portalRuinAt(seed, sourceWorld, i);
+      if (!ruin) continue;
+      if (cavernAxis === 'x') {
+        if (Math.abs(ruin.x - Game.constants3d.WORLD_W / 2) > 8) continue;
+        ruins.push({ ...ruin, sourceX: ruin.x, x: 0 });
+      } else if (cavernAxis === 'z') {
+        if (Math.abs(ruin.z - Game.constants3d.WORLD_D / 2) > 8) continue;
+        ruins.push({ ...ruin, sourceZ: ruin.z, z: 0 });
+      } else {
+        ruins.push(ruin);
+      }
     }
     return ruins;
   }
@@ -2360,8 +2393,7 @@
     return BLOCK.AIR;
   }
 
-  function terrainBlockAt(seed, x, y, z, world = null) {
-    if (world && world.dimension === 'underground') return undergroundTerrainBlockAt(seed, x, y, z, world, world.worldMeta);
+  function surfaceTerrainBlockAt(seed, x, y, z, world = null) {
     const h = terrainHeight(seed, x, z);
     const lake = lakeInfo(seed, x, z);
     const biome = lake.inLake ? 'lake' : (lake.shore ? 'beach' : (geyserValleyInfo(seed, x, z).inValley ? 'geysers' : baseLandBiome(seed, x, z)));
@@ -2421,6 +2453,18 @@
     const surfaceLiquid = surfaceLiquidAt(seed, x, y, z, h, world);
     if (surfaceLiquid !== BLOCK.AIR) return surfaceLiquid;
     return BLOCK.AIR;
+  }
+
+  function terrainBlockAt(seed, x, y, z, world = null) {
+    if (world && world.dimension === 'underground') return undergroundTerrainBlockAt(seed, x, y, z, world, world.worldMeta);
+    const meta = world && world.worldMeta;
+    const source = Game.easterEggs3d
+      ? Game.easterEggs3d.getCavernFallSourceCell(meta, x, z, 'overworld')
+      : { x, z };
+    const sourceWorld = source.x === x && source.z === z
+      ? world
+      : { ...world, w: Game.constants3d.WORLD_W, d: Game.constants3d.WORLD_D };
+    return surfaceTerrainBlockAt(seed, source.x, y, source.z, sourceWorld);
   }
 
   function getSurfaceSpawnY3D(state, x, z) {
@@ -2497,11 +2541,44 @@
     return biomeScore * 0.46 + roughScore * 0.36 + tentScore * 0.18;
   }
 
+  function findCavernFallSpawn3D(state, seed, axis, targetBiome) {
+    const world = state.world;
+    const sourceWorld = { ...world, w: Game.constants3d.WORLD_W, d: Game.constants3d.WORLD_D };
+    const sourceState = { ...state, world: sourceWorld };
+    const centerX = Math.floor(sourceWorld.w / 2);
+    const centerZ = Math.floor(sourceWorld.d / 2);
+    let best = null;
+    for (let distance = 0; distance <= Math.max(centerX, centerZ) - 12; distance += 4) {
+      const offsets = distance === 0 ? [0] : [distance, -distance];
+      for (const offset of offsets) {
+        const x = axis === 'x' ? centerX : centerX + offset;
+        const z = axis === 'z' ? centerZ : centerZ + offset;
+        const score = scoreSpawnSite(sourceState, seed, sourceWorld, x, z, targetBiome);
+        if (score === null) continue;
+        const value = score - Math.min(0.28, distance / 420);
+        if (!best || value > best.value) best = { x, z, value };
+      }
+      if (best && distance >= (targetBiome === 'any' ? 16 : 32)) break;
+    }
+    if (!best && targetBiome !== 'any') return findCavernFallSpawn3D(state, seed, axis, 'any');
+    const source = best || { x: centerX, z: centerZ };
+    return {
+      x: axis === 'x' ? 0 : source.x,
+      z: axis === 'z' ? 0 : source.z,
+    };
+  }
+
   function findWorldSpawn3D(state, seed, options = {}) {
     const world = state && state.world;
     const centerX = Math.floor((world && world.w ? world.w : 0) / 2);
     const centerZ = Math.floor((world && world.d ? world.d : 0) / 2);
     const targetBiome = options.anyBiome ? 'any' : selectedSpawnBiome(state);
+    const cavernFallAxis = currentDimension(state) === 'overworld' && state && state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall'
+      ? state.worldMeta.cavernFallAxis
+      : '';
+    if (cavernFallAxis === 'x' || cavernFallAxis === 'z') {
+      return findCavernFallSpawn3D(state, seed, cavernFallAxis, targetBiome);
+    }
     const maxRadius = Math.max(384, Math.ceil(Math.max(world && world.w ? world.w : 0, world && world.d ? world.d : 0) / 2) - 12);
     let best = null;
     for (let radius = 0; radius <= maxRadius; radius += 4) {
@@ -2597,6 +2674,9 @@
 
   function markStructureChestLoot(state, x, y, z, lootTable) {
     if (!state || !state.world || !lootTable) return;
+    if (Number.isFinite(state.world.cavernFallProjectionX)) x -= state.world.cavernFallProjectionX;
+    if (Number.isFinite(state.world.cavernFallProjectionZ)) z -= state.world.cavernFallProjectionZ;
+    if (x < 0 || x >= state.world.w || z < 0 || z >= state.world.d) return;
     if (!state.world.chests) state.world.chests = {};
     state.world.chests[`${x},${y},${z}`] = { lootTable };
   }
@@ -2634,6 +2714,9 @@
 
   function setStructureChest(state, x, y, z, slots, extra = {}) {
     if (!state || !state.world) return;
+    if (Number.isFinite(state.world.cavernFallProjectionX)) x -= state.world.cavernFallProjectionX;
+    if (Number.isFinite(state.world.cavernFallProjectionZ)) z -= state.world.cavernFallProjectionZ;
+    if (x < 0 || x >= state.world.w || z < 0 || z >= state.world.d) return;
     if (!state.world.chests) state.world.chests = {};
     state.world.chests[`${x},${y},${z}`] = {
       slots,
@@ -2653,22 +2736,27 @@
   function blasterMinerHouseCandidates(state) {
     const world = state && state.world;
     if (!world || !state.worldMeta) return [];
+    const cavernAxis = currentDimension(state) === 'overworld' && state.worldMeta.easterEgg === 'cavern_fall'
+      ? state.worldMeta.cavernFallAxis
+      : '';
+    const planningWorld = cavernAxis ? { ...world, w: Game.constants3d.WORLD_W, d: Game.constants3d.WORLD_D } : world;
+    const planningState = cavernAxis ? { ...state, world: planningWorld } : state;
     const seed = worldSeed(state);
     const count = 2 + Math.floor(noise2(seed + 5601, 0, 0) * 3);
     const candidates = [];
-    const margin = Math.min(180, Math.max(36, Math.floor(Math.min(world.w, world.d) * 0.12)));
+    const margin = Math.min(180, Math.max(36, Math.floor(Math.min(planningWorld.w, planningWorld.d) * 0.12)));
     for (let i = 0; i < count; i += 1) {
       const angle = (i / count) * Math.PI * 2 + noise2(seed + 5603, i, 0) * 0.8;
-      const radius = Math.min(world.w, world.d) * (0.28 + noise2(seed + 5605, i, 0) * 0.28);
-      let x = Math.round(world.w * 0.5 + Math.cos(angle) * radius);
-      let z = Math.round(world.d * 0.5 + Math.sin(angle) * radius);
-      x = Math.max(margin, Math.min(world.w - margin, x));
-      z = Math.max(margin, Math.min(world.d - margin, z));
-      if (!farFromSpawn(world, x, z, 72)) {
-        x = Math.max(margin, Math.min(world.w - margin, x + (x < world.w / 2 ? 72 : -72)));
-        z = Math.max(margin, Math.min(world.d - margin, z + (z < world.d / 2 ? 72 : -72)));
+      const radius = Math.min(planningWorld.w, planningWorld.d) * (0.28 + noise2(seed + 5605, i, 0) * 0.28);
+      let x = Math.round(planningWorld.w * 0.5 + Math.cos(angle) * radius);
+      let z = Math.round(planningWorld.d * 0.5 + Math.sin(angle) * radius);
+      x = Math.max(margin, Math.min(planningWorld.w - margin, x));
+      z = Math.max(margin, Math.min(planningWorld.d - margin, z));
+      if (!farFromSpawn(planningWorld, x, z, 72)) {
+        x = Math.max(margin, Math.min(planningWorld.w - margin, x + (x < planningWorld.w / 2 ? 72 : -72)));
+        z = Math.max(margin, Math.min(planningWorld.d - margin, z + (z < planningWorld.d / 2 ? 72 : -72)));
       }
-      const cave = nearestCaveFeature(state, x, z, 260);
+      const cave = nearestCaveFeature(planningState, x, z, 260);
       if (cave) {
         x = Math.round((x * 2 + cave.x) / 3);
         z = Math.round((z * 2 + cave.z) / 3);
@@ -2700,6 +2788,12 @@
 
   function surfaceYForStructure(state, x, z) {
     if (!state || !state.world) return 24;
+    const world = state.world;
+    const localX = Number.isFinite(world.cavernFallProjectionX) ? x - world.cavernFallProjectionX : x;
+    const localZ = Number.isFinite(world.cavernFallProjectionZ) ? z - world.cavernFallProjectionZ : z;
+    if (localX < 0 || localX >= world.w || localZ < 0 || localZ >= world.d) {
+      return terrainHeight(worldSeed(state), x, z);
+    }
     for (let y = state.world.h - 2; y >= 1; y -= 1) {
       const id = getBlock3D(state, x, y, z);
       if (id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.HOT_WATER && id !== BLOCK.LAVA && id !== BLOCK.VOLCANIC_LAVA) return y;
@@ -2812,10 +2906,12 @@
   function createBlasterMinerHouseAt3D(state, centerX, centerZ, options = {}) {
     if (!state || !state.world) return null;
     const world = state.world;
-    const x = Math.max(8, Math.min(world.w - 9, Math.round(centerX)));
-    const z = Math.max(8, Math.min(world.d - 9, Math.round(centerZ)));
+    const sourceW = Number.isFinite(world.cavernFallProjectionX) ? Game.constants3d.WORLD_W : world.w;
+    const sourceD = Number.isFinite(world.cavernFallProjectionZ) ? Game.constants3d.WORLD_D : world.d;
+    const x = Math.max(8, Math.min(sourceW - 9, Math.round(centerX)));
+    const z = Math.max(8, Math.min(sourceD - 9, Math.round(centerZ)));
     const groundY = Number.isFinite(options.groundY) ? options.groundY : surfaceYForStructure(state, x, z);
-    if (!options.allowNearSpawn && !farFromSpawn(world, x, z, 56)) return null;
+    if (!options.allowNearSpawn && !farFromSpawn({ w: sourceW, d: sourceD }, x, z, 56)) return null;
     const baseY = Math.max(8, Math.min(world.h - 12, groundY + 1));
     const cave = options.cave || nearestCaveFeature(state, x, z, 260);
     const caveTarget = cave ? { x: cave.endX || cave.x, y: cave.endY || Math.max(5, baseY - 18), z: cave.endZ || cave.z } : { x: x + 46, y: Math.max(5, baseY - 26), z: z + 19 };
@@ -2833,17 +2929,19 @@
     const stairEnd = buildStairToBasement(state, x, baseY, z);
     const underground = buildBlasterMinerBasementAndSafe(state, stairEnd, caveTarget);
     const key = options.key || `blaster-miner-house-${x}-${z}`;
+    const projectionX = Number.isFinite(world.cavernFallProjectionX) ? world.cavernFallProjectionX : 0;
+    const projectionZ = Number.isFinite(world.cavernFallProjectionZ) ? world.cavernFallProjectionZ : 0;
     const house = {
       key,
       type: 'blaster_miner_house',
-      x,
+      x: projectionX ? 0 : x,
       y: baseY,
-      z,
+      z: projectionZ ? 0 : z,
       generated: true,
-      noteChest: { x: x + 2, y: baseY + 1, z: z + 2 },
-      safeChest: underground.safe,
-      basement: underground.basement,
-      cave: caveTarget,
+      noteChest: { x: projectionX ? 0 : x + 2, y: baseY + 1, z: projectionZ ? 0 : z + 2 },
+      safeChest: { ...underground.safe, x: underground.safe.x - projectionX, z: underground.safe.z - projectionZ },
+      basement: { ...underground.basement, x: underground.basement.x - projectionX, z: underground.basement.z - projectionZ },
+      cave: { ...caveTarget, x: caveTarget.x - projectionX, z: caveTarget.z - projectionZ },
     };
     registerBlasterMinerHouse(state, house);
     return house;
@@ -2860,13 +2958,33 @@
   function generateBlasterMinerHousesForColumn(state, bounds) {
     if (!state || !state.world || state.worldMeta && state.worldMeta.currentDimension === 'underground') return;
     const generated = state.world.blasterMinerHouses || [];
+    const axis = state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall' ? state.worldMeta.cavernFallAxis : '';
+    const centerX = Math.floor(Game.constants3d.WORLD_W / 2);
+    const centerZ = Math.floor(Game.constants3d.WORLD_D / 2);
     for (const candidate of blasterMinerHouseCandidates(state)) {
       if (generated.some((house) => house && house.key === candidate.key && house.generated)) continue;
-      if (candidate.x < bounds.minX || candidate.x >= bounds.maxX || candidate.z < bounds.minZ || candidate.z >= bounds.maxZ) continue;
-      createBlasterMinerHouseAt3D(state, candidate.x, candidate.z, {
-        key: candidate.key,
-        cave: candidate.cave,
-      });
+      const caveTarget = candidate.cave || { x: candidate.x + 46, z: candidate.z + 19 };
+      const minX = Math.min(candidate.x - 8, caveTarget.x - 2);
+      const maxX = Math.max(candidate.x + 48, caveTarget.x + 2);
+      const minZ = Math.min(candidate.z - 8, caveTarget.z - 2);
+      const maxZ = Math.max(candidate.z + 20, caveTarget.z + 2);
+      const intersects = axis === 'x'
+        ? minX <= centerX && maxX >= centerX && maxZ >= bounds.minZ && minZ < bounds.maxZ
+        : (axis === 'z'
+          ? minZ <= centerZ && maxZ >= centerZ && maxX >= bounds.minX && minX < bounds.maxX
+          : candidate.x >= bounds.minX && candidate.x < bounds.maxX && candidate.z >= bounds.minZ && candidate.z < bounds.maxZ);
+      if (!intersects) continue;
+      if (axis === 'x') state.world.cavernFallProjectionX = centerX;
+      if (axis === 'z') state.world.cavernFallProjectionZ = centerZ;
+      try {
+        createBlasterMinerHouseAt3D(state, candidate.x, candidate.z, {
+          key: candidate.key,
+          cave: candidate.cave,
+        });
+      } finally {
+        delete state.world.cavernFallProjectionX;
+        delete state.world.cavernFallProjectionZ;
+      }
     }
   }
 
@@ -3010,14 +3128,17 @@
   function treeHouseCandidates(state) {
     const world = state && state.world;
     if (!world || !state.worldMeta || state.worldMeta.currentDimension === 'underground') return [];
-    const cacheKey = `${state.worldMeta.seed || ''}:${world.w}:${world.d}:forest-components-v2`;
+    const axis = state.worldMeta.easterEgg === 'cavern_fall' ? state.worldMeta.cavernFallAxis : '';
+    const planningWorld = axis ? { ...world, w: Game.constants3d.WORLD_W, d: Game.constants3d.WORLD_D } : world;
+    const planningState = axis ? { ...state, world: planningWorld } : state;
+    const cacheKey = `${state.worldMeta.seed || ''}:${planningWorld.w}:${planningWorld.d}:${axis}:forest-components-v2`;
     if (world.treeHousePlanKey === cacheKey && Array.isArray(world.treeHousePlan)) return world.treeHousePlan;
     const seed = worldSeed(state);
     const villages = VILLAGE_BLOCK_GENERATION_ENABLED ? getVillages3D(state) : [];
     const candidates = [];
-    const components = scanForestComponentsForTreeHouses(state, seed);
+    const components = scanForestComponentsForTreeHouses(planningState, seed);
     for (const component of components) {
-      const componentHouses = treeHouseCandidatesForComponent(state, seed, component, villages, candidates);
+      const componentHouses = treeHouseCandidatesForComponent(planningState, seed, component, villages, candidates);
       candidates.push(...componentHouses);
     }
     world.treeHousePlanKey = cacheKey;
@@ -3035,8 +3156,17 @@
 
   function canBuildTreeHouseAt(state, x, groundY, z) {
     const world = state && state.world;
+    const sourceW = Number.isFinite(world && world.cavernFallProjectionX) ? Game.constants3d.WORLD_W : world && world.w;
+    const sourceD = Number.isFinite(world && world.cavernFallProjectionZ) ? Game.constants3d.WORLD_D : world && world.d;
     if (!world || x < TREE_HOUSE_FOOTPRINT_RADIUS + 2 || z < TREE_HOUSE_FOOTPRINT_RADIUS + 2) return false;
-    if (x >= world.w - TREE_HOUSE_FOOTPRINT_RADIUS - 2 || z >= world.d - TREE_HOUSE_FOOTPRINT_RADIUS - 2) return false;
+    if (x >= sourceW - TREE_HOUSE_FOOTPRINT_RADIUS - 2 || z >= sourceD - TREE_HOUSE_FOOTPRINT_RADIUS - 2) return false;
+    const localX = Number.isFinite(world.cavernFallProjectionX) ? x - world.cavernFallProjectionX : x;
+    const localZ = Number.isFinite(world.cavernFallProjectionZ) ? z - world.cavernFallProjectionZ : z;
+    if (localX < 0 || localX >= world.w || localZ < 0 || localZ >= world.d) {
+      const seed = worldSeed(state);
+      return terrainBlockAt(seed, x, groundY, z, { w: sourceW, h: world.h, d: sourceD }) === BLOCK.DIRT
+        && hasInitialGrass(seed, x, groundY, z, { w: sourceW, h: world.h, d: sourceD });
+    }
     const ground = getBlock3D(state, x, groundY, z);
     if (ground !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) return false;
     return true;
@@ -3146,12 +3276,16 @@
     }
     const house = {
       ...candidate,
-      x,
+      x: Number.isFinite(state.world.cavernFallProjectionX) ? 0 : x,
       y: floorY,
-      z,
+      z: Number.isFinite(state.world.cavernFallProjectionZ) ? 0 : z,
       groundY,
       generated: true,
-      chest: { x: x + 2, y: floorY + 1, z: z + 1 },
+      chest: {
+        x: Number.isFinite(state.world.cavernFallProjectionX) ? 0 : x + 2,
+        y: floorY + 1,
+        z: Number.isFinite(state.world.cavernFallProjectionZ) ? 0 : z + 1,
+      },
     };
     registerTreeHouse(state, house);
     return house;
@@ -3168,10 +3302,25 @@
   function generateTreeHousesForColumn(state, bounds) {
     if (!state || !state.world || state.worldMeta && state.worldMeta.currentDimension === 'underground') return;
     const generated = state.world.treeHouses || [];
+    const axis = state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall' ? state.worldMeta.cavernFallAxis : '';
+    const centerX = Math.floor(Game.constants3d.WORLD_W / 2);
+    const centerZ = Math.floor(Game.constants3d.WORLD_D / 2);
     for (const candidate of treeHouseCandidates(state)) {
       if (generated.some((house) => house && house.key === candidate.key && house.generated)) continue;
-      if (candidate.x < bounds.minX || candidate.x >= bounds.maxX || candidate.z < bounds.minZ || candidate.z >= bounds.maxZ) continue;
-      createTreeHouseAt3D(state, candidate);
+      const intersects = axis === 'x'
+        ? Math.abs(candidate.x - centerX) <= TREE_HOUSE_FOOTPRINT_RADIUS && candidate.z + TREE_HOUSE_FOOTPRINT_RADIUS >= bounds.minZ && candidate.z - TREE_HOUSE_FOOTPRINT_RADIUS < bounds.maxZ
+        : (axis === 'z'
+          ? Math.abs(candidate.z - centerZ) <= TREE_HOUSE_FOOTPRINT_RADIUS && candidate.x + TREE_HOUSE_FOOTPRINT_RADIUS >= bounds.minX && candidate.x - TREE_HOUSE_FOOTPRINT_RADIUS < bounds.maxX
+          : candidate.x >= bounds.minX && candidate.x < bounds.maxX && candidate.z >= bounds.minZ && candidate.z < bounds.maxZ);
+      if (!intersects) continue;
+      if (axis === 'x') state.world.cavernFallProjectionX = centerX;
+      if (axis === 'z') state.world.cavernFallProjectionZ = centerZ;
+      try {
+        createTreeHouseAt3D(state, candidate);
+      } finally {
+        delete state.world.cavernFallProjectionX;
+        delete state.world.cavernFallProjectionZ;
+      }
     }
   }
 
@@ -3363,10 +3512,18 @@
     const meta = state && state.worldMeta;
     if (!meta || (meta.mode !== 'survival' && meta.mode !== 'creative')) return false;
     const seed = worldSeed(state);
-    const candidates = spawnTentCandidatesForSpawn(spawnX, spawnZ);
+    const cavernAxis = currentDimension(state) === 'overworld' && meta.easterEgg === 'cavern_fall'
+      ? meta.cavernFallAxis
+      : '';
+    const sourceSpawnX = cavernAxis === 'x' ? Math.floor(Game.constants3d.WORLD_W / 2) : spawnX;
+    const sourceSpawnZ = cavernAxis === 'z' ? Math.floor(Game.constants3d.WORLD_D / 2) : spawnZ;
+    const placementState = cavernAxis
+      ? { ...state, world: { ...state.world, w: Game.constants3d.WORLD_W, d: Game.constants3d.WORLD_D } }
+      : state;
+    const candidates = spawnTentCandidatesForSpawn(sourceSpawnX, sourceSpawnZ);
     let site = null;
     for (const candidate of candidates) {
-      const baseY = canPlaceSpawnTent(state, seed, candidate.x0, candidate.z0);
+      const baseY = canPlaceSpawnTent(placementState, seed, candidate.x0, candidate.z0);
       if (baseY !== null) {
         site = { ...candidate, baseY };
         break;
@@ -3374,7 +3531,7 @@
     }
     if (!site) return false;
     const { x0, z0, baseY, door } = site;
-    if (!structureWriteVolumeReady(
+    if (!cavernAxis && !structureWriteVolumeReady(
       state,
       x0 - 2,
       Math.max(1, baseY - 4),
@@ -3383,30 +3540,43 @@
       baseY + SPAWN_TENT_HEIGHT,
       z0 + SPAWN_TENT_SIZE + 1
     )) return false;
-    const spawnBiome = biomeAt(seed, spawnX, spawnZ);
+    if (cavernAxis === 'x') state.world.cavernFallProjectionX = Math.floor(Game.constants3d.WORLD_W / 2);
+    if (cavernAxis === 'z') state.world.cavernFallProjectionZ = Math.floor(Game.constants3d.WORLD_D / 2);
+    const spawnBiome = biomeAt(seed, sourceSpawnX, sourceSpawnZ);
     const style = spawnTentStyleForBiome(spawnBiome);
-    clearTentVolume(state, x0, baseY, z0);
-    placeTentShell(state, x0, baseY, z0, style);
-    clearTentDoor(state, x0, baseY, z0, door);
-    placeTentEntranceStep(state, x0, baseY, z0, door);
-    clearTentDoor(state, x0, baseY, z0, door);
-    const interior = tentInteriorPositions(x0, z0, door);
-    for (const wool of interior.bedWool) setBlock3D(state, wool.x, baseY + 1, wool.z, BLOCK.WOOL);
-    setBlock3D(state, interior.pillow.x, baseY + 1, interior.pillow.z, BLOCK.PILLOW);
-    for (const plank of interior.planks) setBlock3D(state, plank.x, baseY + 1, plank.z, BLOCK.PLANK);
-    const chestX = interior.chest.x;
-    const chestY = baseY + 1;
-    const chestZ = interior.chest.z;
-    setBlock3D(state, chestX, chestY, chestZ, BLOCK.CHEST);
-    markStructureChestLoot(state, chestX, chestY, chestZ, spawnTentLootTableForBiome(spawnBiome));
-    return true;
+    try {
+      clearTentVolume(state, x0, baseY, z0);
+      placeTentShell(state, x0, baseY, z0, style);
+      clearTentDoor(state, x0, baseY, z0, door);
+      placeTentEntranceStep(state, x0, baseY, z0, door);
+      clearTentDoor(state, x0, baseY, z0, door);
+      const interior = tentInteriorPositions(x0, z0, door);
+      for (const wool of interior.bedWool) setBlock3D(state, wool.x, baseY + 1, wool.z, BLOCK.WOOL);
+      setBlock3D(state, interior.pillow.x, baseY + 1, interior.pillow.z, BLOCK.PILLOW);
+      for (const plank of interior.planks) setBlock3D(state, plank.x, baseY + 1, plank.z, BLOCK.PLANK);
+      const chestX = interior.chest.x;
+      const chestY = baseY + 1;
+      const chestZ = interior.chest.z;
+      if (setBlock3D(state, chestX, chestY, chestZ, BLOCK.CHEST)) {
+        const localChestX = cavernAxis === 'x' ? chestX - Math.floor(Game.constants3d.WORLD_W / 2) : chestX;
+        const localChestZ = cavernAxis === 'z' ? chestZ - Math.floor(Game.constants3d.WORLD_D / 2) : chestZ;
+        markStructureChestLoot(state, localChestX, chestY, localChestZ, spawnTentLootTableForBiome(spawnBiome));
+      }
+      return true;
+    } finally {
+      delete state.world.cavernFallProjectionX;
+      delete state.world.cavernFallProjectionZ;
+    }
   }
 
   function hasInitialGrass(seed, x, y, z, world) {
-    const biome = biomeAt(seed, x, z);
-    return y === terrainHeight(seed, x, z)
+    const source = Game.easterEggs3d
+      ? Game.easterEggs3d.getCavernFallSourceCell(world && world.worldMeta, x, z, world && world.dimension)
+      : { x, z };
+    const biome = biomeAt(seed, source.x, source.z);
+    return y === terrainHeight(seed, source.x, source.z)
       && (biome === 'plains' || biome === 'forest' || biome === 'spruce_forest')
-      && dryTransitionSurface(seed, x, z, biome) === BLOCK.AIR
+      && dryTransitionSurface(seed, source.x, source.z, biome) === BLOCK.AIR
       && terrainBlockAt(seed, x, y + 1, z, world) === BLOCK.AIR;
   }
 
@@ -3441,7 +3611,7 @@
     };
   }
 
-  function estimateSurfaceChunkRange(seed, cx, cz, counts) {
+  function estimateSurfaceChunkRange(state, seed, cx, cz, counts) {
     const minX = cx * CHUNK_SIZE;
     const minZ = cz * CHUNK_SIZE;
     const maxX = Math.min(minX + CHUNK_SIZE - 1, counts.x * CHUNK_SIZE - 1);
@@ -3456,7 +3626,8 @@
     let minCy = counts.y - 1;
     let maxCy = 0;
     for (const [x, z] of samples) {
-      const cy = Math.max(0, Math.min(counts.y - 1, Math.floor(terrainHeight(seed, x, z) / CHUNK_SIZE)));
+      const source = surfaceSourceCell(state, x, z);
+      const cy = Math.max(0, Math.min(counts.y - 1, Math.floor(terrainHeight(seed, source.x, source.z) / CHUNK_SIZE)));
       minCy = Math.min(minCy, cy);
       maxCy = Math.max(maxCy, cy);
     }
@@ -3556,6 +3727,14 @@
   function structureWriteVolumeReady(state, minX, minY, minZ, maxX, maxY, maxZ) {
     const world = state && state.world;
     if (!world) return false;
+    if (Number.isFinite(world.cavernFallProjectionX)) {
+      minX -= world.cavernFallProjectionX;
+      maxX -= world.cavernFallProjectionX;
+    }
+    if (Number.isFinite(world.cavernFallProjectionZ)) {
+      minZ -= world.cavernFallProjectionZ;
+      maxZ -= world.cavernFallProjectionZ;
+    }
     const counts = chunkCounts(world);
     const x0 = Math.max(0, Math.floor(minX));
     const y0 = Math.max(0, Math.floor(minY));
@@ -3632,7 +3811,7 @@
     const surfaceChunkRange = (cx, cz) => {
       const key = `${cx},${cz}`;
       if (surfaceRangeCache.has(key)) return surfaceRangeCache.get(key);
-      const value = estimateSurfaceChunkRange(seed, cx, cz, counts);
+      const value = estimateSurfaceChunkRange(state, seed, cx, cz, counts);
       surfaceRangeCache.set(key, value);
       return value;
     };
@@ -3932,7 +4111,11 @@
 
   function decorationChunkRange(state, seed, cx, cz, counts) {
     const world = state && state.world;
-    const cacheKey = `${seed}:${cx},${cz}`;
+    const dimension = currentDimension(state);
+    const axis = dimension === 'overworld' && state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall'
+      ? state.worldMeta.cavernFallAxis
+      : '';
+    const cacheKey = `${seed}:${dimension}:${axis}:${cx},${cz}`;
     if (world.decorationChunkRangeCache && world.decorationChunkRangeCache.has(cacheKey)) {
       return world.decorationChunkRangeCache.get(cacheKey);
     }
@@ -3945,7 +4128,8 @@
     let maxY = 0;
     for (let z = minZ; z < maxZ; z += 1) {
       for (let x = minX; x < maxX; x += 1) {
-        const y = terrainHeight(seed, x, z);
+        const source = surfaceSourceCell(state, x, z);
+        const y = terrainHeight(seed, source.x, source.z);
         minY = Math.min(minY, y);
         maxY = Math.max(maxY, y);
       }
@@ -3986,25 +4170,43 @@
 
   function canPlaceTree(state, x, groundY, z, height, groundBlocks = null) {
     const world = state.world;
-    if (x < 3 || x >= world.w - 3 || z < 3 || z >= world.d - 3) return false;
+    const projectedX = Number.isFinite(world.cavernFallProjectionX);
+    const projectedZ = Number.isFinite(world.cavernFallProjectionZ);
+    const boundsW = projectedX ? Game.constants3d.WORLD_W : world.w;
+    const boundsD = projectedZ ? Game.constants3d.WORLD_D : world.d;
+    if (x < 3 || x >= boundsW - 3 || z < 3 || z >= boundsD - 3) return false;
     const localX = x % CHUNK_SIZE;
     const localZ = z % CHUNK_SIZE;
-    if (localX < TREE_CROWN_RADIUS || localX >= CHUNK_SIZE - TREE_CROWN_RADIUS) return false;
-    if (localZ < TREE_CROWN_RADIUS || localZ >= CHUNK_SIZE - TREE_CROWN_RADIUS) return false;
+    if (!projectedX && (localX < TREE_CROWN_RADIUS || localX >= CHUNK_SIZE - TREE_CROWN_RADIUS)) return false;
+    if (!projectedZ && (localZ < TREE_CROWN_RADIUS || localZ >= CHUNK_SIZE - TREE_CROWN_RADIUS)) return false;
     if (groundY + height + 3 >= world.h) return false;
-    const spawnX = Math.floor(world.w / 2);
-    const spawnZ = Math.floor(world.d / 2);
+    const spawnX = Math.floor(boundsW / 2);
+    const spawnZ = Math.floor(boundsD / 2);
     if (Math.hypot(x - spawnX, z - spawnZ) < 8) return false;
-    const ground = getBlock3D(state, x, groundY, z);
+    const projectedGroundX = projectedX ? x - world.cavernFallProjectionX : x;
+    const projectedGroundZ = projectedZ ? z - world.cavernFallProjectionZ : z;
+    const groundOnSlice = projectedGroundX >= 0 && projectedGroundX < world.w && projectedGroundZ >= 0 && projectedGroundZ < world.d;
+    const sourceWorld = { w: boundsW, h: world.h, d: boundsD };
+    const ground = groundOnSlice
+      ? getBlock3D(state, x, groundY, z)
+      : terrainBlockAt(worldSeed(state), x, groundY, z, sourceWorld);
     if (Array.isArray(groundBlocks)) {
       if (!groundBlocks.includes(ground)) return false;
-    } else if (ground !== BLOCK.DIRT || getGrassLevel3D(state, x, groundY, z) <= 0) {
+    } else if (ground !== BLOCK.DIRT || (groundOnSlice
+      ? getGrassLevel3D(state, x, groundY, z) <= 0
+      : !hasInitialGrass(worldSeed(state), x, groundY, z, sourceWorld))) {
       return false;
     }
     for (let y = groundY + 1; y <= groundY + height + 3; y += 1) {
       for (let zz = z - 2; zz <= z + 2; zz += 1) {
         for (let xx = x - 2; xx <= x + 2; xx += 1) {
-          if (getBlock3D(state, xx, y, zz) !== BLOCK.AIR) return false;
+          const localProjectedX = projectedX ? xx - world.cavernFallProjectionX : xx;
+          const localProjectedZ = projectedZ ? zz - world.cavernFallProjectionZ : zz;
+          const insideSlice = localProjectedX >= 0 && localProjectedX < world.w && localProjectedZ >= 0 && localProjectedZ < world.d;
+          const id = insideSlice
+            ? getBlock3D(state, xx, y, zz)
+            : terrainBlockAt(worldSeed(state), xx, y, zz, sourceWorld);
+          if (id !== BLOCK.AIR) return false;
         }
       }
     }
@@ -4083,13 +4285,30 @@
 
   function placeGeyser(state, x, groundY, z) {
     if (groundY < 4 || groundY + 2 >= state.world.h) return false;
-    const ground = getBlock3D(state, x, groundY, z);
+    const projectedX = Number.isFinite(state.world.cavernFallProjectionX);
+    const projectedZ = Number.isFinite(state.world.cavernFallProjectionZ);
+    const localCenterX = projectedX ? x - state.world.cavernFallProjectionX : x;
+    const localCenterZ = projectedZ ? z - state.world.cavernFallProjectionZ : z;
+    const centerOnSlice = localCenterX >= 0 && localCenterX < state.world.w && localCenterZ >= 0 && localCenterZ < state.world.d;
+    const sourceWorld = { w: Game.constants3d.WORLD_W, h: state.world.h, d: Game.constants3d.WORLD_D };
+    const ground = centerOnSlice
+      ? getBlock3D(state, x, groundY, z)
+      : terrainBlockAt(worldSeed(state), x, groundY, z, sourceWorld);
     if (ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW && ground !== BLOCK.BLACKSTONE) return false;
-    if (getBlock3D(state, x, groundY + 1, z) !== BLOCK.AIR) return false;
+    const centerAir = centerOnSlice
+      ? getBlock3D(state, x, groundY + 1, z)
+      : terrainBlockAt(worldSeed(state), x, groundY + 1, z, sourceWorld);
+    if (centerAir !== BLOCK.AIR) return false;
     for (let dz = -1; dz <= 1; dz += 1) {
       for (let dx = -1; dx <= 1; dx += 1) {
         if (dx === 0 && dz === 0) continue;
-        if (getBlock3D(state, x + dx, groundY + 1, z + dz) !== BLOCK.AIR) return false;
+        const localX = Number.isFinite(state.world.cavernFallProjectionX) ? x + dx - state.world.cavernFallProjectionX : x + dx;
+        const localZ = Number.isFinite(state.world.cavernFallProjectionZ) ? z + dz - state.world.cavernFallProjectionZ : z + dz;
+        const insideSlice = localX >= 0 && localX < state.world.w && localZ >= 0 && localZ < state.world.d;
+        const id = insideSlice
+          ? getBlock3D(state, x + dx, groundY + 1, z + dz)
+          : terrainBlockAt(worldSeed(state), x + dx, groundY + 1, z + dz, sourceWorld);
+        if (id !== BLOCK.AIR) return false;
       }
     }
     const wallBlock = ground === BLOCK.SNOW ? BLOCK.STONE : ground;
@@ -4105,7 +4324,9 @@
         setBlock3D(state, x + dx, groundY, z + dz, wallBlock);
       }
     }
-    if (Game.fluids3d && Game.fluids3d.activateFluidAround3D) Game.fluids3d.activateFluidAround3D(state, x, groundY - 1, z);
+    const fluidX = Number.isFinite(state.world.cavernFallProjectionX) ? x - state.world.cavernFallProjectionX : x;
+    const fluidZ = Number.isFinite(state.world.cavernFallProjectionZ) ? z - state.world.cavernFallProjectionZ : z;
+    if (Game.fluids3d && Game.fluids3d.activateFluidAround3D) Game.fluids3d.activateFluidAround3D(state, fluidX, groundY - 1, fluidZ);
     if (Game.fluids3d && Game.fluids3d.stepImmediateFluid3D) Game.fluids3d.stepImmediateFluid3D(state);
     return true;
   }
@@ -4118,20 +4339,35 @@
 
   function canPlaceBearDen(state, x, groundY, z, options = {}) {
     const world = state.world;
-    if (x < 4 || x >= world.w - 4 || z < 4 || z >= world.d - 4) return false;
+    const projectedX = Number.isFinite(world.cavernFallProjectionX);
+    const projectedZ = Number.isFinite(world.cavernFallProjectionZ);
+    const sourceW = projectedX ? Game.constants3d.WORLD_W : world.w;
+    const sourceD = projectedZ ? Game.constants3d.WORLD_D : world.d;
+    if (x < 4 || x >= sourceW - 4 || z < 4 || z >= sourceD - 4) return false;
     if (groundY < 3 || groundY + 4 >= world.h) return false;
-    if (!options.allowNearSpawn && !farFromSpawn(world, x, z, 24)) return false;
+    if (!options.allowNearSpawn && !farFromSpawn({ w: sourceW, d: sourceD }, x, z, 24)) return false;
     if (!options.loose) {
-      const ground = getBlock3D(state, x, groundY, z);
+      const localCenterX = projectedX ? x - world.cavernFallProjectionX : x;
+      const localCenterZ = projectedZ ? z - world.cavernFallProjectionZ : z;
+      const centerOnSlice = localCenterX >= 0 && localCenterX < world.w && localCenterZ >= 0 && localCenterZ < world.d;
+      const sourceWorld = { w: sourceW, h: world.h, d: sourceD };
+      const ground = centerOnSlice ? getBlock3D(state, x, groundY, z) : terrainBlockAt(worldSeed(state), x, groundY, z, sourceWorld);
       if (ground !== BLOCK.DIRT && ground !== BLOCK.STONE && ground !== BLOCK.RED_EARTH && ground !== BLOCK.SNOW) return false;
       for (let dz = -1; dz <= 1; dz += 1) {
         for (let dx = -2; dx <= 2; dx += 1) {
           const gx = x + dx;
           const gz = z + dz;
-          const base = getBlock3D(state, gx, groundY, gz);
+          const localX = projectedX ? gx - world.cavernFallProjectionX : gx;
+          const localZ = projectedZ ? gz - world.cavernFallProjectionZ : gz;
+          const insideSlice = localX >= 0 && localX < world.w && localZ >= 0 && localZ < world.d;
+          const base = insideSlice
+            ? getBlock3D(state, gx, groundY, gz)
+            : terrainBlockAt(worldSeed(state), gx, groundY, gz, sourceWorld);
           if (base !== BLOCK.DIRT && base !== BLOCK.STONE && base !== BLOCK.RED_EARTH && base !== BLOCK.SNOW) return false;
           for (let y = groundY + 1; y <= groundY + 4; y += 1) {
-            const id = getBlock3D(state, gx, y, gz);
+            const id = insideSlice
+              ? getBlock3D(state, gx, y, gz)
+              : terrainBlockAt(worldSeed(state), gx, y, gz, sourceWorld);
             if (id !== BLOCK.AIR && id !== BLOCK.LEAF && id !== BLOCK.SPRUCE_LEAF && id !== BLOCK.SNOW && id !== BLOCK.DRY_BUSH) return false;
           }
         }
@@ -4183,8 +4419,10 @@
         if (groundY + 3 < state.world.h) setBlock3D(state, x + dx, groundY + 3, z + dz, BLOCK.AIR);
       }
     }
-    registerBearDen(state, x, floorY + 1, z, biome);
-    return { x, y: floorY + 1, z, yaw: 0 };
+    const localX = Number.isFinite(state.world.cavernFallProjectionX) ? 0 : x;
+    const localZ = Number.isFinite(state.world.cavernFallProjectionZ) ? 0 : z;
+    registerBearDen(state, localX, floorY + 1, localZ, biome);
+    return { x: localX, y: floorY + 1, z: localZ, yaw: 0 };
   }
 
   function registerBearDen(state, x, y, z, biome) {
@@ -4367,10 +4605,15 @@
     if (!state.entities) state.entities = {};
     if (!Array.isArray(state.entities.sheep)) state.entities.sheep = [];
     const cellSize = 28;
-    const minCellX = Math.floor(bounds.minX / cellSize);
-    const maxCellX = Math.floor((bounds.maxX - 1) / cellSize);
-    const minCellZ = Math.floor(bounds.minZ / cellSize);
-    const maxCellZ = Math.floor((bounds.maxZ - 1) / cellSize);
+    const axis = currentDimension(state) === 'overworld' && state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall'
+      ? state.worldMeta.cavernFallAxis
+      : '';
+    const centerX = Math.floor(Game.constants3d.WORLD_W / 2);
+    const centerZ = Math.floor(Game.constants3d.WORLD_D / 2);
+    const minCellX = Math.floor((axis === 'x' ? centerX - 3 : bounds.minX) / cellSize);
+    const maxCellX = Math.floor(((axis === 'x' ? centerX + 3 : bounds.maxX - 1)) / cellSize);
+    const minCellZ = Math.floor((axis === 'z' ? centerZ - 3 : bounds.minZ) / cellSize);
+    const maxCellZ = Math.floor(((axis === 'z' ? centerZ + 3 : bounds.maxZ - 1)) / cellSize);
     for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
       for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
         const sampleX = cellX * cellSize + Math.floor(cellSize * 0.5);
@@ -4380,26 +4623,45 @@
         if (noise2(seed + 3401, cellX, cellZ) > info.chance) continue;
         const x = cellX * cellSize + Math.floor(5 + noise2(seed + 3403, cellX, cellZ) * (cellSize - 10));
         const z = cellZ * cellSize + Math.floor(5 + noise2(seed + 3405, cellX, cellZ) * (cellSize - 10));
-        if (x < bounds.minX || x >= bounds.maxX || z < bounds.minZ || z >= bounds.maxZ) continue;
+        const intersects = axis === 'x'
+          ? Math.abs(x - centerX) <= 3 && z + 3 >= bounds.minZ && z - 3 < bounds.maxZ
+          : (axis === 'z'
+            ? Math.abs(z - centerZ) <= 3 && x + 3 >= bounds.minX && x - 3 < bounds.maxX
+            : x >= bounds.minX && x < bounds.maxX && z >= bounds.minZ && z < bounds.maxZ);
+        if (!intersects) continue;
         const biome = biomeAt(seed, x, z);
         const bear = bearInfoForBiome(biome);
         if (!bear) continue;
         const id = `bear-den-${cellX}-${cellZ}`;
         if (hasMob(state, id)) continue;
-        let groundY = 0;
-        for (let y = state.world.h - 2; y >= 1; y -= 1) {
-          if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
-            groundY = y;
-            break;
+        let groundY = axis ? terrainHeight(seed, x, z) : 0;
+        if (!axis) {
+          for (let y = state.world.h - 2; y >= 1; y -= 1) {
+            if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
+              groundY = y;
+              break;
+            }
           }
         }
-        const den = placeBearDen(state, x, groundY, z, biome);
+        if (axis === 'x') state.world.cavernFallProjectionX = centerX;
+        if (axis === 'z') state.world.cavernFallProjectionZ = centerZ;
+        let den = null;
+        try {
+          den = placeBearDen(state, x, groundY, z, biome);
+        } finally {
+          delete state.world.cavernFallProjectionX;
+          delete state.world.cavernFallProjectionZ;
+        }
         if (!den || !Game.entities3d || !Game.entities3d.spawnMob3D) continue;
         Game.entities3d.spawnMob3D(state, 'bear', den.x, den.y, den.z, id, {
           variant: bear.variant,
           sleeping: bear.sleeping,
           denTask: bear.sleeping ? '' : 'leave_den',
-          denTarget: { x: den.x + 2, y: den.y + 2, z: den.z },
+          denTarget: {
+            x: state.world.w === 1 ? 0.5 : den.x + 2,
+            y: den.y + 2,
+            z: state.world.d === 1 ? 0.5 : den.z,
+          },
           yaw: den.yaw,
         });
       }
@@ -4452,6 +4714,9 @@
   function decorateColumn3D(state, seed, cx, cz) {
     const world = state.world;
     const counts = chunkCounts(world);
+    const cavernAxis = currentDimension(state) === 'overworld' && state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall'
+      ? state.worldMeta.cavernFallAxis
+      : '';
     if (!world.decoratedColumns) world.decoratedColumns = new Set();
     const key = columnKey(cx, cz);
     if (world.decoratedColumns.has(key)) return false;
@@ -4464,12 +4729,24 @@
     };
     const villages = VILLAGE_BLOCK_GENERATION_ENABLED ? getVillages3D(state) : [];
     const treasuries = getTreasuries3D(state);
-    const hasVillageInColumn = VILLAGE_BLOCK_GENERATION_ENABLED && villages.some((village) => (
-      village.x + village.radius >= bounds.minX
-      && village.x - village.radius < bounds.maxX
-      && village.z + village.radius >= bounds.minZ
-      && village.z - village.radius < bounds.maxZ
-    ));
+    const centerX = Math.floor(Game.constants3d.WORLD_W / 2);
+    const centerZ = Math.floor(Game.constants3d.WORLD_D / 2);
+    const hasVillageInColumn = VILLAGE_BLOCK_GENERATION_ENABLED && villages.some((village) => {
+      if (cavernAxis === 'x') {
+        return Math.abs(village.x - centerX) <= village.radius
+          && village.z + village.radius >= bounds.minZ
+          && village.z - village.radius < bounds.maxZ;
+      }
+      if (cavernAxis === 'z') {
+        return Math.abs(village.z - centerZ) <= village.radius
+          && village.x + village.radius >= bounds.minX
+          && village.x - village.radius < bounds.maxX;
+      }
+      return village.x + village.radius >= bounds.minX
+        && village.x - village.radius < bounds.maxX
+        && village.z + village.radius >= bounds.minZ
+        && village.z - village.radius < bounds.maxZ;
+    });
     const treasuriesInColumn = treasuries.filter((treasury) => treasuryIntersectsBounds(treasury, bounds));
     const hasTreasuryInColumn = treasuriesInColumn.length > 0;
     if (hasVillageInColumn) {
@@ -4490,44 +4767,77 @@
       generateBlasterMinerHousesForColumn(state, bounds);
       generateTreeHousesForColumn(state, bounds);
       if (hasTreasuryInColumn) decorateTreasuriesForColumn(state, treasuriesInColumn, bounds);
-      for (let x = Math.max(4, bounds.minX); x < Math.min(world.w - 4, bounds.maxX); x += 1) {
-        for (let z = Math.max(4, bounds.minZ); z < Math.min(world.d - 4, bounds.maxZ); z += 1) {
-          const biome = biomeAt(seed, x, z);
-          const village = VILLAGE_BLOCK_GENERATION_ENABLED ? findVillageForCellInList(villages, x, z) : null;
+      const startX = cavernAxis === 'x' ? bounds.minX : Math.max(4, bounds.minX);
+      const endX = cavernAxis === 'x' ? bounds.maxX : Math.min(world.w - 4, bounds.maxX);
+      const startZ = cavernAxis === 'z' ? bounds.minZ : Math.max(4, bounds.minZ);
+      const endZ = cavernAxis === 'z' ? bounds.maxZ : Math.min(world.d - 4, bounds.maxZ);
+      for (let x = startX; x < endX; x += 1) {
+        for (let z = startZ; z < endZ; z += 1) {
+          const source = Game.easterEggs3d
+            ? Game.easterEggs3d.getCavernFallSourceCell(state.worldMeta, x, z, currentDimension(state))
+            : { x, z };
+          const village = VILLAGE_BLOCK_GENERATION_ENABLED ? findVillageForCellInList(villages, source.x, source.z) : null;
           if (village) {
-            decorateVillageCellAt(state, seed, x, z, village);
+            if (cavernAxis === 'x') world.cavernFallProjectionX = centerX;
+            if (cavernAxis === 'z') world.cavernFallProjectionZ = centerZ;
+            try {
+              decorateVillageCellAt(state, seed, source.x, source.z, village);
+            } finally {
+              delete world.cavernFallProjectionX;
+              delete world.cavernFallProjectionZ;
+            }
             continue;
           }
-          const treeChance = treeChanceAt(seed, x, z, biome);
-          const tryTree = shouldTryTreeAt(seed, x, z, biome, treeChance);
-          const desertDecor = desertDecorationStrength(seed, x, z, biome);
-          const tryCactus = desertDecor > 0 && noise2(seed + 305, x, z) <= 0.0014 * desertDecor;
-          const tryDryBush = desertDecor > 0 && !tryCactus && noise2(seed + 306, x, z) <= 0.013 * desertDecor;
-          const tryAlgae = biome === 'lake' && noise2(seed + 307, x, z) <= 0.008;
-          const tryGeyser = (biome === 'geysers' && noise2(seed + 309, x, z) <= 0.012)
-            || (biome === 'volcanic' && noise2(seed + 310, x, z) <= 0.045)
-            || (biome === 'mountains' && noise2(seed + 308, x, z) <= 0.0018);
-          if (!tryTree && !tryCactus && !tryDryBush && !tryAlgae && !tryGeyser) continue;
+          const offsets = cavernAxis ? [-2, -1, 0, 1, 2] : [0];
+          for (const offset of offsets) {
+            const candidate = {
+              x: source.x + (cavernAxis === 'x' ? offset : 0),
+              z: source.z + (cavernAxis === 'z' ? offset : 0),
+            };
+            const candidateBiome = biomeAt(seed, candidate.x, candidate.z);
+            const treeChance = treeChanceAt(seed, candidate.x, candidate.z, candidateBiome);
+            const tryTree = shouldTryTreeAt(seed, candidate.x, candidate.z, candidateBiome, treeChance);
+            const desertDecor = desertDecorationStrength(seed, candidate.x, candidate.z, candidateBiome);
+            const centralCandidate = offset === 0;
+            const tryCactus = centralCandidate && desertDecor > 0 && noise2(seed + 305, candidate.x, candidate.z) <= 0.0014 * desertDecor;
+            const tryDryBush = centralCandidate && desertDecor > 0 && !tryCactus && noise2(seed + 306, candidate.x, candidate.z) <= 0.013 * desertDecor;
+            const tryAlgae = centralCandidate && candidateBiome === 'lake' && noise2(seed + 307, candidate.x, candidate.z) <= 0.008;
+            const tryGeyser = Math.abs(offset) <= 1 && (
+              (candidateBiome === 'geysers' && noise2(seed + 309, candidate.x, candidate.z) <= 0.012)
+              || (candidateBiome === 'volcanic' && noise2(seed + 310, candidate.x, candidate.z) <= 0.045)
+              || (candidateBiome === 'mountains' && noise2(seed + 308, candidate.x, candidate.z) <= 0.0018)
+            );
+            if (!tryTree && !tryCactus && !tryDryBush && !tryAlgae && !tryGeyser) continue;
 
-          let groundY = 0;
-          for (let y = world.h - 2; y >= 1; y -= 1) {
-            if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
-              groundY = y;
-              break;
+            let groundY = cavernAxis ? terrainHeight(seed, candidate.x, candidate.z) : 0;
+            if (!cavernAxis) {
+              for (let y = world.h - 2; y >= 1; y -= 1) {
+                if (getBlock3D(state, x, y, z) !== BLOCK.AIR) {
+                  groundY = y;
+                  break;
+                }
+              }
+            }
+            if (cavernAxis === 'x') world.cavernFallProjectionX = centerX;
+            if (cavernAxis === 'z') world.cavernFallProjectionZ = centerZ;
+            try {
+              if (tryTree) {
+                if (candidateBiome === 'spruce_forest' || candidateBiome === 'snow_plains') {
+                  placeSpruceTree(state, seed, candidate.x, groundY, candidate.z);
+                } else if (candidateBiome === 'mountain_forest') {
+                  placeTree(state, seed, candidate.x, groundY, candidate.z, { groundBlocks: [BLOCK.STONE, BLOCK.RED_EARTH, BLOCK.DIRT, BLOCK.SNOW] });
+                } else {
+                  placeTree(state, seed, candidate.x, groundY, candidate.z);
+                }
+              } else if (tryCactus) placeCactus(state, seed, candidate.x, groundY, candidate.z);
+              else if (tryDryBush) placeDryBush(state, candidate.x, groundY, candidate.z);
+              else if (tryAlgae) placeAlgae(state, seed, candidate.x, groundY, candidate.z);
+              else if (tryGeyser) placeGeyser(state, candidate.x, groundY, candidate.z);
+            } finally {
+              delete world.cavernFallProjectionX;
+              delete world.cavernFallProjectionZ;
             }
           }
-          if (tryTree) {
-            if (biome === 'spruce_forest' || biome === 'snow_plains') {
-              placeSpruceTree(state, seed, x, groundY, z);
-            } else if (biome === 'mountain_forest') {
-              placeTree(state, seed, x, groundY, z, { groundBlocks: [BLOCK.STONE, BLOCK.RED_EARTH, BLOCK.DIRT, BLOCK.SNOW] });
-            } else {
-              placeTree(state, seed, x, groundY, z);
-            }
-          } else if (tryCactus) placeCactus(state, seed, x, groundY, z);
-          else if (tryDryBush) placeDryBush(state, x, groundY, z);
-          else if (tryAlgae) placeAlgae(state, seed, x, groundY, z);
-          else if (tryGeyser) placeGeyser(state, x, groundY, z);
         }
       }
       generateBearDecorationsForColumn(state, seed, cx, cz, bounds);

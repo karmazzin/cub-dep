@@ -856,6 +856,20 @@
     ctx.lineTo(cx, cy + outer);
     ctx.stroke();
 
+    if (state.ui.petTargetName) {
+      const petName = String(state.ui.petTargetName);
+      ctx.font = 'bold 14px Arial';
+      const nameWidth = Math.min(canvas.width - 36, Math.ceil(ctx.measureText(petName).width + 24));
+      ctx.fillStyle = 'rgba(22,16,20,0.72)';
+      ctx.fillRect(cx - nameWidth / 2, cy - 48, nameWidth, 25);
+      ctx.strokeStyle = 'rgba(255,214,151,0.62)';
+      ctx.strokeRect(cx - nameWidth / 2 + 0.5, cy - 47.5, nameWidth - 1, 24);
+      ctx.fillStyle = '#fff4d6';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(petName, cx, cy - 35, nameWidth - 12);
+    }
+
     drawCompass(ctx, canvas, state);
 
     const player = state.player || {};
@@ -871,24 +885,25 @@
     const hudText = mobile
       ? `X:${x} Y:${y} Z:${z}  Биом: ${getCurrentBiomeLabel(state)}${flightText}`
       : `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}${flightText}`;
+    const hudTop = mobile ? 60 : 64;
     ctx.font = '13px Arial';
     const panelWidth = Math.min(canvas.width - (mobile ? 122 : 36), Math.ceil(ctx.measureText(hudText).width + 24));
     ctx.fillStyle = 'rgba(8,12,16,0.58)';
-    ctx.fillRect(18, 18, panelWidth, 26);
+    ctx.fillRect(18, hudTop, panelWidth, 26);
     ctx.fillStyle = '#f5f0df';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(hudText, 30, 32, panelWidth - 18);
+    ctx.fillText(hudText, 30, hudTop + 14, panelWidth - 18);
     if (!mobile) {
       const perfText = getPerfText(state);
       ctx.font = '12px Arial';
       const perfWidth = Math.min(canvas.width - 36, Math.ceil(ctx.measureText(perfText).width + 24));
       ctx.fillStyle = 'rgba(8,12,16,0.5)';
-      ctx.fillRect(18, 48, perfWidth, 24);
+      ctx.fillRect(18, hudTop + 30, perfWidth, 24);
       ctx.fillStyle = '#d8e6dc';
-      ctx.fillText(perfText, 30, 61, perfWidth - 18);
+      ctx.fillText(perfText, 30, hudTop + 43, perfWidth - 18);
     }
-    const survivalPanelBottom = drawHealthBar(ctx, canvas, state, mobile ? 52 : 78);
+    const survivalPanelBottom = drawHealthBar(ctx, canvas, state, mobile ? hudTop + 34 : hudTop + 60);
     drawEducationPanel(ctx, canvas, state, survivalPanelBottom);
 
     drawHotbar(ctx, canvas, state);

@@ -609,6 +609,26 @@ body {
   color: #f4f0e8;
 }
 
+.cavern-fall-link {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 31;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 223, 122, 0.58);
+  background: rgba(18, 17, 14, 0.78);
+  color: #ffe8a0;
+  font-size: 13px;
+  text-decoration: none;
+  pointer-events: auto;
+}
+
+.cavern-fall-link:hover,
+.cavern-fall-link:focus-visible {
+  background: rgba(56, 48, 29, 0.9);
+  color: #fff4cf;
+}
+
 .menu-mode-options {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1373,6 +1393,207 @@ body {
   line-height: 1.35;
 }
 
+.pets-root {
+  position: fixed;
+  inset: 0;
+  z-index: 16;
+  pointer-events: none;
+}
+
+.pets-open-button {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 223, 164, 0.52);
+  border-radius: 9px;
+  background: rgba(31, 22, 19, 0.82);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.3);
+  color: #fff4d5;
+  font: 700 14px "Marcellus", serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pets-open-button:hover {
+  background: rgba(63, 43, 34, 0.94);
+  transform: translateY(-1px);
+}
+
+.pets-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 10, 0.64);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.pets-dialog,
+.pet-mode-dialog {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 24px;
+  border: 1px solid rgba(255, 218, 151, 0.46);
+  border-radius: 16px;
+  background: linear-gradient(155deg, rgba(50, 37, 31, 0.98), rgba(18, 23, 25, 0.98));
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.56);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+
+.pets-dialog h2,
+.pet-mode-dialog h3 {
+  margin: 0 0 6px;
+  color: #ffe0a3;
+}
+
+.pets-close-button {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  color: #fff4df;
+  font-size: 27px;
+  cursor: pointer;
+}
+
+.pets-limit,
+.pets-cap-note,
+.pet-empty {
+  color: rgba(244, 240, 232, 0.72);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pet-create-form {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr auto;
+  gap: 10px;
+  align-items: end;
+  margin: 18px 0;
+  padding: 14px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.pet-create-form label {
+  display: grid;
+  gap: 6px;
+  color: rgba(255, 245, 224, 0.82);
+  font-size: 12px;
+}
+
+.pet-create-form select,
+.pet-create-form input,
+.pet-create-form button,
+.pet-hide-button,
+.pet-resume-button,
+.pet-status-button,
+.pet-mode-dialog button {
+  min-height: 38px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff8e8;
+  font: inherit;
+}
+
+.pet-create-form select,
+.pet-create-form input {
+  width: 100%;
+  padding: 0 10px;
+}
+
+.pet-create-form button,
+.pet-hide-button,
+.pet-resume-button,
+.pet-mode-dialog button {
+  padding: 0 13px;
+  cursor: pointer;
+}
+
+.pet-create-form button,
+.pet-mode-dialog button.is-selected {
+  border-color: rgba(255, 208, 122, 0.56);
+  background: rgba(180, 119, 55, 0.42);
+}
+
+.pet-hide-button {
+  border-color: rgba(255, 208, 122, 0.38);
+  background: rgba(124, 83, 47, 0.3);
+}
+
+.pets-carrier-title {
+  margin: 18px 0 9px;
+  color: #ffe0a3;
+  font-size: 17px;
+}
+
+.pet-collection {
+  display: grid;
+  gap: 8px;
+}
+
+.pet-collection-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border-left: 4px solid #d69a58;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.pet-kind-parrot { border-left-color: #48b96d; }
+.pet-kind-capybara { border-left-color: #a8754b; }
+.pet-kind-dog { border-left-color: #d99b61; }
+.pet-kind-cat { border-left-color: #e9a85e; }
+
+.pet-collection-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pet-collection-copy strong {
+  overflow: hidden;
+  color: #fff1ce;
+  text-overflow: ellipsis;
+}
+
+.pet-collection-copy span {
+  color: rgba(244, 240, 232, 0.62);
+  font-size: 12px;
+}
+
+.pet-status-button:disabled,
+.pet-resume-button:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.pet-mode-dialog {
+  width: min(340px, calc(100vw - 32px));
+  text-align: center;
+}
+
+.pet-mode-dialog button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+
 .is-hidden {
   display: none;
 }
@@ -1410,5 +1631,19 @@ body {
   .calculator-root {
     right: 12px;
     bottom: 82px;
+  }
+
+  .pets-open-button {
+    top: 12px;
+    left: 12px;
+  }
+
+  .pets-open-button span {
+    display: none;
+  }
+
+  .pet-create-form,
+  .pet-collection-row {
+    grid-template-columns: 1fr;
   }
 }

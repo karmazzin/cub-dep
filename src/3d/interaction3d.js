@@ -908,6 +908,17 @@
   }
 
   function deactivatePortalAtCore(state, coreX, coreY, coreZ, axis) {
+    const dimension = state.worldMeta && state.worldMeta.currentDimension === 'underground' ? 'underground' : 'overworld';
+    const links = state.worldMeta && Array.isArray(state.worldMeta.portalLinks) ? state.worldMeta.portalLinks : [];
+    const hasRegisteredCore = links.some((link) => {
+      const portal = link && link[dimension];
+      return portal
+        && (portal.axis || 'x') === axis
+        && portal.x === coreX
+        && portal.y === coreY
+        && portal.z === coreZ;
+    });
+    if (!hasRegisteredCore) return;
     for (const pos of portalInnerPositions(coreX, coreY, coreZ, axis)) {
       if (getBlock3D(state, pos.x, pos.y, pos.z) === BLOCK.ACTIVE_STRANGE_PORTAL) setBlock3D(state, pos.x, pos.y, pos.z, BLOCK.AIR);
     }
@@ -1782,7 +1793,8 @@
     if ((blockId === ITEM.FILLED_CHEST || blockId === ITEM.FILLED_STONE_CHEST) && Game.inventory3d && Game.inventory3d.restoreFilledChest) Game.inventory3d.restoreFilledChest(state, x, y, z, stack && stack.data);
     if (placedBlockId === BLOCK.CUSTOM_TNT) setBlockDataAt(state, x, y, z, customTntStackData(stack && stack.data));
     if (survival && Game.inventory3d) Game.inventory3d.consumeSelectedHotbarItem(state, 1);
-    syncNearbyStrangePortals(state, x, y, z);
+    if (placedBlockId === BLOCK.ACTIVE_STRANGE_PORTAL) ensurePortalLink(state, x, y, z, 'x');
+    else syncNearbyStrangePortals(state, x, y, z);
     if (Game.education3d && Game.education3d.onBlockPlaced) Game.education3d.onBlockPlaced(state, placedBlockId);
     if (placedBlockId === BLOCK.RULER) handleRulerPlaced(state, x, y, z);
     return true;
@@ -1855,22 +1867,21 @@
       }
       return;
     }
-    const expandedCreativeBlock = !!(state.worldMeta
+    const retiredExplosionBlock = blockId === BLOCK.TNT_TABLE || blockId === BLOCK.CUSTOM_TNT;
+    const expandedCreativeBlock = !!(!retiredExplosionBlock
+      && state.worldMeta
       && state.worldMeta.mode === 'creative'
       && state.worldMeta.expandedBlockAssortment
       && Object.values(BLOCK).includes(blockId)
-      && blockId !== BLOCK.AIR);
-    const explosionPackBlock = !!(state.worldMeta
-      && state.worldMeta.mode === 'creative'
-      && state.worldMeta.explosionPackEnabled
-      && (blockId === BLOCK.TNT_TABLE || blockId === BLOCK.CUSTOM_TNT));
-    const canPlaceSelected = expandedCreativeBlock
-      || explosionPackBlock
+      && blockId !== BLOCK.AIR
+      && blockId !== BLOCK.TNT_TABLE
+      && blockId !== BLOCK.CUSTOM_TNT);
+    const canPlaceSelected = !retiredExplosionBlock && (expandedCreativeBlock
       || blockId === BLOCK.WATER
       || blockId === BLOCK.LAVA
       || blockId === ITEM.FILLED_CHEST
       || blockId === ITEM.FILLED_STONE_CHEST
-      || (Game.blocks.PLACEABLE && Game.blocks.PLACEABLE.has(blockId));
+      || (Game.blocks.PLACEABLE && Game.blocks.PLACEABLE.has(blockId)));
     if (!canPlaceSelected) {
       setNotice(state, 'Этот предмет нельзя поставить');
       return;

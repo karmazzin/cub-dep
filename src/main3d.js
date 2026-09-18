@@ -6,6 +6,7 @@
   const menuRoot = document.getElementById('menuRoot');
   const inventoryRoot = document.getElementById('inventoryRoot');
   const mapRoot = document.getElementById('mapRoot');
+  const petsRoot = document.getElementById('petsRoot');
 
   let state = null;
   let screen = 'menu';
@@ -19,7 +20,7 @@
   let autosavePending = false;
   let autosaveBaseWorldId = '';
   let dimensionSwitching = false;
-  const input = Game.input3d.createInput3D(canvas3d, () => state);
+  const input = Game.input3d.createInput3D(canvas3d, () => state, overlay);
   const AUTOSAVE_WORLD_ID = '__autosave__';
   const AUTOSAVE_INTERVAL_MS = 10000;
   const MAP_BITMAP_SIZE = 512;
@@ -224,11 +225,10 @@
     const form = document.getElementById('newWorldForm');
     if (!form) return;
     const expandedInput = form.querySelector('input[name="expandedBlockAssortment"]');
-    const explosionInput = form.querySelector('input[name="explosionPackEnabled"]');
     const survivalInput = form.querySelector('input[name="mode"][value="survival"]');
     const creativeInput = form.querySelector('input[name="mode"][value="creative"]');
     if (!survivalInput || !creativeInput) return;
-    const forced = !!((expandedInput && expandedInput.checked) || (explosionInput && explosionInput.checked));
+    const forced = !!(expandedInput && expandedInput.checked);
     survivalInput.disabled = forced;
     if (forced) creativeInput.checked = true;
   }
@@ -258,15 +258,16 @@
     const chunkRenderDistance = normalizeChunkRenderDistance(form.chunkRenderDistance);
     const spawnBiome = normalizeSpawnBiome(form.spawnBiome);
     const expandedBlockAssortment = form.expandedBlockAssortment === true;
-    const explosionPackEnabled = form.explosionPackEnabled === true;
+    const cavernFall = Game.easterEggs3d
+      ? Game.easterEggs3d.resolveCavernFallSelection(form.easterEgg)
+      : { easterEgg: '', cavernFallAxis: '' };
     return {
       id: `world-${Date.now().toString(36)}`,
       name: form.name && form.name.trim() ? form.name.trim() : 'Новый мир',
       seed: form.seed && form.seed.trim() ? form.seed.trim() : makeSeed(),
-      mode: expandedBlockAssortment || explosionPackEnabled || form.mode === 'creative' ? 'creative' : 'survival',
+      mode: expandedBlockAssortment || form.mode === 'creative' ? 'creative' : 'survival',
       shadersEnabled: form.shadersEnabled === true,
       expandedBlockAssortment,
-      explosionPackEnabled,
       playerSkin: normalizePlayerSkin(form.playerSkin || getStoredPlayerSkin()),
       chunkRenderDistance,
       spawnBiome,
@@ -275,6 +276,8 @@
       worldType: 'normal',
       singleBiome: 'forest',
       cavernBiome: 'mix',
+      easterEgg: cavernFall.easterEgg,
+      cavernFallAxis: cavernFall.cavernFallAxis,
       kind: '3d',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -576,9 +579,17 @@
     if (mapRoot) mapRoot.classList.toggle('is-hidden', !mapVisible);
     canvas3d.classList.toggle('is-hidden', !worldVisible);
     overlay.classList.toggle('is-hidden', !worldVisible);
+    const cavernFallLink = document.getElementById('cavernFallLink');
+    if (cavernFallLink && Game.easterEggs3d) {
+      cavernFallLink.classList.toggle(
+        'is-hidden',
+        !Game.easterEggs3d.shouldShowCavernFallLink(state && state.worldMeta, worldVisible)
+      );
+    }
     menuRoot.classList.toggle('is-pause-menu', screen === 'paused');
     if (Game.renderer3d) Game.renderer3d.setVisible(canvas3d, worldVisible);
     if (state && state.pause) state.pause.open = screen === 'paused' || screen === 'inventory' || screen === 'map';
+    if (Game.pets3d && Game.pets3d.setPetsUIVisible) Game.pets3d.setPetsUIVisible(screen === 'playing');
   }
 
   function renderUnifiedMenu(context = screen === 'paused' ? 'pause' : 'start', view = 'main', options = {}) {
@@ -993,6 +1004,13 @@
           ${renderSpawnBiomeOptions()}
         </select>
       </label>
+      <label class="menu-field">
+        <span>Пасхалка</span>
+        <select name="easterEgg">
+          <option value="" selected>Не выбрано</option>
+          <option value="cavern_fall">Cavern Fall</option>
+        </select>
+      </label>
       <label class="menu-check">
         <input type="checkbox" name="shadersEnabled" value="1" />
         <span>Шейдеры</span>
@@ -1000,10 +1018,6 @@
       <label class="menu-check">
         <input type="checkbox" name="expandedBlockAssortment" value="1" />
         <span>Расширенный ассортимент блоков</span>
-      </label>
-      <label class="menu-check">
-        <input type="checkbox" name="explosionPackEnabled" value="1" />
-        <span>Дополнение "Куча взрывов"</span>
       </label>
       <div class="menu-field">
         <span>Режим</span>
@@ -2404,7 +2418,15 @@
     if (itemStack && Game.inventory3d && Game.inventory3d.ensureMapData) {
       drawItemMapCells(ctx, x, y, scale, Game.inventory3d.ensureMapData(itemStack));
     } else {
-      ctx.drawImage(bitmap, x, y, viewW, viewH);
+      const cavernAxis = state.worldMeta && state.worldMeta.easterEgg === 'cavern_fall'
+        ? state.worldMeta.cavernFallAxis
+        : '';
+      const minBandSize = 24 * window.devicePixelRatio;
+      const bitmapX = cavernAxis === 'x' ? x + viewW / 2 - Math.max(viewW, minBandSize) / 2 : x;
+      const bitmapY = cavernAxis === 'z' ? y + viewH / 2 - Math.max(viewH, minBandSize) / 2 : y;
+      const bitmapW = cavernAxis === 'x' ? Math.max(viewW, minBandSize) : viewW;
+      const bitmapH = cavernAxis === 'z' ? Math.max(viewH, minBandSize) : viewH;
+      ctx.drawImage(bitmap, bitmapX, bitmapY, bitmapW, bitmapH);
     }
     ctx.strokeStyle = 'rgba(255,255,255,0.42)';
     ctx.lineWidth = Math.max(1, window.devicePixelRatio);
@@ -2691,8 +2713,8 @@
 
       let nextWorld = state.dimensionWorlds[targetDimension];
       if (!nextWorld) {
-        const constants = Game.constants3d;
-        nextWorld = Game.world3d.createWorld3D(constants.WORLD_W, constants.WORLD_H, constants.WORLD_D);
+        const dimensions = Game.state3d.getWorldDimensions3D(state.worldMeta, targetDimension);
+        nextWorld = Game.world3d.createWorld3D(dimensions.w, dimensions.h, dimensions.d);
         state.dimensionWorlds[targetDimension] = nextWorld;
       }
       state.world = nextWorld;
@@ -2802,6 +2824,7 @@
     const canLeave = await askSaveCurrentWorld();
     if (!canLeave) return;
     input.resetMovement();
+    if (Game.pets3d && Game.pets3d.cancelPetRecording3D) Game.pets3d.cancelPetRecording3D();
     mapDrag = null;
     state = null;
     renderUnifiedMenu('start', 'main');
@@ -2847,6 +2870,7 @@
     t0 = performance.now();
     if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
     if (Game.bots3d) Game.bots3d.updateBots3D(state, dt);
+    if (Game.pets3d) Game.pets3d.updatePets3D(state, input.input, actions, dt);
     state.perf.entitiesMs = performance.now() - t0;
     t0 = performance.now();
     Game.interaction3d.updateInteraction3D(state, input.input, actions, dt);
@@ -2903,10 +2927,10 @@
       mode: data.get('mode') || 'survival',
       shadersEnabled: data.get('shadersEnabled') === '1',
       expandedBlockAssortment: data.get('expandedBlockAssortment') === '1',
-      explosionPackEnabled: data.get('explosionPackEnabled') === '1',
       playerSkin: getStoredPlayerSkin(),
       chunkRenderDistance: data.get('chunkRenderDistance') || 'auto',
       spawnBiome: data.get('spawnBiome') || 'any',
+      easterEgg: data.get('easterEgg') || '',
       botsEnabled: event.target.dataset.botsEnabled === 'true',
     });
   });
@@ -3074,7 +3098,7 @@
     if (element && element.name === 'spawnBiome') {
       syncSpawnSeedInput();
     }
-    if (element && (element.name === 'expandedBlockAssortment' || element.name === 'explosionPackEnabled')) {
+    if (element && element.name === 'expandedBlockAssortment') {
       syncCreativeForcedInputs();
     }
     if (action === 'education-custom-code-select') {
@@ -3287,6 +3311,7 @@
     if (document.visibilityState === 'hidden') triggerAutosave(true);
   });
   renderUnifiedMenu('start', 'main');
+  if (Game.pets3d && Game.pets3d.initPetsUI) Game.pets3d.initPetsUI(petsRoot, () => state, canvas3d);
   setScreen('menu');
   requestAnimationFrame(loop);
 })();

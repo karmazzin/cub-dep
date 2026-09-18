@@ -22,7 +22,30 @@
     return copy;
   }
 
+  function getCavernFallAxis(worldMeta) {
+    const cavernFall = worldMeta && worldMeta.easterEgg === 'cavern_fall';
+    return cavernFall && (worldMeta.cavernFallAxis === 'x' || worldMeta.cavernFallAxis === 'z')
+      ? worldMeta.cavernFallAxis
+      : '';
+  }
+
+  function getWorldDimensions3D(worldMeta = null, dimension = null) {
+    const axis = getCavernFallAxis(worldMeta);
+    const activeDimension = dimension || (worldMeta && worldMeta.currentDimension) || 'overworld';
+    const narrowAxis = activeDimension === 'underground' ? '' : axis;
+    return {
+      w: narrowAxis === 'x' ? 1 : WORLD_W,
+      h: WORLD_H,
+      d: narrowAxis === 'z' ? 1 : WORLD_D,
+    };
+  }
+
   function createGameState3D(worldMeta = null) {
+    const cavernFallAxis = getCavernFallAxis(worldMeta);
+    const dimensions = getWorldDimensions3D(worldMeta);
+    const pets = worldMeta && Array.isArray(worldMeta.pets)
+      ? worldMeta.pets.map((pet) => ({ ...pet }))
+      : [];
     return {
       worldMeta: {
         id: worldMeta && worldMeta.id ? worldMeta.id : null,
@@ -39,6 +62,8 @@
         worldType: worldMeta && worldMeta.worldType ? worldMeta.worldType : 'normal',
         singleBiome: worldMeta && worldMeta.singleBiome ? worldMeta.singleBiome : 'forest',
         cavernBiome: worldMeta && worldMeta.cavernBiome ? worldMeta.cavernBiome : 'mix',
+        easterEgg: cavernFallAxis ? 'cavern_fall' : '',
+        cavernFallAxis,
         botsEnabled: !!(worldMeta && worldMeta.botsEnabled),
         currentDimension: worldMeta && worldMeta.currentDimension ? worldMeta.currentDimension : 'overworld',
         portalLinks: worldMeta && Array.isArray(worldMeta.portalLinks) ? worldMeta.portalLinks.map((link) => ({ ...link })) : [],
@@ -50,12 +75,13 @@
         createdAt: worldMeta && worldMeta.createdAt ? worldMeta.createdAt : Date.now(),
         updatedAt: worldMeta && worldMeta.updatedAt ? worldMeta.updatedAt : Date.now(),
         player: worldMeta && worldMeta.player ? { ...worldMeta.player } : null,
+        pets,
       },
-      world: createWorld3D(WORLD_W, WORLD_H, WORLD_D),
+      world: createWorld3D(dimensions.w, dimensions.h, dimensions.d),
       player: {
-        x: WORLD_W / 2,
-        y: WORLD_H,
-        z: WORLD_D / 2,
+        x: dimensions.w / 2,
+        y: dimensions.h,
+        z: dimensions.d / 2,
         vx: 0,
         vy: 0,
         vz: 0,
@@ -104,8 +130,8 @@
         mobileMoveY: 0,
         mobileHotbarPage: 0,
         mapZoom: 1,
-        mapCenterX: WORLD_W / 2,
-        mapCenterZ: WORLD_D / 2,
+        mapCenterX: dimensions.w / 2,
+        mapCenterZ: dimensions.d / 2,
         mapBitmap: null,
         mapBitmapKey: '',
         mapWaypoint: null,
@@ -117,6 +143,7 @@
       entities: {
         sheep: [],
         bots: [],
+        pets,
       },
       pause: {
         open: false,
@@ -124,5 +151,5 @@
     };
   }
 
-  Game.state3d = { createGameState3D, normalizePlayerSkin, DEFAULT_PLAYER_SKIN };
+  Game.state3d = { createGameState3D, getWorldDimensions3D, normalizePlayerSkin, DEFAULT_PLAYER_SKIN };
 })();

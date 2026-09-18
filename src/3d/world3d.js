@@ -138,8 +138,18 @@
     return x >= 0 && x < world.w && y >= 0 && y < world.h && z >= 0 && z < world.d;
   }
 
+  function projectGenerationCoords(world, x, z) {
+    return {
+      x: Number.isFinite(world && world.cavernFallProjectionX) ? x - world.cavernFallProjectionX : x,
+      z: Number.isFinite(world && world.cavernFallProjectionZ) ? z - world.cavernFallProjectionZ : z,
+    };
+  }
+
   function getBlock3D(state, x, y, z) {
     const world = state && state.world;
+    const projected = projectGenerationCoords(world, x, z);
+    x = projected.x;
+    z = projected.z;
     if (!world || !inBounds3D(world, x, y, z)) return BLOCK.BEDROCK;
     const entry = getChunkForBlock3D(world, x, y, z, false);
     return entry ? entry.chunk.blocks[entry.index] : BLOCK.AIR;
@@ -207,6 +217,9 @@
 
   function setBlock3D(state, x, y, z, id) {
     const world = state && state.world;
+    const projected = projectGenerationCoords(world, x, z);
+    x = projected.x;
+    z = projected.z;
     if (!world || !inBounds3D(world, x, y, z)) return false;
     let entry = getChunkForBlock3D(world, x, y, z, false);
     if (!entry && id === BLOCK.AIR) return false;
@@ -246,6 +259,9 @@
 
   function getGrassLevel3D(state, x, y, z) {
     const world = state && state.world;
+    const projected = projectGenerationCoords(world, x, z);
+    x = projected.x;
+    z = projected.z;
     if (!world || !inBounds3D(world, x, y, z)) return 0;
     const entry = getChunkForBlock3D(world, x, y, z, false);
     if (!entry) return 0;
@@ -256,6 +272,9 @@
 
   function setGrassLevel3D(state, x, y, z, level, options = {}) {
     const world = state && state.world;
+    const projected = projectGenerationCoords(world, x, z);
+    x = projected.x;
+    z = projected.z;
     if (!world || !inBounds3D(world, x, y, z)) return false;
     const entry = getChunkForBlock3D(world, x, y, z, false);
     if (!entry) return false;

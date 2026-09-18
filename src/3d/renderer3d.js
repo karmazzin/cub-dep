@@ -57,6 +57,7 @@
   let previewFluidCapacity = 0;
   let previewTntMesh = null;
   let sheepMeshes = new Map();
+  let petMeshes = new Map();
   let botMeshes = new Map();
   let movingBlockMeshes = new Map();
   let customTntLabelSprites = new Map();
@@ -447,16 +448,20 @@
   function drawStrangePortalTile(ctx, rng, id, x, y, size) {
     const base = hexToRgb(BLOCK_COLORS[id] || '#251d31');
     if (id === BLOCK.ACTIVE_STRANGE_PORTAL) {
-      fillPixelNoise(ctx, rng, base, x, y, size, 18, 3);
-      ctx.fillStyle = 'rgba(230,230,230,0.42)';
-      ctx.fillRect(x + size * 0.18, y + size * 0.18, size * 0.64, size * 0.64);
-      ctx.strokeStyle = '#d0d0d0';
-      ctx.lineWidth = Math.max(1, Math.floor(size / 12));
+      fillPixelNoise(ctx, rng, { r: 44, g: 18, b: 74 }, x, y, size, 26, 4);
+      ctx.fillStyle = '#6f32a8';
+      ctx.fillRect(x + size * 0.12, y + size * 0.12, size * 0.76, size * 0.76);
+      ctx.fillStyle = '#a860e2';
+      ctx.fillRect(x + size * 0.22, y + size * 0.22, size * 0.56, size * 0.56);
+      ctx.strokeStyle = '#f0c8ff';
+      ctx.lineWidth = Math.max(2, Math.floor(size / 10));
       ctx.beginPath();
-      ctx.moveTo(x + size * 0.28, y + size * 0.5);
-      ctx.quadraticCurveTo(x + size * 0.5, y + size * 0.22, x + size * 0.72, y + size * 0.5);
-      ctx.quadraticCurveTo(x + size * 0.5, y + size * 0.78, x + size * 0.28, y + size * 0.5);
+      ctx.moveTo(x + size * 0.20, y + size * 0.5);
+      ctx.quadraticCurveTo(x + size * 0.5, y + size * 0.12, x + size * 0.80, y + size * 0.5);
+      ctx.quadraticCurveTo(x + size * 0.5, y + size * 0.88, x + size * 0.20, y + size * 0.5);
       ctx.stroke();
+      ctx.fillStyle = '#241036';
+      ctx.fillRect(x + size * 0.45, y + size * 0.45, size * 0.10, size * 0.10);
       return;
     }
     fillPixelNoise(ctx, rng, base, x, y, size, 32, 2);
@@ -2627,6 +2632,142 @@
     return root;
   }
 
+  function createPetMicrophoneSprite() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 64, 64);
+    ctx.fillStyle = 'rgba(20,24,30,0.72)';
+    ctx.beginPath();
+    ctx.arc(32, 32, 25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ff665c';
+    ctx.fillStyle = '#ff665c';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(24, 12, 16, 29, 8);
+      ctx.fill();
+    } else {
+      ctx.fillRect(24, 16, 16, 21);
+      ctx.beginPath();
+      ctx.arc(32, 16, 8, Math.PI, 0);
+      ctx.arc(32, 37, 8, 0, Math.PI);
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.arc(32, 31, 15, 0, Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(32, 46);
+    ctx.lineTo(32, 54);
+    ctx.moveTo(23, 54);
+    ctx.lineTo(41, 54);
+    ctx.stroke();
+    const texture = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+    sprite.position.set(0, 0.12, 0);
+    sprite.scale.set(0.52, 0.52, 0.52);
+    sprite.visible = false;
+    return sprite;
+  }
+
+  function petPart(parent, color, size, position) {
+    const part = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat(color));
+    part.position.set(position[0], position[1], position[2]);
+    parent.add(part);
+    return part;
+  }
+
+  function addPetFace(root, headX, eyeY, eyeSpread, faceX) {
+    const white = mat(0xfffbec);
+    const pupil = mat(0x181617);
+    for (const z of [-eyeSpread, eyeSpread]) {
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.15, 0.13), white);
+      eye.position.set(faceX, eyeY, z);
+      root.add(eye);
+      const dot = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.07, 0.055), pupil);
+      dot.position.set(faceX + 0.025, eyeY, z);
+      root.add(dot);
+    }
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.15), pupil);
+    mouth.position.set(faceX + 0.02, eyeY - 0.17, 0);
+    root.add(mouth);
+    root.userData.faceX = headX;
+  }
+
+  function createPetMesh(type) {
+    const root = new THREE.Group();
+    if (type === 'cat') {
+      petPart(root, 0xd8904e, [0.62, 0.34, 0.34], [0, 0.42, 0]);
+      const head = petPart(root, 0xe4a15b, [0.42, 0.42, 0.42], [0.43, 0.62, 0]);
+      const earL = petPart(root, 0xd47d43, [0.16, 0.2, 0.12], [0.43, 0.9, -0.14]);
+      const earR = petPart(root, 0xd47d43, [0.16, 0.2, 0.12], [0.43, 0.9, 0.14]);
+      earL.rotation.z = 0.35;
+      earR.rotation.z = 0.35;
+      const tail = petPart(root, 0xd8904e, [0.12, 0.58, 0.12], [-0.42, 0.61, 0]);
+      tail.rotation.z = -0.48;
+      for (const [x, z] of [[-0.18, -0.12], [-0.18, 0.12], [0.18, -0.12], [0.18, 0.12]]) petPart(root, 0xb9663c, [0.09, 0.3, 0.09], [x, 0.17, z]);
+      addPetFace(root, 0.43, 0.68, 0.12, 0.65);
+      petPart(root, 0xf6b2a0, [0.05, 0.07, 0.08], [0.68, 0.57, 0]);
+      root.userData.head = head;
+      root.userData.tail = tail;
+    } else if (type === 'dog') {
+      petPart(root, 0xb97843, [0.72, 0.4, 0.4], [0, 0.43, 0]);
+      const head = petPart(root, 0xcf9258, [0.46, 0.48, 0.46], [0.48, 0.65, 0]);
+      petPart(root, 0x78482f, [0.16, 0.34, 0.13], [0.47, 0.59, -0.28]);
+      petPart(root, 0x78482f, [0.16, 0.34, 0.13], [0.47, 0.59, 0.28]);
+      petPart(root, 0xe0aa72, [0.22, 0.18, 0.27], [0.74, 0.57, 0]);
+      petPart(root, 0x28201d, [0.06, 0.08, 0.12], [0.88, 0.61, 0]);
+      const tongue = petPart(root, 0xf17f91, [0.04, 0.14, 0.1], [0.83, 0.44, 0]);
+      const tail = petPart(root, 0x9c6038, [0.4, 0.12, 0.12], [-0.52, 0.62, 0]);
+      tail.rotation.z = 0.42;
+      for (const [x, z] of [[-0.23, -0.14], [-0.23, 0.14], [0.23, -0.14], [0.23, 0.14]]) petPart(root, 0x875332, [0.1, 0.34, 0.1], [x, 0.18, z]);
+      addPetFace(root, 0.48, 0.73, 0.13, 0.72);
+      root.userData.head = head;
+      root.userData.tail = tail;
+      root.userData.tongue = tongue;
+    } else if (type === 'capybara') {
+      petPart(root, 0x9b6b43, [0.9, 0.48, 0.5], [-0.04, 0.42, 0]);
+      const head = petPart(root, 0xaa7950, [0.5, 0.52, 0.48], [0.48, 0.58, 0]);
+      petPart(root, 0x6f4932, [0.14, 0.15, 0.13], [0.41, 0.9, -0.16]);
+      petPart(root, 0x6f4932, [0.14, 0.15, 0.13], [0.41, 0.9, 0.16]);
+      petPart(root, 0xb98a62, [0.26, 0.2, 0.34], [0.78, 0.54, 0]);
+      petPart(root, 0x30251f, [0.06, 0.08, 0.16], [0.93, 0.6, 0]);
+      for (const [x, z] of [[-0.3, -0.16], [-0.3, 0.16], [0.24, -0.16], [0.24, 0.16]]) petPart(root, 0x755039, [0.12, 0.3, 0.12], [x, 0.16, z]);
+      addPetFace(root, 0.48, 0.7, 0.14, 0.74);
+      root.userData.head = head;
+    } else {
+      petPart(root, 0x39a85a, [0.36, 0.48, 0.34], [0, 0.42, 0]);
+      const head = petPart(root, 0xe9d94d, [0.42, 0.42, 0.4], [0.2, 0.76, 0]);
+      const wingL = petPart(root, 0x2f73c8, [0.32, 0.38, 0.1], [-0.04, 0.48, -0.24]);
+      const wingR = petPart(root, 0x2f73c8, [0.32, 0.38, 0.1], [-0.04, 0.48, 0.24]);
+      const upperBeak = petPart(root, 0xf39a35, [0.24, 0.14, 0.18], [0.52, 0.75, 0]);
+      const lowerBeak = petPart(root, 0xc9672d, [0.18, 0.08, 0.15], [0.47, 0.66, 0]);
+      petPart(root, 0xd83f43, [0.34, 0.36, 0.12], [-0.13, 0.16, 0]);
+      addPetFace(root, 0.2, 0.83, 0.12, 0.42);
+      root.userData.head = head;
+      root.userData.wingL = wingL;
+      root.userData.wingR = wingR;
+      root.userData.upperBeak = upperBeak;
+      root.userData.lowerBeak = lowerBeak;
+    }
+    const microphone = createPetMicrophoneSprite();
+    root.add(microphone);
+    root.userData.microphone = microphone;
+    root.userData.petType = type;
+    return root;
+  }
+
+  function disposePetMeshes() {
+    for (const mesh of petMeshes.values()) {
+      scene.remove(mesh);
+      disposeObject3D(mesh);
+    }
+    petMeshes.clear();
+  }
+
   function applyBearVariant(mesh, variant) {
     if (!mesh || (variant !== 'snow' && variant !== 'brown')) return;
     mesh.traverse((child) => {
@@ -2849,6 +2990,70 @@
       sheepMeshes.delete(id);
     }
     if (debugInfo) debugInfo.sheep = sheep.length;
+  }
+
+  function syncPetMeshes(state) {
+    if (!scene) return;
+    const pets = state.entities && Array.isArray(state.entities.pets)
+      ? state.entities.pets.filter((pet) => pet && pet.active)
+      : [];
+    const live = new Set();
+    const playerChunk = getPlayerChunk(state.player);
+    const renderDistance = getChunkRenderDistanceValue(state.worldMeta);
+    const now = performance.now() * 0.001;
+    for (const pet of pets) {
+      live.add(pet.id);
+      let mesh = petMeshes.get(pet.id);
+      if (!mesh || mesh.userData.petType !== pet.type) {
+        if (mesh) {
+          scene.remove(mesh);
+          disposeObject3D(mesh);
+        }
+        mesh = createPetMesh(pet.type);
+        petMeshes.set(pet.id, mesh);
+        scene.add(mesh);
+      }
+      const walk = pet.moving ? Math.sin(now * (pet.type === 'capybara' ? 7 : 11)) : 0;
+      const idle = Math.sin(now * 2.1 + pet.x * 0.7) * 0.025;
+      const jumpDuration = Number.isFinite(pet.jumpDuration) && pet.jumpDuration > 0 ? pet.jumpDuration : 0.42;
+      const jumpProgress = Math.max(0, Math.min(1, 1 - (pet.jumpTimer || 0) / jumpDuration));
+      const jumpLift = pet.jumpTimer > 0 ? Math.sin(jumpProgress * Math.PI) * 0.28 : 0;
+      mesh.position.set(pet.x, pet.y + jumpLift + (pet.moving ? Math.abs(walk) * 0.025 : idle), pet.z);
+      mesh.rotation.set(0, -(pet.yaw || 0), 0);
+      const head = mesh.userData.head;
+      if (head) {
+        head.rotation.z = pet.mode === 'wait' ? Math.sin(now * 1.5 + pet.z) * 0.08 : walk * 0.035;
+        head.rotation.y = pet.mode === 'wait' ? Math.sin(now * 0.8 + pet.x) * 0.12 : 0;
+      }
+      const tail = mesh.userData.tail;
+      if (tail) tail.rotation.y = Math.sin(now * (pet.type === 'dog' ? 10 : 4.5)) * (pet.type === 'dog' ? 0.65 : 0.28);
+      const wingL = mesh.userData.wingL;
+      const wingR = mesh.userData.wingR;
+      if (wingL && wingR) {
+        const flap = Math.sin(now * (pet.moving ? 13 : 4)) * (pet.moving ? 0.72 : 0.12);
+        wingL.rotation.x = flap;
+        wingR.rotation.x = -flap;
+      }
+      const speaking = Game.pets3d && Game.pets3d.isPetSpeaking3D && Game.pets3d.isPetSpeaking3D(pet.id);
+      if (mesh.userData.lowerBeak) mesh.userData.lowerBeak.position.y = 0.66 - (speaking ? (0.04 + Math.abs(Math.sin(now * 16)) * 0.08) : 0);
+      const microphone = mesh.userData.microphone;
+      if (microphone) {
+        microphone.visible = !!(Game.pets3d && Game.pets3d.isPetRecording3D && Game.pets3d.isPetRecording3D(pet.id));
+        if (microphone.visible) microphone.scale.setScalar(0.48 + Math.sin(now * 5) * 0.05);
+      }
+      const cx = Math.floor(pet.x / CHUNK_SIZE);
+      const cz = Math.floor(pet.z / CHUNK_SIZE);
+      const dx = cx - playerChunk.cx;
+      const dz = cz - playerChunk.cz;
+      mesh.visible = dx * dx + dz * dz <= renderDistance * renderDistance;
+    }
+    for (const [id, mesh] of petMeshes) {
+      if (live.has(id)) continue;
+      scene.remove(mesh);
+      disposeObject3D(mesh);
+      petMeshes.delete(id);
+    }
+    if (debugInfo) debugInfo.pets = pets.length;
   }
 
   function syncBotMeshes(state) {
@@ -3129,6 +3334,7 @@
   function setWorld(state) {
     disposeSheepMeshes();
     disposeBotMeshes();
+    disposePetMeshes();
     applyShaderProfile(state);
     disposePlayerModel();
     if (firstPersonGroup) {
@@ -3250,6 +3456,7 @@
     updateDynamiteOverlays(state);
     updatePreviewOverlay(state);
     syncSheepMeshes(state);
+    syncPetMeshes(state);
     syncBotMeshes(state);
     syncMovingBlockMeshes(state);
     updateCustomTntLabels(state);
