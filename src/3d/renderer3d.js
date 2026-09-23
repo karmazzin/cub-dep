@@ -2389,6 +2389,74 @@
     return new THREE.MeshBasicMaterial({ color });
   }
 
+  function addAnimalFace(root, head, type) {
+    if (!root || !head || !Game.faces3d || !Game.faces3d.getFaceProfile3D) return;
+    const profile = Game.faces3d.getFaceProfile3D(type);
+    if (!profile) return;
+    const eyeMaterial = mat(0xfffbec);
+    const pupilMaterial = mat(0x181617);
+    const highlightMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const faceEyes = [];
+    for (const z of [-profile.eyeSpread, profile.eyeSpread]) {
+      const group = new THREE.Group();
+      group.position.set(profile.faceX, profile.eyeY, z);
+      head.add(group);
+
+      const eye = new THREE.Mesh(
+        new THREE.BoxGeometry(profile.eyeDepth, profile.eyeHeight, profile.eyeWidth),
+        eyeMaterial
+      );
+      group.add(eye);
+
+      const pupil = new THREE.Mesh(
+        new THREE.BoxGeometry(profile.pupilDepth, profile.pupilHeight, profile.pupilWidth),
+        pupilMaterial
+      );
+      pupil.position.x = (profile.eyeDepth + profile.pupilDepth) * 0.5 + 0.001;
+      group.add(pupil);
+
+      const highlightDepth = Math.max(0.006, profile.pupilDepth * 0.65);
+      const highlight = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          highlightDepth,
+          Math.max(0.012, profile.pupilHeight * 0.28),
+          Math.max(0.01, profile.pupilWidth * 0.28)
+        ),
+        highlightMaterial
+      );
+      highlight.position.set(
+        (profile.pupilDepth + highlightDepth) * 0.5 + 0.001,
+        profile.pupilHeight * 0.2,
+        -profile.pupilWidth * 0.18
+      );
+      pupil.add(highlight);
+      faceEyes.push({ group, eye, pupil, highlight, profile });
+    }
+    root.userData.faceEyes = faceEyes;
+
+    if (Number.isFinite(profile.mouthY)) {
+      const mouth = new THREE.Mesh(
+        new THREE.BoxGeometry(profile.mouthDepth, profile.mouthHeight, profile.mouthWidth),
+        pupilMaterial
+      );
+      mouth.position.set(profile.faceX + 0.002, profile.mouthY, 0);
+      head.add(mouth);
+      root.userData.faceMouth = mouth;
+    }
+  }
+
+  function updateAnimalFace(root, id, timeSeconds, forceClosed = false) {
+    const eyes = root && root.userData && root.userData.faceEyes;
+    if (!eyes || !eyes.length || !Game.faces3d || !Game.faces3d.getFaceAnimation3D) return;
+    const animation = Game.faces3d.getFaceAnimation3D(id, timeSeconds);
+    const eyeOpen = forceClosed ? 0.04 : Math.max(0.04, animation.eyeOpen);
+    for (const assembly of eyes) {
+      assembly.group.scale.set(1, eyeOpen, 1);
+      assembly.pupil.position.y = animation.pupilY * assembly.profile.pupilTravelY;
+      assembly.pupil.position.z = animation.pupilX * assembly.profile.pupilTravelX;
+    }
+  }
+
   function createSleepZSprite() {
     const canvas = document.createElement('canvas');
     canvas.width = 64;
@@ -2423,6 +2491,7 @@
       head.position.set(0.6, 0.48, 0);
       root.add(head);
       root.userData.head = head;
+      addAnimalFace(root, head, 'boar');
       for (const [x, z] of [[-0.32, -0.15], [-0.32, 0.15], [0.28, -0.15], [0.28, 0.15]]) {
         const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.28, 0.1), dark);
         leg.position.set(x, 0.18, z);
@@ -2441,6 +2510,7 @@
       head.position.set(0.45, 0.2, 0);
       root.add(head);
       root.userData.head = head;
+      addAnimalFace(root, head, 'turtle');
       return root;
     }
     if (type === 'snake') {
@@ -2455,6 +2525,7 @@
       head.position.set(0.78, 0.16, 0);
       root.add(head);
       root.userData.head = head;
+      addAnimalFace(root, head, 'snake');
       return root;
     }
     if (type === 'goat') {
@@ -2467,6 +2538,7 @@
       head.position.set(0.48, 0.62, 0);
       root.add(head);
       root.userData.head = head;
+      addAnimalFace(root, head, 'goat');
       const hornA = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.05), mat(0xe8dfc6));
       hornA.position.set(0.48, 0.82, -0.09);
       root.add(hornA);
@@ -2484,6 +2556,8 @@
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, 0.2), mat(0xd18a3a));
       body.position.set(0, 0.08, 0);
       root.add(body);
+      root.userData.head = body;
+      addAnimalFace(root, body, 'fish');
       const tail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.24, 0.05), mat(0xb8662f));
       tail.position.set(-0.28, 0.08, 0);
       root.add(tail);
@@ -2503,6 +2577,7 @@
       head.position.set(0.48, 0.43, 0);
       root.add(head);
       root.userData.head = head;
+      addAnimalFace(root, head, 'fox');
       const tail = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, 0.18), orange);
       tail.position.set(-0.52, 0.4, 0);
       tail.rotation.z = -0.25;
@@ -2539,6 +2614,7 @@
       head.userData.snowMaterial = snowFur;
       root.add(head);
       root.userData.head = head;
+      addAnimalFace(root, head, 'bear');
       const nose = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.24, 0.36), dark);
       nose.position.set(2.82, 1.8, 0);
       root.add(nose);
@@ -2605,6 +2681,7 @@
     head.position.set(0.56, 0.72, 0);
     root.add(head);
     root.userData.head = head;
+    addAnimalFace(root, head, 'sheep');
 
     const snout = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.24), mats.leg);
     snout.position.set(0.76, 0.67, 0);
@@ -2680,23 +2757,6 @@
     return part;
   }
 
-  function addPetFace(root, headX, eyeY, eyeSpread, faceX) {
-    const white = mat(0xfffbec);
-    const pupil = mat(0x181617);
-    for (const z of [-eyeSpread, eyeSpread]) {
-      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.15, 0.13), white);
-      eye.position.set(faceX, eyeY, z);
-      root.add(eye);
-      const dot = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.07, 0.055), pupil);
-      dot.position.set(faceX + 0.025, eyeY, z);
-      root.add(dot);
-    }
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.15), pupil);
-    mouth.position.set(faceX + 0.02, eyeY - 0.17, 0);
-    root.add(mouth);
-    root.userData.faceX = headX;
-  }
-
   function createPetMesh(type) {
     const root = new THREE.Group();
     if (type === 'cat') {
@@ -2709,7 +2769,7 @@
       const tail = petPart(root, 0xd8904e, [0.12, 0.58, 0.12], [-0.42, 0.61, 0]);
       tail.rotation.z = -0.48;
       for (const [x, z] of [[-0.18, -0.12], [-0.18, 0.12], [0.18, -0.12], [0.18, 0.12]]) petPart(root, 0xb9663c, [0.09, 0.3, 0.09], [x, 0.17, z]);
-      addPetFace(root, 0.43, 0.68, 0.12, 0.65);
+      addAnimalFace(root, head, 'cat');
       petPart(root, 0xf6b2a0, [0.05, 0.07, 0.08], [0.68, 0.57, 0]);
       root.userData.head = head;
       root.userData.tail = tail;
@@ -2724,7 +2784,7 @@
       const tail = petPart(root, 0x9c6038, [0.4, 0.12, 0.12], [-0.52, 0.62, 0]);
       tail.rotation.z = 0.42;
       for (const [x, z] of [[-0.23, -0.14], [-0.23, 0.14], [0.23, -0.14], [0.23, 0.14]]) petPart(root, 0x875332, [0.1, 0.34, 0.1], [x, 0.18, z]);
-      addPetFace(root, 0.48, 0.73, 0.13, 0.72);
+      addAnimalFace(root, head, 'dog');
       root.userData.head = head;
       root.userData.tail = tail;
       root.userData.tongue = tongue;
@@ -2736,7 +2796,7 @@
       petPart(root, 0xb98a62, [0.26, 0.2, 0.34], [0.78, 0.54, 0]);
       petPart(root, 0x30251f, [0.06, 0.08, 0.16], [0.93, 0.6, 0]);
       for (const [x, z] of [[-0.3, -0.16], [-0.3, 0.16], [0.24, -0.16], [0.24, 0.16]]) petPart(root, 0x755039, [0.12, 0.3, 0.12], [x, 0.16, z]);
-      addPetFace(root, 0.48, 0.7, 0.14, 0.74);
+      addAnimalFace(root, head, 'capybara');
       root.userData.head = head;
     } else {
       petPart(root, 0x39a85a, [0.36, 0.48, 0.34], [0, 0.42, 0]);
@@ -2746,7 +2806,7 @@
       const upperBeak = petPart(root, 0xf39a35, [0.24, 0.14, 0.18], [0.52, 0.75, 0]);
       const lowerBeak = petPart(root, 0xc9672d, [0.18, 0.08, 0.15], [0.47, 0.66, 0]);
       petPart(root, 0xd83f43, [0.34, 0.36, 0.12], [-0.13, 0.16, 0]);
-      addPetFace(root, 0.2, 0.83, 0.12, 0.42);
+      addAnimalFace(root, head, 'parrot');
       root.userData.head = head;
       root.userData.wingL = wingL;
       root.userData.wingR = wingR;
@@ -2934,6 +2994,7 @@
       }
       const head = mesh.userData && mesh.userData.head;
       if (head) head.rotation.z = item.eating ? -0.65 : 0;
+      updateAnimalFace(mesh, item.id, performance.now() * 0.001, type === 'bear' && !!item.sleeping);
       const sleepZ = mesh.userData && mesh.userData.sleepZ;
       if (sleepZ) {
         sleepZ.visible = !!item.sleeping;
@@ -3025,6 +3086,7 @@
         head.rotation.z = pet.mode === 'wait' ? Math.sin(now * 1.5 + pet.z) * 0.08 : walk * 0.035;
         head.rotation.y = pet.mode === 'wait' ? Math.sin(now * 0.8 + pet.x) * 0.12 : 0;
       }
+      updateAnimalFace(mesh, pet.id, now);
       const tail = mesh.userData.tail;
       if (tail) tail.rotation.y = Math.sin(now * (pet.type === 'dog' ? 10 : 4.5)) * (pet.type === 'dog' ? 0.65 : 0.28);
       const wingL = mesh.userData.wingL;

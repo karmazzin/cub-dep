@@ -167,28 +167,11 @@
     return !!(state && state.worldMeta && state.worldMeta.customLessonEditor);
   }
 
-  function educationCreativeItems() {
-    const block = Game.blocks && Game.blocks.BLOCK;
-    if (!block) return [];
-    return [
-      block.DIRT,
-      block.STONE,
-      block.WOOD,
-      block.PLANK,
-      block.SAND,
-      block.LEAF,
-      block.WATER,
-      block.GRASS,
-      block.BORDER,
-    ].filter((id) => Number.isFinite(id));
-  }
-
   function defaultHotbarItems(state = null) {
     if (state && state.worldMeta && state.worldMeta.mode === 'education' && Game.education3d && Game.education3d.getHotbarItems) {
       const educationItems = Game.education3d.getHotbarItems(state.worldMeta.education);
       if (Array.isArray(educationItems) && educationItems.length) return educationItems.slice(0, HOTBAR_SIZE);
     }
-    if (isEducationCreativeEditor(state)) return educationCreativeItems().slice(0, HOTBAR_SIZE);
     const hotbar = Game.interaction3d && (Game.interaction3d.DEFAULT_HOTBAR_ITEMS || Game.interaction3d.HOTBAR_BLOCKS);
     return Array.isArray(hotbar) ? hotbar.filter((id) => Number.isFinite(id)).slice(0, HOTBAR_SIZE) : [];
   }
@@ -205,21 +188,6 @@
     if (!player) return [];
     const hadHotbar = Array.isArray(player.hotbar) && player.hotbar.length > 0;
     player.hotbar = normalizeSlots(player.hotbar, HOTBAR_SIZE);
-    if (isEducationCreativeEditor(state)) {
-      const items = educationCreativeItems();
-      let changed = false;
-      for (let i = 0; i < HOTBAR_SIZE; i += 1) {
-        const id = items[i];
-        const next = Number.isFinite(id) ? { id, count: MAX_STACK } : null;
-        const current = player.hotbar[i];
-        if ((!current && next) || (current && !next) || (current && next && (current.id !== next.id || current.count !== next.count))) {
-          player.hotbar[i] = next;
-          changed = true;
-        }
-      }
-      if (changed) updateSelectedBlockFromHotbar(state);
-      return player.hotbar;
-    }
     if (!hadHotbar && state.worldMeta && (state.worldMeta.mode === 'creative' || state.worldMeta.mode === 'education')) {
       const items = defaultHotbarItems(state);
       for (let i = 0; i < HOTBAR_SIZE; i += 1) {
@@ -1025,7 +993,7 @@
   }
 
   function creativeItems(state = null) {
-    if (isEducationCreativeEditor(state)) return educationCreativeItems();
+    if (isEducationCreativeEditor(state)) return creativeItems();
     if (state && state.worldMeta && state.worldMeta.expandedBlockAssortment) {
       const block = Game.blocks && Game.blocks.BLOCK;
       if (block) {
