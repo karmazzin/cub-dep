@@ -2845,41 +2845,29 @@
     if (!handleMobileUiActions()) return;
     const mouse = input.consumeMouse();
     const actions = input.consumeActions();
-    if (actions.optimizationTogglePressed || actions.hyperOptimizationTogglePressed) {
-      if (actions.hyperOptimizationTogglePressed) {
-        state.worldMeta.hyperOptimization = !state.worldMeta.hyperOptimization;
-        state.worldMeta.superOptimization = true;
-      } else {
-        state.worldMeta.superOptimization = !state.worldMeta.superOptimization;
-        state.worldMeta.hyperOptimization = false;
-      }
-      state.ui.noticeText = state.worldMeta.hyperOptimization ? 'Гипероптимизация включена'
-        : (state.worldMeta.superOptimization ? 'Оптимизация включена' : 'Оптимизация выключена');
+    if (actions.optimizationTogglePressed) {
+      state.worldMeta.superOptimization = !state.worldMeta.superOptimization;
+      state.ui.noticeText = state.worldMeta.superOptimization ? 'Оптимизация включена' : 'Оптимизация выключена';
       state.ui.noticeTimer = 2.5;
     }
     let t0 = performance.now();
     Game.player3d.updatePlayer3D(state, input.input, mouse, dt, actions);
     state.perf.playerMs = performance.now() - t0;
-    if (!state.worldMeta.superOptimization && Game.generation3d.updateVolcanoes3D) Game.generation3d.updateVolcanoes3D(state, dt);
+    if (Game.generation3d.updateVolcanoes3D) Game.generation3d.updateVolcanoes3D(state, dt);
     t0 = performance.now();
     if (Game.generation3d.ensureChunksAroundPlayer3D) Game.generation3d.ensureChunksAroundPlayer3D(state);
     processPendingMapTeleport();
     state.ui.mapRevealTimer = Math.max(0, (state.ui.mapRevealTimer || 0) - dt);
     if (state.ui.mapRevealTimer <= 0 && Game.inventory3d && Game.inventory3d.updateInventoryMaps) {
       Game.inventory3d.updateInventoryMaps(state);
-      state.ui.mapRevealTimer = state.worldMeta.superOptimization ? 2 : 1;
+      state.ui.mapRevealTimer = 1;
     }
     state.perf.chunksMs = performance.now() - t0;
     if (actions.cameraTogglePressed) toggleShaderCamera();
     updatePortalTravel(dt);
     t0 = performance.now();
-    state.ui.actorAccumulator = state.worldMeta.superOptimization ? (state.ui.actorAccumulator || 0) + dt : dt;
-    if (!state.worldMeta.superOptimization || state.ui.actorAccumulator >= 0.05) {
-      const actorDt = Math.min(0.05, state.ui.actorAccumulator);
-      if (Game.entities3d) Game.entities3d.updateEntities3D(state, actorDt);
-      if (Game.bots3d) Game.bots3d.updateBots3D(state, actorDt);
-      state.ui.actorAccumulator = Math.max(0, state.ui.actorAccumulator - actorDt);
-    }
+    if (Game.entities3d) Game.entities3d.updateEntities3D(state, dt);
+    if (Game.bots3d) Game.bots3d.updateBots3D(state, dt);
     if (Game.pets3d) Game.pets3d.updatePets3D(state, input.input, actions, dt);
     state.perf.entitiesMs = performance.now() - t0;
     t0 = performance.now();
@@ -2888,10 +2876,10 @@
     if (Game.education3d && Game.education3d.updateEducation) Game.education3d.updateEducation(state);
     state.perf.interactionMs = performance.now() - t0;
     t0 = performance.now();
-    if (!state.worldMeta.superOptimization && Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
+    if (Game.grass3d) Game.grass3d.updateGrass3D(state, dt);
     state.perf.grassMs = performance.now() - t0;
     t0 = performance.now();
-    if (!state.worldMeta.superOptimization) Game.fluids3d.updateFluids3D(state, dt);
+    Game.fluids3d.updateFluids3D(state, dt);
     state.perf.fluidMs = performance.now() - t0;
   }
 

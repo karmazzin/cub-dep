@@ -20,7 +20,6 @@
       lootTablePressed: false,
       cameraTogglePressed: false,
       optimizationTogglePressed: false,
-      hyperOptimizationTogglePressed: false,
       jumpPressed: false,
       flyTogglePressed: false,
       boostTogglePressed: false,
@@ -31,8 +30,6 @@
     };
     const touches = new Map();
     const uiActions = [];
-    let optimizationPressStart = null;
-    let optimizationHoldHandled = false;
     let lastTouchTime = 0;
     let lastSpacePressTime = -Infinity;
     let lastShiftPressTime = -Infinity;
@@ -76,8 +73,7 @@
         const target = event.target;
         const editing = target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
         if (state && !(state.pause && state.pause.open) && !editing) {
-          optimizationPressStart = performance.now();
-          optimizationHoldHandled = false;
+          input.optimizationTogglePressed = true;
         }
       }
       if (event.code === 'KeyR' && !input.keys.KeyR) input.repairPressed = true;
@@ -100,12 +96,6 @@
     });
 
     window.addEventListener('keyup', (event) => {
-      if (event.code === 'KeyO' && optimizationPressStart !== null) {
-        checkOptimizationHold();
-        const state = getState();
-        if (!optimizationHoldHandled && state && !(state.pause && state.pause.open)) input.optimizationTogglePressed = true;
-        optimizationPressStart = null;
-      }
       input.keys[event.code] = false;
     });
 
@@ -261,23 +251,9 @@
       return { dx, dy };
     }
 
-    function checkOptimizationHold() {
-      if (optimizationPressStart === null) return;
-      const state = getState();
-      if (!state || (state.pause && state.pause.open)) {
-        optimizationPressStart = null;
-        return;
-      }
-      if (!optimizationHoldHandled && performance.now() - optimizationPressStart >= 1000) {
-        input.hyperOptimizationTogglePressed = true;
-        optimizationHoldHandled = true;
-      }
-    }
-
     window.addEventListener('blur', resetMovement);
 
     function consumeActions() {
-      checkOptimizationHold();
       const actions = {
         breakPressed: input.breakPressed,
         placePressed: input.placePressed,
@@ -286,7 +262,6 @@
         lootTablePressed: input.lootTablePressed,
         cameraTogglePressed: input.cameraTogglePressed,
         optimizationTogglePressed: input.optimizationTogglePressed,
-        hyperOptimizationTogglePressed: input.hyperOptimizationTogglePressed,
         jumpPressed: input.jumpPressed,
         flyTogglePressed: input.flyTogglePressed,
         boostTogglePressed: input.boostTogglePressed,
@@ -299,7 +274,6 @@
       input.lootTablePressed = false;
       input.cameraTogglePressed = false;
       input.optimizationTogglePressed = false;
-      input.hyperOptimizationTogglePressed = false;
       input.jumpPressed = false;
       input.flyTogglePressed = false;
       input.boostTogglePressed = false;
@@ -312,11 +286,8 @@
     }
 
     function resetMovement() {
-      optimizationPressStart = null;
-      optimizationHoldHandled = false;
       input.keys.KeyO = false;
       input.optimizationTogglePressed = false;
-      input.hyperOptimizationTogglePressed = false;
       input.mouseDx = 0;
       input.mouseDy = 0;
       input.breakPressed = false;

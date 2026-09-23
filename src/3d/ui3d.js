@@ -881,7 +881,7 @@
     const z = Math.floor(player.z || 0) - spawnZ;
     const mobile = isMobileHud(canvas);
     const flightText = (player.flying ? ` Полет${player.flightBoost ? '+' : ''}` : '')
-      + (state.worldMeta && state.worldMeta.superOptimization ? (state.worldMeta.hyperOptimization ? ' Гипероптимизация [O]' : ' Оптимизация [O]') : '');
+      + (state.worldMeta && state.worldMeta.superOptimization ? ' Оптимизация [O]' : '');
     const hudText = mobile
       ? `X:${x} Y:${y} Z:${z}  Биом: ${getCurrentBiomeLabel(state)}${flightText}`
       : `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}${flightText}`;

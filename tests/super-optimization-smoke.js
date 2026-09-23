@@ -15,173 +15,103 @@ for (const file of ['src/world/blocks.js', 'src/3d/constants3d.js', 'src/3d/perf
 const Game = context.window.CubDep;
 const C = Game.constants3d;
 const B = Game.blocks.BLOCK;
-const meta = { chunkRenderDistance: 6, superOptimization: true };
-assert.equal(C.getChunkRenderDistanceValue(meta), 1, 'optimization must force an active radius of one');
-meta.superOptimization = false;
-assert.equal(C.getChunkRenderDistanceValue(meta), 6, 'turning off must restore the original radius');
-const state = { world: Game.world3d.createWorld3D(128, 128, 128), player: { x: 40, y: 20, z: 40 }, worldMeta: { seed: 'optimization-smoke', superOptimization: true }, ui: {} };
-assert(C.isActiveSimulationPosition3D(state, 56, 40), 'adjacent chunk should remain active');
-assert(!C.isActiveSimulationPosition3D(state, 72, 40), 'distant chunks must be inactive');
-assert(!C.isActiveSimulationPosition3D(state, 56, 56), 'active radius must agree with circular renderer distance');
-state.world.allowChunkCreationWrites = 1;
-for (let z = 32; z < 48; z++) for (let x = 32; x < 48; x++) Game.world3d.setBlock3D(state, x, 0, z, B.STONE);
-state.world.allowChunkCreationWrites = 0;
-Game.fluids3d.addWaterSource3D(state, 40, 1, 40);
-assert.equal(Game.world3d.getBlock3D(state, 41, 1, 40), B.AIR, 'new water must not flow immediately while paused');
-for (let i = 0; i < 12; i++) Game.fluids3d.updateFluids3D(state, 0.14);
-assert.equal(Game.world3d.getBlock3D(state, 41, 1, 40), B.AIR, 'water must stay frozen across ticks');
-state.worldMeta.superOptimization = false;
-Game.fluids3d.updateFluids3D(state, 0.14);
-assert.equal(Game.world3d.getBlock3D(state, 41, 1, 40), B.WATER, 'water must resume from its retained source');
-state.worldMeta.superOptimization = true;
-const frozenBlocks = JSON.stringify(Array.from(state.world.chunks, ([key, chunk]) => [key, Array.from(chunk.blocks)]));
-for (let i = 0; i < 12; i++) Game.fluids3d.updateFluids3D(state, 0.14);
-assert.equal(JSON.stringify(Array.from(state.world.chunks, ([key, chunk]) => [key, Array.from(chunk.blocks)])), frozenBlocks, 'an existing water front must freeze without disappearing');
-Game.loadingTest.queueChunksAroundPlayer3D(state, C.getChunkRenderDistanceValue(state.worldMeta));
-assert(state.world.chunkLoading.queue.length > 0);
-for (const job of state.world.chunkLoading.queue) {
-  assert((job.cx - 2) ** 2 + (job.cz - 2) ** 2 <= 1, 'terrain queue must stay inside one chunk');
+// Optimization must preserve world loading and simulation.
+for (const distance of [1, 6, 10, 'auto']) {
+  const plain = { chunkRenderDistance: distance };
+  const optimized = { ...plain, superOptimization: true };
+  assert.equal(C.getChunkRenderDistanceValue(optimized), C.getChunkRenderDistanceValue(plain));
+  assert.equal(C.isManualChunkRenderDistance(optimized), C.isManualChunkRenderDistance(plain));
 }
-state.ui.pendingMapTeleport = { x: 104, y: 20, z: 104, radius: 1 };
-assert(Game.loadingTest.isOptimizationChunkNeeded(state, 6, 6), 'teleport destination must still be loadable');
-assert(Game.loadingTest.isColumnProtectedFromUnload(state, 6, 6, { y: 8 }), 'teleport destination must not unload while waiting');
-state.ui.pendingMapTeleport = null;
-assert(!Game.loadingTest.isOptimizationChunkNeeded(state, 6, 6), 'ordinary distant jobs must be discarded');
-const before = state.world.chunks.size;
-const sample = Game.generation3d.getDistantTerrainSample3D(state, 80, 80);
-assert(Number.isFinite(sample.height) && sample.height > 0);
-assert(Number.isFinite(sample.blockId));
-assert.equal(state.world.chunks.size, before, 'preview sampling must not generate chunks');
-assert.deepStrictEqual(sample, Game.generation3d.getDistantTerrainSample3D(state, 80, 80), 'preview must be deterministic');
-console.log('super optimization smoke tests passed');
+function createState(enabled) {
+  return { world: Game.world3d.createWorld3D(128, 128, 128), player: { x: 40, y: 20, z: 40 }, worldMeta: { seed: 'optimization-smoke', chunkRenderDistance: 6, superOptimization: enabled }, ui: {} };
+}
+const state = createState(true);
+const plain = createState(false);
+for (const current of [state, plain]) {
+  assert(C.isActiveSimulationPosition3D(current, 104, 104));
+  current.world.allowChunkCreationWrites = 1;
+  for (let z = 32; z < 48; z++) for (let x = 32; x < 48; x++) Game.world3d.setBlock3D(current, x, 0, z, B.STONE);
+  current.world.allowChunkCreationWrites = 0;
+  Game.fluids3d.addWaterSource3D(current, 40, 1, 40);
+  for (let i = 0; i < 12; i++) Game.fluids3d.updateFluids3D(current, 0.14);
+  Game.loadingTest.queueChunksAroundPlayer3D(current, 6);
+}
+const blocks = current => JSON.stringify(Array.from(current.world.chunks, ([key, chunk]) => [key, Array.from(chunk.blocks)]));
+assert.equal(blocks(state), blocks(plain), 'water simulation must match normal gameplay');
+assert.equal(Game.world3d.getBlock3D(state, 41, 1, 40), B.WATER);
+const jobs = current => JSON.stringify(current.world.chunkLoading.queue.map(job => job.key));
+assert.equal(jobs(state), jobs(plain), 'generation queues must be identical');
+assert(state.world.chunkLoading.queue.some(job => (job.cx - 2) ** 2 + (job.cz - 2) ** 2 > 1));
 
-// Exercise the real geometry and bounded preview cache without WebGL or a browser.
+// Observe actual visibility writes, including invalidation within the same chunk.
 context.THREE = context.window.THREE = require('../vendor/three.min.js');
 Game.ui3d = { drawUI3D() {} };
-load('src/3d/renderer3d.js', 'scene = new THREE.Scene(); Game.previewTest = { buildDistantColumnData, updateDistantTerrain, updateChunkVisibility, disposeDistantTerrain, addMesh: (key, entry) => chunkMeshes.set(key, entry), get: () => distantTerrain };');
-const data = Game.previewTest.buildDistantColumnData(state, 5, 5);
-assert(data.positions.length > 0 && data.positions.length <= 16 * 36 * 3);
-assert.equal(data.positions.length, data.colors.length);
-assert(data.positions.every(Number.isFinite));
-const initialChunks = state.world.chunks.size;
-for (let i = 0; i < 40; i++) Game.previewTest.updateDistantTerrain(state);
-assert.equal(state.world.chunks.size, initialChunks, 'drawing previews must not load world chunks');
-const preview = Game.previewTest.get();
-assert(preview.columns.size > 10, 'distant terrain should fill in incrementally');
-for (let i = 0; i < 100; i++) Game.previewTest.updateDistantTerrain(state);
-const stableVersion = preview.mesh.geometry.getAttribute('position').version;
-Game.previewTest.updateDistantTerrain(state);
-assert.equal(preview.mesh.geometry.getAttribute('position').version, stableVersion, 'settled scenery must not upload each frame');
-assert(preview.mesh.geometry.drawRange.count < 441 * 16 * 36, 'unused preview slots must not be drawn');
-assert(!preview.columns.has('2,2'), 'player column must never receive a flat preview, even while loading');
-// Rebuilding an already detailed neighbor must not put a coarse mesh over it.
-const neighborMesh = new context.THREE.Mesh(new context.THREE.BufferGeometry(), new context.THREE.MeshBasicMaterial());
-Game.previewTest.addMesh('3,1,2', { cx: 3, cy: 1, cz: 2, solid: neighborMesh });
-Game.previewTest.updateChunkVisibility(state);
-assert.equal(neighborMesh.visible, false, 'partial real geometry must stay hidden behind a coarse preview');
-for (let cy = 0; cy < 8; cy++) {
-  Game.world3d.installGeneratedChunk3D(state, 3, cy, 2, new Uint16Array(4096), new Uint8Array(4096).fill(255));
-  state.world.dirtyChunks.delete(`3,${cy},2`);
-}
-Game.previewTest.updateDistantTerrain(state);
-assert(!preview.columns.has('3,2'), 'ready neighbor should have transitioned to full detail');
-Game.previewTest.updateChunkVisibility(state);
-assert.equal(neighborMesh.visible, true, 'ready neighbor should display its real mesh');
-state.world.dirtyChunks.add('3,1,2');
-for (let i = 0; i < 5; i++) Game.previewTest.updateDistantTerrain(state);
-assert(!preview.columns.has('3,2'), 'mesh rebuilding must never demote a detailed neighbor to the coarse background');
-Game.previewTest.updateChunkVisibility(state);
-assert.equal(neighborMesh.visible, true, 'existing detailed geometry must stay visible during updates');
-state.world.dirtyChunks.delete('3,1,2');
+load('src/3d/renderer3d.js', `Game.optimizationTest = {
+  updateChunkVisibility, drawBlockIcon,
+  setIcons: value => { optimizeIcons = value; },
+  cacheSize: () => blockIconCache.size,
+  addMesh: (key, entry) => { chunkMeshes.set(key, entry); chunkMeshRevision += 1; },
+};`);
+const api = Game.optimizationTest;
+let writes = 0;
+let visible = false;
+const mesh = { set visible(value) { writes++; visible = value; } };
+api.addMesh('5,0,2', { cx: 5, cz: 2, solid: mesh });
+api.updateChunkVisibility(state);
+assert(visible, 'full configured radius must be displayed');
+const firstWrites = writes;
+for (let i = 0; i < 100; i++) api.updateChunkVisibility(state);
+assert.equal(writes, firstWrites, 'stationary view must reuse visibility results');
+state.worldMeta.chunkRenderDistance = 1;
+api.updateChunkVisibility(state);
+assert(!visible);
+state.worldMeta.chunkRenderDistance = 6;
+api.updateChunkVisibility(state);
+assert(visible);
+api.addMesh('5,0,2', { cx: 5, cz: 2, solid: mesh });
+const beforeReplace = writes;
+api.updateChunkVisibility(state);
+assert(writes > beforeReplace, 'same-size mesh replacement must invalidate the cache');
+state.player.x = 127;
+api.updateChunkVisibility(state);
+const beforeWorld = writes;
+state.world = Game.world3d.createWorld3D(128, 128, 128);
+api.updateChunkVisibility(state);
+assert(writes > beforeWorld, 'world changes must invalidate the cache');
 
-assert.equal(preview.mesh.geometry.getAttribute('position').array.length, 441 * 16 * 36 * 3, 'preview memory must stay bounded');
-state.player.x = 104;
-for (let i = 0; i < 40; i++) Game.previewTest.updateDistantTerrain(state);
-assert.equal(preview.columns.size + preview.free.length, 441, 'moving must reclaim preview slots');
-state.worldMeta.superOptimization = false;
-Game.previewTest.updateDistantTerrain(state);
-assert.equal(Game.previewTest.get(), null, 'disabling must release the preview');
-
-load('src/3d/entities3d.js');
-load('src/3d/bots3d.js');
-state.worldMeta.superOptimization = true;
-state.player.x = 40;
-state.entities = { sheep: [{ id: 'far-mob', type: 'sheep', x: 100, y: 15, z: 100, health: 4, thinkTimer: 5 }], bots: [{ id: 'far-bot', x: 100, y: 15, z: 100, connected: true, thinkTimer: 5 }] };
-const entitiesBefore = JSON.stringify(state.entities);
-Game.entities3d.updateEntities3D(state, 0.05);
-Game.bots3d.updateBots3D(state, 0.05);
-assert.equal(JSON.stringify(state.entities), entitiesBefore, 'distant actors must not tick');
+let paintCalls = 0;
+let imageCalls = 0;
+const canvasContext = new Proxy({}, { get: (obj, key) => obj[key] || (() => { paintCalls++; }) });
+context.document = { createElement: () => ({ getContext: () => canvasContext }), addEventListener() {} };
+const target = { drawImage() { imageCalls++; } };
+api.setIcons(true);
+api.drawBlockIcon(target, B.STONE, 10, 10, 32);
+const firstPaint = paintCalls;
+assert(firstPaint > 0);
+for (let i = 0; i < 100; i++) api.drawBlockIcon(target, B.STONE, 10 + i, 10, 32);
+assert.equal(paintCalls, firstPaint, 'cached icons must skip procedural drawing');
+assert.equal(imageCalls, 101);
+api.drawBlockIcon(target, B.STONE, 10, 10, 40);
+assert(paintCalls > firstPaint, 'new sizes must get their own image');
+for (let size = 1; size <= 150; size++) api.drawBlockIcon(target, B.STONE, 0, 0, size);
+assert.equal(api.cacheSize(), 128, 'icon cache must stay bounded');
 
 const listeners = {};
 context.window.addEventListener = (name, fn) => { (listeners[name] ||= []).push(fn); };
-context.document = { addEventListener() {} };
 load('src/3d/input3d.js');
 const input = Game.input3d.createInput3D({ addEventListener() {} }, () => state);
 function key(type, extra = {}) { for (const fn of listeners[type] || []) fn({ code: 'KeyO', ...extra }); }
-let inputTime = 0;
-context.performance = { now: () => inputTime };
 key('keydown');
-assert(!input.consumeActions().optimizationTogglePressed, 'press must wait to distinguish a hold');
-key('keyup');
-assert(input.consumeActions().optimizationTogglePressed, 'short O must emit the toggle on release');
-key('keydown');
+assert(input.consumeActions().optimizationTogglePressed);
 key('keydown', { repeat: true });
-assert(!input.consumeActions().optimizationTogglePressed, 'holding O must not repeat the toggle');
-inputTime = 1001;
-assert(input.consumeActions().hyperOptimizationTogglePressed, 'one second must enable hyper mode');
-inputTime = 2001;
-assert(!input.consumeActions().hyperOptimizationTogglePressed, 'hold must fire only once');
+const held = input.consumeActions();
+assert(!held.optimizationTogglePressed);
+assert(!('hyperOptimizationTogglePressed' in held), 'hyper mode must be removed');
 key('keyup');
-assert(!input.consumeActions().optimizationTogglePressed, 'hold release must not emit a short press');
-key('keydown');
-input.resetMovement();
-inputTime += 2000;
-key('keyup');
-assert(!input.consumeActions().hyperOptimizationTogglePressed && !input.consumeActions().optimizationTogglePressed, 'reset must cancel a hold');
 key('keydown', { target: { tagName: 'INPUT' } });
-assert(!input.consumeActions().optimizationTogglePressed, 'typing O must not change gameplay');
+assert(!input.consumeActions().optimizationTogglePressed);
 key('keyup');
 state.pause = { open: true };
 key('keydown');
-assert(!input.consumeActions().optimizationTogglePressed, 'O must not toggle in a menu');
-context.performance = performance;
-console.log('preview, distant simulation and keyboard smoke tests passed');
-
-// Known terrain keeps its actual block colors when replaced by a distant preview.
-state.pause.open = false;
-state.player.x = 40;
-state.worldMeta.superOptimization = true;
-for (let cy = 0; cy < 8; cy++) {
-  Game.world3d.installGeneratedChunk3D(state, 5, cy, 5, new Uint16Array(4096), new Uint8Array(4096).fill(255));
-}
-state.world.suppressChunkModification = 1;
-Game.world3d.setBlock3D(state, 82, 30, 82, B.WOOL);
-Game.world3d.setBlock3D(state, 86, 30, 82, B.PLANK);
-Game.world3d.setBlock3D(state, 90, 30, 82, B.DIRT);
-Game.world3d.setBlock3D(state, 94, 30, 82, B.DIRT);
-Game.world3d.setGrassLevel3D(state, 94, 30, 82, 3);
-state.world.suppressChunkModification = 0;
-assert.equal(Game.generation3d.getDistantTerrainSample3D(state, 82, 82).blockId, B.WOOL);
-const colored = Game.previewTest.buildDistantColumnData(state, 5, 5);
-for (const [offset, hex] of [[0, '#ded8c8'], [90, '#a36f3a'], [180, '#785236'], [270, '#5c9a2c']]) {
-  const color = new context.THREE.Color(hex);
-  assert.deepStrictEqual(Array.from(colored.colors.slice(offset, offset + 3)), [color.r, color.g, color.b], 'preview must use the visible material color');
-}
-Game.generation3d.unloadDistantChunks3D(state, 1, 100);
-assert(!state.world.chunks.has('5,1,5'), 'the real distant chunk should be unloaded');
-assert.equal(Game.generation3d.getDistantTerrainSample3D(state, 82, 82).blockId, B.WOOL, 'wool must keep its color after unloading');
-assert.equal(Game.generation3d.getDistantTerrainSample3D(state, 86, 82).blockId, B.PLANK, 'planks must keep their color after unloading');
-assert.equal(Game.generation3d.getDistantTerrainSample3D(state, 94, 82).blockId, B.GRASS, 'grass cover must keep its green material after unloading');
-assert.equal(Game.generation3d.getDistantTerrainSample3D(state, 90, 82).blockId, B.DIRT, 'bare dirt must remain brown after unloading');
-Game.world3d.clearWorld3D(state);
-assert(!state.world.distantTerrainColumns || state.world.distantTerrainColumns.size === 0, 'clearing a world must clear its preview samples');
-console.log('preview material colors and player-column exclusion passed');
-
-state.worldMeta.superOptimization = true;
-for (let i = 0; i < 100; i++) Game.performance3d.updateFrameBudget3D(state, 35, 25);
-for (let i = 0; i < 20; i++) Game.previewTest.updateDistantTerrain(state);
-const degraded = Game.previewTest.get();
-assert.equal(degraded.step, 16, 'sustained overload must reach coarse terrain');
-assert(degraded.mesh.geometry.getAttribute('position').array.length <= 441 * 36 * 3, 'coarse quality must reduce geometry memory');
-assert(!degraded.columns.has('2,2'), 'adaptive quality must still exclude the player column');
-console.log('adaptive preview workload checks passed');
+assert(!input.consumeActions().optimizationTogglePressed);
+console.log('optimization: unchanged simulation/loading, visibility and icon caches, keyboard passed');
