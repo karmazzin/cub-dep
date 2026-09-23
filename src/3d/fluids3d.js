@@ -153,6 +153,8 @@
     if (!world || !inBounds3D(world, x, y, z)) return;
     const fluidId = getBlock3D(state, x, y, z);
     if (!isWaterFluid(fluidId) && fluidId !== BLOCK.LAVA && fluidId !== BLOCK.VOLCANIC_LAVA) return;
+    if (!Game.constants3d.isActiveSimulationPosition3D(state, x, z)) return;
+    if (state.worldMeta && state.worldMeta.superOptimization && isWaterFluid(fluidId)) return;
     const startLevel = getFluidLevel3D(state, x, y, z, fluidId);
     if (fluidId === BLOCK.WATER && startLevel === STATIC_WATER_LEVEL) return;
 
@@ -380,6 +382,7 @@
   }
 
   function tickFluids(state) {
+    if (state.worldMeta && state.worldMeta.superOptimization) return;
     const fluids = ensureFluidState(state);
     const moves = [];
     const px = Math.floor(state.player.x);
@@ -389,9 +392,20 @@
       fluids.geysers.clear();
       return;
     }
-    const allActiveKeys = Array.from(fluids.active);
-    const activeKeys = allActiveKeys.slice(0, ACTIVE_FLUID_TICK_LIMIT);
+    const queuedKeys = Array.from(fluids.active);
     fluids.active.clear();
+    const allActiveKeys = queuedKeys.filter((key) => {
+      if (!state.worldMeta || !state.worldMeta.superOptimization) return true;
+      const pos = parseSourceKey(key);
+      if (!pos) return false;
+      if (!Game.constants3d.isActiveSimulationPosition3D(state, pos.x, pos.z)
+        || isWaterFluid(getBlock3D(state, pos.x, pos.y, pos.z))) {
+        fluids.active.add(key);
+        return false;
+      }
+      return true;
+    });
+    const activeKeys = allActiveKeys.slice(0, ACTIVE_FLUID_TICK_LIMIT);
     let bounds = null;
     for (const key of activeKeys) {
       const pos = parseSourceKey(key);

@@ -103,6 +103,7 @@
     if (!world) return;
     if (!world.chunks) world.chunks = new Map();
     world.chunks.clear();
+    if (world.distantTerrainColumns) world.distantTerrainColumns.clear();
     if (world.generatedChunks) world.generatedChunks.clear();
     else world.generatedChunks = new Set();
     if (world.decoratedColumns) world.decoratedColumns.clear();

@@ -18,6 +18,7 @@ function loadScript(relativePath) {
 }
 
 loadScript('src/world/blocks.js');
+loadScript('src/3d/constants3d.js');
 
 const Game = context.window.CubDep;
 const { BLOCK } = Game.blocks;
@@ -76,6 +77,7 @@ Game.generation3d = {
 loadScript('src/3d/bots3d.js');
 
 Game.constants3d = {
+  ...Game.constants3d,
   EYE_HEIGHT: 1.62,
   PLAYER_HEIGHT: 1.8,
   PLAYER_RADIUS: 0.3,

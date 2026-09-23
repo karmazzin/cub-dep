@@ -1556,7 +1556,7 @@
   function isExpandedBlockAssortmentWorld(state) {
     return !!(state && state.worldMeta
       && state.worldMeta.mode === 'creative'
-      && state.worldMeta.expandedBlockAssortment);
+      && (state.worldMeta.expandedBlockAssortment || state.worldMeta.customLessonEditor));
   }
 
   function isRegisteredBlockId(blockId) {
@@ -1870,8 +1870,7 @@
     const retiredExplosionBlock = blockId === BLOCK.TNT_TABLE || blockId === BLOCK.CUSTOM_TNT;
     const expandedCreativeBlock = !!(!retiredExplosionBlock
       && state.worldMeta
-      && state.worldMeta.mode === 'creative'
-      && state.worldMeta.expandedBlockAssortment
+      && isExpandedBlockAssortmentWorld(state)
       && Object.values(BLOCK).includes(blockId)
       && blockId !== BLOCK.AIR
       && blockId !== BLOCK.TNT_TABLE

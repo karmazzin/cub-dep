@@ -1898,7 +1898,9 @@
       updateBotConnections(state, dt);
     }
     bots = state.entities && Array.isArray(state.entities.bots) ? state.entities.bots : [];
-    for (const bot of bots) updateBot(state, bot, dt);
+    for (const bot of bots) {
+      if (Game.constants3d.isActiveSimulationPosition3D(state, bot.x, bot.z)) updateBot(state, bot, dt);
+    }
   }
 
   Game.bots3d = {

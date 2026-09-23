@@ -875,13 +875,13 @@
     const player = state.player || {};
     const world = state.world || {};
     const spawnX = Math.floor((world.w || 0) / 2);
-    const spawnY = Math.floor(world.h || 0);
     const spawnZ = Math.floor((world.d || 0) / 2);
     const x = Math.floor(player.x || 0) - spawnX;
-    const y = Math.floor(player.y || 0) - spawnY;
+    const y = Math.floor(player.y || 0);
     const z = Math.floor(player.z || 0) - spawnZ;
     const mobile = isMobileHud(canvas);
-    const flightText = player.flying ? ` Полет${player.flightBoost ? '+' : ''}` : '';
+    const flightText = (player.flying ? ` Полет${player.flightBoost ? '+' : ''}` : '')
+      + (state.worldMeta && state.worldMeta.superOptimization ? (state.worldMeta.hyperOptimization ? ' Гипероптимизация [O]' : ' Оптимизация [O]') : '');
     const hudText = mobile
       ? `X:${x} Y:${y} Z:${z}  Биом: ${getCurrentBiomeLabel(state)}${flightText}`
       : `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}${flightText}`;

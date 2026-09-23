@@ -993,7 +993,10 @@
   }
 
   function creativeItems(state = null) {
-    if (isEducationCreativeEditor(state)) return creativeItems();
+    if (isEducationCreativeEditor(state)) {
+      const expandedItems = creativeItems({ worldMeta: { expandedBlockAssortment: true } });
+      return Array.from(new Set([...creativeItems(), ...expandedItems]));
+    }
     if (state && state.worldMeta && state.worldMeta.expandedBlockAssortment) {
       const block = Game.blocks && Game.blocks.BLOCK;
       if (block) {

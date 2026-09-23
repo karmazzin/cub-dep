@@ -9,6 +9,10 @@
   let scene = null;
   let camera = null;
   let chunkMeshes = new Map();
+  let distantTerrain = null;
+  let optimizedVisibilityWorld = null;
+  const optimizedDetailedColumns = new Set();
+  const DISTANT_COLUMN_CAPACITY = 21 * 21;
   let solidMaterial = null;
   let shaderSolidMaterial = null;
   let waterMaterial = null;
@@ -63,6 +67,8 @@
   let customTntLabelSprites = new Map();
   let sheepMaterials = null;
   let textureAtlas = null;
+  let flatTextureAtlas = null;
+  let hyperProfileEnabled = false;
   let atlasMeta = null;
   let atlasEntries = null;
   let debugInfo = null;
@@ -667,6 +673,41 @@
     return textureAtlas;
   }
 
+  function createFlatTextureAtlas() {
+    if (flatTextureAtlas) return flatTextureAtlas;
+    createTextureAtlas();
+    const canvas = document.createElement('canvas');
+    canvas.width = atlasMeta.columns;
+    canvas.height = atlasMeta.rows;
+    const ctx = canvas.getContext('2d');
+    for (const [key, tile] of atlasEntries) {
+      const id = Number(key.split(':')[0]);
+      ctx.fillStyle = id === BLOCK.GRASS ? '#5c9a2c' : (BLOCK_COLORS[id] || '#777777');
+      ctx.fillRect(tile.col, tile.row, 1, 1);
+    }
+    flatTextureAtlas = new THREE.CanvasTexture(canvas);
+    flatTextureAtlas.magFilter = THREE.NearestFilter;
+    flatTextureAtlas.minFilter = THREE.NearestFilter;
+    flatTextureAtlas.generateMipmaps = false;
+    return flatTextureAtlas;
+  }
+
+  function applyHyperProfile(state) {
+    const enabled = !!(state.worldMeta && state.worldMeta.superOptimization && state.worldMeta.hyperOptimization);
+    if (hyperProfileEnabled === enabled) return;
+    if (enabled) ensureMaterials();
+    hyperProfileEnabled = enabled;
+    if (solidMaterial) {
+      solidMaterial.map = enabled ? createFlatTextureAtlas() : createTextureAtlas();
+      solidMaterial.needsUpdate = true;
+    }
+    for (const [material, texture] of [[waterMaterial, waterTexture], [lavaMaterial, lavaTexture]]) {
+      if (!material) continue;
+      material.map = enabled ? null : texture;
+      material.needsUpdate = true;
+    }
+  }
+
   function drawTexturedFace(ctx, id, faceType, points, x, y, w, h) {
     ctx.save();
     ctx.beginPath();
@@ -1018,13 +1059,38 @@
     return dx * dx + dz * dz <= renderDistance * renderDistance;
   }
 
+  function updateOptimizedDetailedColumns(state) {
+    if (!state.worldMeta || !state.worldMeta.superOptimization || optimizedVisibilityWorld !== state.world) {
+      optimizedDetailedColumns.clear();
+      optimizedVisibilityWorld = state.worldMeta && state.worldMeta.superOptimization ? state.world : null;
+    }
+    if (!optimizedVisibilityWorld) return;
+    const center = getPlayerChunk(state.player);
+    const active = new Set();
+    for (const [dx, dz] of [[0,0], [-1,0], [1,0], [0,-1], [0,1]]) {
+      const cx = center.cx + dx;
+      const cz = center.cz + dz;
+      const key = `${cx},${cz}`;
+      active.add(key);
+      // Promote only once per visit. A dirty mesh is an update, not an unload.
+      if ((dx === 0 && dz === 0) || optimizedDetailedColumns.has(key) || hasDetailedColumn(state, cx, cz)) {
+        optimizedDetailedColumns.add(key);
+      }
+    }
+    for (const key of optimizedDetailedColumns) {
+      if (!active.has(key)) optimizedDetailedColumns.delete(key);
+    }
+  }
+
   function updateChunkVisibility(state) {
+    updateOptimizedDetailedColumns(state);
     const playerChunk = getPlayerChunk(state.player);
     const renderDistance = getChunkRenderDistanceValue(state.worldMeta);
     let visibleChunks = 0;
     let visibleMeshes = 0;
     for (const entry of chunkMeshes.values()) {
-      const visible = isChunkInRenderDistance(entry, playerChunk, renderDistance);
+      const visible = isChunkInRenderDistance(entry, playerChunk, renderDistance)
+        && (!(state.worldMeta && state.worldMeta.superOptimization) || optimizedDetailedColumns.has(`${entry.cx},${entry.cz}`));
       if (entry.solid) entry.solid.visible = visible;
       if (entry.water) entry.water.visible = visible;
       if (entry.lava) entry.lava.visible = visible;
@@ -1040,6 +1106,137 @@
       debugInfo.visibleChunkMeshes = visibleMeshes;
       debugInfo.renderDistanceChunks = renderDistance;
     }
+  }
+
+  function disposeDistantTerrain() {
+    if (!distantTerrain) return;
+    scene.remove(distantTerrain.mesh);
+    distantTerrain.mesh.geometry.dispose();
+    distantTerrain.mesh.material.dispose();
+    distantTerrain = null;
+  }
+
+  function buildDistantColumnData(state, cx, cz, step = 4) {
+    const positions = [];
+    const colors = [];
+    function quad(corners, color, shade) {
+      for (const index of [0, 1, 2, 0, 2, 3]) {
+        positions.push(...corners[index]);
+        colors.push(color.r * shade, color.g * shade, color.b * shade);
+      }
+    }
+    for (let dz = 0; dz < CHUNK_SIZE; dz += step) {
+      for (let dx = 0; dx < CHUNK_SIZE; dx += step) {
+        const x = cx * CHUNK_SIZE + dx;
+        const z = cz * CHUNK_SIZE + dz;
+        if (x >= state.world.w || z >= state.world.d) continue;
+        const x1 = Math.min(x + step, state.world.w);
+        const z1 = Math.min(z + step, state.world.d);
+        const sample = Game.generation3d.getDistantTerrainSample3D(state, (x + x1) / 2, (z + z1) / 2);
+        if (sample.blockId === BLOCK.AIR) continue;
+        const y = sample.height;
+        // Match the grass top palette; bare dirt keeps its own material color.
+        const color = new THREE.Color(sample.blockId === BLOCK.GRASS ? '#5c9a2c' : (BLOCK_COLORS[sample.blockId] || '#777777'));
+        quad([[x,y,z], [x,y,z1], [x1,y,z1], [x1,y,z]], color, 1);
+        quad([[x,0,z], [x,0,z1], [x,y,z1], [x,y,z]], color, 0.72);
+        quad([[x1,0,z1], [x1,0,z], [x1,y,z], [x1,y,z1]], color, 0.86);
+        quad([[x1,0,z], [x,0,z], [x,y,z], [x1,y,z]], color, 0.9);
+        quad([[x,0,z1], [x1,0,z1], [x1,y,z1], [x,y,z1]], color, 0.8);
+        if (Number.isFinite(sample.ceiling)) {
+          const top = sample.ceiling;
+          quad([[x,top,z], [x1,top,z], [x1,top,z1], [x,top,z1]], color, 0.56);
+        }
+      }
+    }
+    return { positions, colors };
+  }
+
+  function hasDetailedColumn(state, cx, cz) {
+    for (let cy = 0; cy < Math.ceil(state.world.h / CHUNK_SIZE); cy += 1) {
+      const key = `${cx},${cy},${cz}`;
+      if (!state.world.chunks.has(key) || state.world.dirtyChunks.has(key)) return false;
+    }
+    if (meshRebuildQueue.some((task) => task.cx === cx && task.cz === cz)) return false;
+    return true;
+  }
+
+  function updateDistantTerrain(state) {
+    updateOptimizedDetailedColumns(state);
+    if (!state.worldMeta || !state.worldMeta.superOptimization) {
+      disposeDistantTerrain();
+      return;
+    }
+    const profile = Game.performance3d ? Game.performance3d.getQualityProfile3D(state) : { distantRadius: 6, sampleStep: 4 };
+    const radius = profile.distantRadius;
+    const step = profile.sampleStep;
+    const stride = (CHUNK_SIZE / step) ** 2 * 36 * 3;
+    if (distantTerrain && distantTerrain.step !== step) disposeDistantTerrain();
+    if (!distantTerrain) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DISTANT_COLUMN_CAPACITY * stride), 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(DISTANT_COLUMN_CAPACITY * stride), 3));
+      geometry.setDrawRange(0, 0);
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      distantTerrain = { mesh, step, columns: new Map(), pending: [], layout: '', free: Array.from({ length: DISTANT_COLUMN_CAPACITY }, (_, i) => DISTANT_COLUMN_CAPACITY - 1 - i) };
+    }
+    const center = getPlayerChunk(state.player);
+    const ready = [[-1,0], [1,0], [0,-1], [0,1]].map(([dx, dz]) => optimizedDetailedColumns.has(`${center.cx + dx},${center.cz + dz}`));
+    const layout = `${center.cx},${center.cz}:${radius}:${ready.join(',')}`;
+    const geometry = distantTerrain.mesh.geometry;
+    const positions = geometry.getAttribute('position');
+    const colors = geometry.getAttribute('color');
+    let firstChanged = Infinity;
+    let lastChanged = -1;
+    function markSlot(slot) {
+      firstChanged = Math.min(firstChanged, slot);
+      lastChanged = Math.max(lastChanged, slot);
+    }
+    if (layout !== distantTerrain.layout) {
+      const wanted = new Map();
+      for (let cz = Math.max(0, center.cz - radius); cz <= Math.min(Math.ceil(state.world.d / CHUNK_SIZE) - 1, center.cz + radius); cz += 1) {
+        for (let cx = Math.max(0, center.cx - radius); cx <= Math.min(Math.ceil(state.world.w / CHUNK_SIZE) - 1, center.cx + radius); cx += 1) {
+          const distance = (cx - center.cx) ** 2 + (cz - center.cz) ** 2;
+          if (distance === 0 || distance > radius * radius) continue;
+          if (distance <= 1 && optimizedDetailedColumns.has(`${cx},${cz}`)) continue;
+          wanted.set(`${cx},${cz}`, { cx, cz, distance });
+        }
+      }
+      for (const [key, slot] of distantTerrain.columns) {
+        if (wanted.has(key)) continue;
+        positions.array.fill(0, slot * stride, (slot + 1) * stride);
+        distantTerrain.free.push(slot);
+        distantTerrain.columns.delete(key);
+        markSlot(slot);
+      }
+      distantTerrain.pending = Array.from(wanted.entries()).filter(([key]) => !distantTerrain.columns.has(key));
+      distantTerrain.pending.sort((a, b) => a[1].distance - b[1].distance);
+      distantTerrain.free.sort((a, b) => b - a);
+      distantTerrain.layout = layout;
+    }
+    // At most one column per frame; settled scenery does not resample or upload.
+    const next = distantTerrain.pending.shift();
+    if (next && distantTerrain.free.length) {
+      const [key, column] = next;
+      const data = buildDistantColumnData(state, column.cx, column.cz, step);
+      const slot = distantTerrain.free.pop();
+      positions.array.set(data.positions, slot * stride);
+      colors.array.set(data.colors, slot * stride);
+      distantTerrain.columns.set(key, slot);
+      markSlot(slot);
+    }
+    if (lastChanged >= 0) {
+      for (const attribute of [positions, colors]) {
+        attribute.clearUpdateRanges();
+        attribute.addUpdateRange(firstChanged * stride, (lastChanged - firstChanged + 1) * stride);
+        attribute.needsUpdate = true;
+      }
+      let lastUsed = -1;
+      for (const slot of distantTerrain.columns.values()) lastUsed = Math.max(lastUsed, slot);
+      geometry.setDrawRange(0, (lastUsed + 1) * stride / 3);
+    }
+    if (debugInfo) debugInfo.distantColumns = distantTerrain.columns.size;
   }
 
   function buildWorldMesh(state, mode = 'solid', bounds = null) {
@@ -1333,6 +1530,7 @@
       if (child.material) {
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         materials.forEach((mat) => {
+          if (mat.userData && mat.userData.originalMap && mat.userData.originalMap !== mat.map) mat.userData.originalMap.dispose();
           if (mat.map) mat.map.dispose && mat.map.dispose();
           mat.dispose && mat.dispose();
         });
@@ -1506,7 +1704,11 @@
 
   function createHeldBlockMaterial(blockId, faceType, shade = 1) {
     const texture = createBlockFaceTexture(blockId, faceType);
-    return new THREE.MeshBasicMaterial({ map: texture, color: new THREE.Color(shade, shade, shade) });
+    const material = new THREE.MeshBasicMaterial({ map: texture, color: new THREE.Color(shade, shade, shade) });
+    material.userData.blockId = blockId;
+    material.userData.originalMap = texture;
+    material.userData.originalColor = material.color.clone();
+    return material;
   }
 
   function createHeldBlockMaterials(blockId) {
@@ -1642,7 +1844,7 @@
   }
 
   function shaderMode(state) {
-    return !!(state && state.worldMeta && state.worldMeta.shadersEnabled);
+    return !!(state && state.worldMeta && state.worldMeta.shadersEnabled && !state.worldMeta.superOptimization);
   }
 
   function mixHexColor(a, b, t) {
@@ -1710,6 +1912,14 @@
       light.shadow.camera.top = 34;
       light.shadow.camera.bottom = -34;
       light.shadow.bias = -0.0007;
+    }
+    for (const entry of chunkMeshes.values()) {
+      for (const mode of ['solid', 'water', 'lava']) {
+        if (!entry[mode]) continue;
+        entry[mode].material = materialForMode(state, mode);
+        entry[mode].castShadow = enabled && mode === 'solid';
+        entry[mode].receiveShadow = enabled && mode === 'solid';
+      }
     }
     applyCloudShaderGeometry(enabled);
     for (const cell of cloudCells) cell.key = '';
@@ -2960,6 +3170,11 @@
     const renderDistance = getChunkRenderDistanceValue(state.worldMeta);
     for (const item of sheep) {
       live.add(item.id);
+      if (!Game.constants3d.isActiveSimulationPosition3D(state, item.x, item.z)) {
+        const distant = sheepMeshes.get(item.id);
+        if (distant) distant.visible = false;
+        continue;
+      }
       const type = item.type === 'polar_bear' ? 'bear' : (item.type || 'sheep');
       let mesh = sheepMeshes.get(item.id);
       if (!mesh || (mesh.userData && mesh.userData.mobType !== type)) {
@@ -3127,6 +3342,11 @@
     const now = performance.now() * 0.001;
     for (const bot of bots) {
       live.add(bot.id);
+      if (!Game.constants3d.isActiveSimulationPosition3D(state, bot.x, bot.z)) {
+        const distant = botMeshes.get(bot.id);
+        if (distant) distant.visible = false;
+        continue;
+      }
       let mesh = botMeshes.get(bot.id);
       if (!mesh) {
         mesh = createBotMesh(bot);
@@ -3174,6 +3394,15 @@
         mesh.userData.blockId = item.blockId;
         movingBlockMeshes.set(item.id, mesh);
         scene.add(mesh);
+      }
+      for (const material of mesh.material) {
+        const enabled = !!(state.worldMeta && state.worldMeta.superOptimization && state.worldMeta.hyperOptimization);
+        if (!!material.userData.hyperOptimization === enabled) continue;
+        material.userData.hyperOptimization = enabled;
+        material.map = enabled ? null : material.userData.originalMap;
+        material.color.copy(material.userData.originalColor);
+        if (enabled) material.color.multiply(new THREE.Color(item.blockId === BLOCK.GRASS ? '#5c9a2c' : (BLOCK_COLORS[item.blockId] || '#777777')));
+        material.needsUpdate = true;
       }
       mesh.position.set(item.x, item.y, item.z);
       mesh.rotation.x += 0.045;
@@ -3338,9 +3567,14 @@
   function enqueueDirtyChunkMeshes(state) {
     if (!state.world.dirtyChunks.size) return;
     const modes = ['solid', 'water', 'lava'];
+    const deferred = new Set();
     for (const key of state.world.dirtyChunks) {
       const parsed = parseChunkKey(key);
       if (!parsed) continue;
+      if (state.world.chunks.has(key) && !Game.constants3d.isActiveSimulationPosition3D(state, parsed.cx * CHUNK_SIZE, parsed.cz * CHUNK_SIZE)) {
+        deferred.add(key);
+        continue;
+      }
       const flags = chunkModeFlags(state.world, key);
       for (const mode of modes) {
         if (!shouldQueueMeshMode(state, key, mode, flags)) continue;
@@ -3351,6 +3585,7 @@
       }
     }
     state.world.dirtyChunks.clear();
+    for (const key of deferred) state.world.dirtyChunks.add(key);
   }
 
   function updateDirtyChunks(state) {
@@ -3367,12 +3602,16 @@
     const fpsBudget = Number.isFinite(fps) && fps >= 70
       ? baseBudget + 2 + backlogBoost
       : (Number.isFinite(fps) && fps >= 55 ? baseBudget + backlogBoost : baseBudget);
-    const budget = Math.min(maxBudget, fpsBudget);
+    const budget = state.worldMeta && state.worldMeta.superOptimization ? 1 : Math.min(maxBudget, fpsBudget);
     meshRebuildQueue.sort((a, b) => compareMeshTasksForPlayer(state, a, b));
     do {
       const task = meshRebuildQueue.shift();
       if (!task) break;
       meshRebuildQueued.delete(task.taskKey);
+      if (state.world.chunks.has(task.key) && !Game.constants3d.isActiveSimulationPosition3D(state, task.cx * CHUNK_SIZE, task.cz * CHUNK_SIZE)) {
+        state.world.dirtyChunks.add(task.key);
+        continue;
+      }
       const oldEntry = chunkMeshes.get(task.key);
       const oldStats = meshStats(oldEntry && oldEntry[task.mode]);
       const next = setChunkMesh(state, task.cx, task.cy, task.cz, task.mode);
@@ -3394,10 +3633,14 @@
   }
 
   function setWorld(state) {
+    optimizedDetailedColumns.clear();
+    optimizedVisibilityWorld = null;
+    disposeDistantTerrain();
     disposeSheepMeshes();
     disposeBotMeshes();
     disposePetMeshes();
     applyShaderProfile(state);
+    applyHyperProfile(state);
     disposePlayerModel();
     if (firstPersonGroup) {
       disposeObject3D(firstPersonGroup);
@@ -3431,7 +3674,19 @@
 
   function render(state, overlayCtx, overlayCanvas) {
     if (!renderer || !scene || !camera) return;
+    if (Game.performance3d) {
+      const ratio = Game.performance3d.getRenderPixelRatio3D(state, window.innerWidth, window.innerHeight, window.devicePixelRatio);
+      if (Math.abs(renderer.getPixelRatio() - ratio) > 0.001) renderer.setPixelRatio(ratio);
+    }
     applyShaderProfile(state);
+    applyHyperProfile(state);
+    if (scene.fog) {
+      const optimized = state.worldMeta && state.worldMeta.superOptimization;
+      const profile = Game.performance3d && Game.performance3d.getQualityProfile3D(state);
+      const far = optimized ? (profile ? profile.distantRadius : 6) * CHUNK_SIZE : CAMERA_FAR_CHUNKS * CHUNK_SIZE;
+      scene.fog.near = optimized ? far * 0.4 : Math.max(shaderMode(state) ? 30 : 24, far * (shaderMode(state) ? 0.42 : 0.34));
+      scene.fog.far = optimized ? far : Math.max(shaderMode(state) ? 58 : 48, far * (shaderMode(state) ? 0.82 : 0.74));
+    }
     applyVolcanicAtmosphere(state);
     if (state.world.dirtyAll) rebuildAllChunks(state);
     else if (state.world.dirtyChunks.size > 0 || meshRebuildQueue.length > 0) updateDirtyChunks(state);
@@ -3476,7 +3731,7 @@
       skyDome.visible = shaders;
       if (shaders) skyDome.position.set(player.x, player.y, player.z);
     }
-    const model = ensurePlayerModel(state);
+    const model = shaders ? ensurePlayerModel(state) : playerModel;
     if (model) {
       model.visible = shaders;
       setPlayerModelShadowOnly(model, mode === 'first');
@@ -3510,11 +3765,17 @@
       }
     }
     updateCracks(state);
-    updateFluidTextureAnimation();
-    updateSkyLayer(player);
-    updateSteamParticles(state);
-    updateLavaEmbers(state);
-    updateExplosionMushrooms(state);
+    const optimized = !!(state.worldMeta && state.worldMeta.superOptimization);
+    for (const group of [skyGroup, steamGroup, lavaEmberGroup, explosionMushroomGroup]) {
+      if (group) group.visible = !optimized;
+    }
+    if (!optimized) {
+      updateFluidTextureAnimation();
+      updateSkyLayer(player);
+      updateSteamParticles(state);
+      updateLavaEmbers(state);
+      updateExplosionMushrooms(state);
+    }
     updateDynamiteOverlays(state);
     updatePreviewOverlay(state);
     syncSheepMeshes(state);
@@ -3534,6 +3795,7 @@
       debugInfo.pendingChunks = state.world && state.world.lastPendingChunks ? state.world.lastPendingChunks : 0;
     }
     updateChunkVisibility(state);
+    updateDistantTerrain(state);
     renderer.render(scene, camera);
     drawUI3D(overlayCtx, overlayCanvas, state);
   }

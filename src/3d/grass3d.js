@@ -171,6 +171,10 @@
     while (checked < CELLS_PER_TICK) {
       const x = Math.max(0, Math.min(world.w - 1, px + Math.floor((Math.random() * 2 - 1) * SCAN_RADIUS)));
       const z = Math.max(0, Math.min(world.d - 1, pz + Math.floor((Math.random() * 2 - 1) * SCAN_RADIUS)));
+      if (!Game.constants3d.isActiveSimulationPosition3D(state, x, z)) {
+        checked += 1;
+        continue;
+      }
       for (let y = world.h - 2; y >= 1; y -= 1) {
         const block = getBlock3D(state, x, y, z);
         if (block === BLOCK.DIRT || block === BLOCK.SCORCHED_DIRT) {

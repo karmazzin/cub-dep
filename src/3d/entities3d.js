@@ -726,7 +726,9 @@
 
   function updateEntities3D(state, dt) {
     const mobs = state.entities && Array.isArray(state.entities.sheep) ? state.entities.sheep : [];
-    for (const mob of mobs) updateMob(state, mob, dt);
+    for (const mob of mobs) {
+      if (Game.constants3d.isActiveSimulationPosition3D(state, mob.x, mob.z)) updateMob(state, mob, dt);
+    }
   }
 
   Game.entities3d = {

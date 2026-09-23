@@ -16,12 +16,22 @@
   }
 
   function getChunkRenderDistanceValue(worldMeta) {
+    if (worldMeta && worldMeta.superOptimization) return 1;
     const normalized = normalizeChunkRenderDistance(worldMeta && worldMeta.chunkRenderDistance);
     return normalized === CHUNK_RENDER_DISTANCE_AUTO ? CHUNK_RENDER_DISTANCE : normalized;
   }
 
   function isManualChunkRenderDistance(worldMeta) {
+    if (worldMeta && worldMeta.superOptimization) return true;
     return normalizeChunkRenderDistance(worldMeta && worldMeta.chunkRenderDistance) !== CHUNK_RENDER_DISTANCE_AUTO;
+  }
+
+  function isActiveSimulationPosition3D(state, x, z) {
+    if (!state || !state.worldMeta || !state.worldMeta.superOptimization) return true;
+    if (!state.player) return false;
+    const dx = Math.floor(x / 16) - Math.floor(state.player.x / 16);
+    const dz = Math.floor(z / 16) - Math.floor(state.player.z / 16);
+    return dx * dx + dz * dz <= 1;
   }
 
   Game.constants3d = {
@@ -58,6 +68,7 @@
     REACH_DISTANCE: 5.2,
     MOUSE_SENSITIVITY: 0.0022,
     MAX_PITCH: Math.PI * 0.47,
+    isActiveSimulationPosition3D,
     normalizeChunkRenderDistance,
     getChunkRenderDistanceValue,
     isManualChunkRenderDistance,

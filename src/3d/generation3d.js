@@ -499,6 +499,81 @@
     return biomeAt(worldSeed(state), source.x, source.z);
   }
 
+  function loadedDistantTerrainSample(state, x, z) {
+    if (currentDimension(state) === 'underground') return null;
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    for (let cy = 0; cy < Math.ceil(state.world.h / CHUNK_SIZE); cy += 1) {
+      if (!state.world.chunks.has(chunkKey(cx, cy, cz))) return null;
+    }
+    for (let y = state.world.h - 1; y >= 0; y -= 1) {
+      const blockId = getBlock3D(state, Math.floor(x), y, Math.floor(z));
+      if (blockId !== BLOCK.AIR) {
+        const visibleBlockId = blockId === BLOCK.DIRT && getGrassLevel3D(state, Math.floor(x), y, Math.floor(z)) > 0
+          ? BLOCK.GRASS : blockId;
+        return { height: y + 1, blockId: visibleBlockId };
+      }
+    }
+    return { height: 0, blockId: BLOCK.AIR };
+  }
+
+  function rememberDistantTerrainColumn(state, cx, cz) {
+    if (!state.worldMeta || !state.worldMeta.superOptimization || currentDimension(state) === 'underground') return;
+    const samples = [];
+    for (let dz = 0; dz < CHUNK_SIZE; dz += 4) {
+      for (let dx = 0; dx < CHUNK_SIZE; dx += 4) {
+        const x = Math.min(state.world.w - 1, cx * CHUNK_SIZE + dx + 2);
+        const z = Math.min(state.world.d - 1, cz * CHUNK_SIZE + dz + 2);
+        const sample = loadedDistantTerrainSample(state, x, z);
+        if (!sample) return;
+        samples.push(sample);
+      }
+    }
+    const cache = state.world.distantTerrainColumns || (state.world.distantTerrainColumns = new Map());
+    const key = columnKey(cx, cz);
+    cache.delete(key);
+    cache.set(key, samples);
+    // Keep only compact surface samples, never full unloaded voxel arrays.
+    while (cache.size > 512) cache.delete(cache.keys().next().value);
+  }
+
+  // Surface-only sampling for the distant preview; never installs world chunks.
+  function getDistantTerrainSample3D(state, x, z) {
+    const loaded = loadedDistantTerrainSample(state, x, z);
+    if (loaded) return loaded;
+    const cache = state.world.distantTerrainColumns;
+    const cached = cache && cache.get(columnKey(Math.floor(x / CHUNK_SIZE), Math.floor(z / CHUNK_SIZE)));
+    if (cached && currentDimension(state) !== 'underground') {
+      const index = Math.floor((z % CHUNK_SIZE) / 4) * 4 + Math.floor((x % CHUNK_SIZE) / 4);
+      if (cached[index]) return cached[index];
+    }
+    const seed = worldSeed(state);
+    const worldX = x;
+    const worldZ = z;
+    const source = surfaceSourceCell(state, x, z);
+    x = source.x;
+    z = source.z;
+    if (currentDimension(state) === 'underground') {
+      return {
+        height: 9 + Math.floor(smoothNoise(seed + 4101, x / 55, z / 55) * 7),
+        ceiling: 86 + Math.floor(smoothNoise(seed + 4103, x / 70, z / 70) * 22),
+        blockId: BLOCK.STONE,
+      };
+    }
+    const lake = lakeInfo(seed, x, z);
+    const biome = biomeAt(seed, x, z);
+    const height = terrainHeight(seed, x, z);
+    const waterLevel = lake.inLake && Number.isFinite(lake.waterLevel) ? lake.waterLevel : WATER_LEVEL;
+    if (lake.inLake || height < waterLevel) return { height: waterLevel + 0.88, blockId: BLOCK.WATER };
+    let blockId = BLOCK.DIRT;
+    if (biome === 'desert' || biome === 'beach') blockId = BLOCK.SAND;
+    else if (biome === 'volcanic') blockId = BLOCK.BLACKSTONE;
+    else if (biome === 'snow_plains' || biome === 'spruce_forest' || height >= SNOW_LEVEL) blockId = BLOCK.SNOW;
+    else if (biome === 'mountains' || biome === 'cliffs' || biome === 'geysers') blockId = BLOCK.STONE;
+    if (blockId === BLOCK.DIRT && hasInitialGrass(seed, worldX, height, worldZ, state.world)) blockId = BLOCK.GRASS;
+    return { height: Math.min(state.world.h, height + 1), blockId };
+  }
+
   function getVolcanoAt3D(state, x, z) {
     if (!state || !state.worldMeta || currentDimension(state) === 'underground') return null;
     const source = surfaceSourceCell(state, x, z);
@@ -3686,6 +3761,20 @@
     chunkWorkerAvailable = false;
   }
 
+  function isPendingTeleportColumn(state, cx, cz) {
+    const target = state.ui && state.ui.pendingMapTeleport;
+    if (!target) return false;
+    const dx = cx - Math.floor(target.x / CHUNK_SIZE);
+    const dz = cz - Math.floor(target.z / CHUNK_SIZE);
+    const radius = Number.isFinite(target.radius) ? target.radius : 1;
+    return dx * dx + dz * dz <= radius * radius;
+  }
+
+  function isOptimizationChunkNeeded(state, cx, cz) {
+    return Game.constants3d.isActiveSimulationPosition3D(state, cx * CHUNK_SIZE, cz * CHUNK_SIZE)
+      || isPendingTeleportColumn(state, cx, cz);
+  }
+
   function initChunkWorker(state) {
     if (chunkWorkers.length > 0) return true;
     if (!chunkWorkerAvailable || typeof Worker === 'undefined') return false;
@@ -3703,6 +3792,7 @@
           loading.pendingIds.delete(data.id);
           loading.pendingKeys.delete(job.key);
           if (job.worldId !== currentStorageWorldId(stateRef) || job.seed !== worldSeed(stateRef)) return;
+          if (!isOptimizationChunkNeeded(stateRef, data.cx, data.cz)) return;
           installGeneratedChunk3D(stateRef, data.cx, data.cy, data.cz, data.blocks, data.fluidLevel, data.grassLevel || null);
         };
         worker.onerror = () => {
@@ -3873,10 +3963,11 @@
       loading.queue = loading.queue.filter((job) => {
         const dx = job.cx - pcx;
         const dz = job.cz - pcz;
-        const keepRadius = manualDistance
+        const keepRadius = state.worldMeta && state.worldMeta.superOptimization ? effectiveRadius : manualDistance
           ? effectiveRadius + 1
           : (usingSyncFallback ? effectiveRadius : CHUNK_UNLOAD_DISTANCE);
-        const keep = dx * dx + dz * dz <= keepRadius * keepRadius && shouldQueueVerticalChunk(job.cx, job.cy, job.cz);
+        const keep = (dx * dx + dz * dz <= keepRadius * keepRadius || isPendingTeleportColumn(state, job.cx, job.cz))
+          && shouldQueueVerticalChunk(job.cx, job.cy, job.cz);
         if (!keep) loading.queued.delete(job.key);
         return keep;
       });
@@ -3990,6 +4081,7 @@
   }
 
   function syncTerrainBudgetMs(state) {
+    if (state.worldMeta && state.worldMeta.superOptimization) return 1;
     const base = Math.max(0.5, CHUNK_SYNC_GENERATE_TIME_BUDGET_MS || 3);
     const maxBudget = Math.max(base, CHUNK_SYNC_GENERATE_MAX_TIME_BUDGET_MS || base);
     const fps = state && state.ui ? state.ui.fps : 0;
@@ -4005,7 +4097,7 @@
     activeState = state;
 
     if (initChunkWorker(state)) {
-      while (loading.queue.length > 0 && loading.pendingIds.size < CHUNK_WORKER_MAX_PENDING) {
+      while (loading.queue.length > 0 && loading.pendingIds.size < (state.worldMeta && state.worldMeta.superOptimization ? 4 : CHUNK_WORKER_MAX_PENDING)) {
         const job = loading.queue.shift();
         loading.queued.delete(job.key);
         if (hasTerrainChunk(state, job.cx, job.cy, job.cz)) continue;
@@ -4084,6 +4176,12 @@
     } finally {
       state.world.allowChunkCreationWrites -= 1;
       state.world.suppressChunkModification -= 1;
+    }
+    // AIR writes do not allocate chunks. Materialize empty terrain too, so
+    // structures can write above the surface after the chunk is marked ready.
+    if (!state.world.chunks.has(key)) {
+      const volume = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+      installGeneratedChunk3D(state, cx, cy, cz, new Uint16Array(volume), new Uint8Array(volume).fill(255));
     }
     if (!state.world.generatedChunks) state.world.generatedChunks = new Set();
     state.world.generatedChunks.add(key);
@@ -4853,6 +4951,7 @@
   }
 
   function decorationBudgetForFrame(state) {
+    if (state.worldMeta && state.worldMeta.superOptimization) return 1;
     const base = Math.max(1, Math.floor(CHUNK_DECORATE_BUDGET || 1));
     const maxBudget = Math.max(base, Math.floor(CHUNK_DECORATE_MAX_BUDGET || base));
     const fps = state && state.ui ? state.ui.fps : 0;
@@ -4869,7 +4968,7 @@
     const world = state.world;
     let decorated = 0;
     const startedAt = performance.now();
-    const timeBudget = Math.max(1, CHUNK_DECORATE_TIME_BUDGET_MS || 3);
+    const timeBudget = state.worldMeta && state.worldMeta.superOptimization ? 1 : Math.max(1, CHUNK_DECORATE_TIME_BUDGET_MS || 3);
     const candidates = [];
     for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
       for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {
@@ -4910,6 +5009,7 @@
   }
 
   function isColumnProtectedFromUnload(state, cx, cz, counts) {
+    if (isPendingTeleportColumn(state, cx, cz)) return true;
     const world = state.world;
     const loading = ensureChunkLoading(state);
     if (!world.modifiedChunks) return false;
@@ -4965,6 +5065,7 @@
     for (const column of columns.values()) {
       if (unloadedColumns >= budget) break;
       if (isColumnProtectedFromUnload(state, column.cx, column.cz, counts)) continue;
+      rememberDistantTerrainColumn(state, column.cx, column.cz);
       clearNearbyDecorationFlags(world, column.cx, column.cz);
       removeSheepInColumn(state, column.cx, column.cz);
       for (let cy = 0; cy < counts.y; cy += 1) {
@@ -5007,7 +5108,8 @@
 
   function ensureChunksAroundPlayer3D(state, radius = null) {
     if (!state || !state.world || !state.player) return 0;
-    const effectiveRadius = Number.isFinite(radius) ? radius : getChunkRenderDistanceValue(state.worldMeta);
+    const effectiveRadius = state.worldMeta && state.worldMeta.superOptimization ? 1
+      : (Number.isFinite(radius) ? radius : getChunkRenderDistanceValue(state.worldMeta));
     const manualDistance = isManualChunkRenderDistance(state.worldMeta);
     const seed = worldSeed(state);
     const pcx = Math.floor(state.player.x / CHUNK_SIZE);
@@ -5017,6 +5119,10 @@
     let t0 = performance.now();
     activeState = state;
     initChunkWorker(state);
+    const currentLoading = ensureChunkLoading(state);
+    if (currentLoading.syncJob && !isOptimizationChunkNeeded(state, currentLoading.syncJob.cx, currentLoading.syncJob.cz)) {
+      currentLoading.syncJob = null;
+    }
     queueChunksAroundPlayer3D(state, effectiveRadius);
     perf.queueMs = performance.now() - t0;
     t0 = performance.now();
@@ -5029,7 +5135,7 @@
     if (currentDimension(state) !== 'underground') generated += ensureTreeHousesAroundPlayer3D(state);
     perf.decorateMs = performance.now() - t0;
     t0 = performance.now();
-    unloadDistantChunks3D(state, manualDistance ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE);
+    unloadDistantChunks3D(state, state.worldMeta && state.worldMeta.superOptimization ? 1 : (manualDistance ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE));
     perf.unloadMs = performance.now() - t0;
     const loading = state.world.chunkLoading;
     perf.terrainQueue = loading ? loading.queue.length : 0;
@@ -5135,6 +5241,7 @@
     unloadDistantChunks3D,
     saveAllModifiedChunks3D,
     saveModifiedChunks3D,
+    getDistantTerrainSample3D,
     getBiomeAt3D,
     getVolcanoAt3D,
     isVolcanoVentCell3D,
