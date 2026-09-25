@@ -11,7 +11,7 @@ function load(file, extra = '') {
   if (extra) code = code.replace(/\}\)\(\);\s*$/, `${extra}\n})();`);
   vm.runInContext(code, context, { filename: file });
 }
-for (const file of ['src/world/blocks.js', 'src/3d/constants3d.js', 'src/3d/performance3d.js', 'src/3d/world3d.js', 'src/3d/fluids3d.js', 'src/3d/generation3d.js']) load(file, file.endsWith('generation3d.js') ? 'Game.loadingTest = { queueChunksAroundPlayer3D, isOptimizationChunkNeeded, isColumnProtectedFromUnload };' : '');
+for (const file of ['src/world/blocks.js', 'src/3d/constants3d.js', 'src/3d/performance3d.js', 'src/3d/world3d.js', 'src/3d/fluids3d.js', 'src/3d/generation3d.js']) load(file, file.endsWith('generation3d.js') ? 'Game.loadingTest = { queueChunksAroundPlayer3D, isOptimizationChunkNeeded, isColumnProtectedFromUnload, syncTerrainBudgetMs };' : '');
 const Game = context.window.CubDep;
 const C = Game.constants3d;
 const B = Game.blocks.BLOCK;
@@ -47,7 +47,8 @@ assert(state.world.chunkLoading.queue.some(job => (job.cx - 2) ** 2 + (job.cz - 
 context.THREE = context.window.THREE = require('../vendor/three.min.js');
 Game.ui3d = { drawUI3D() {} };
 load('src/3d/renderer3d.js', `Game.optimizationTest = {
-  updateChunkVisibility, drawBlockIcon,
+  updateChunkVisibility, drawBlockIcon, applyShaderProfile,
+  setProfileFixture: (r, s, l, h) => { renderer = r; scene = s; light = l; hemiLight = h; },
   setIcons: value => { optimizeIcons = value; },
   cacheSize: () => blockIconCache.size,
   addMesh: (key, entry) => { chunkMeshes.set(key, entry); chunkMeshRevision += 1; },
@@ -115,3 +116,25 @@ state.pause = { open: true };
 key('keydown');
 assert(!input.consumeActions().optimizationTogglePressed);
 console.log('optimization: unchanged simulation/loading, visibility and icon caches, keyboard passed');
+
+// Toggling mobile optimization must update shadows even when the shader profile is cached.
+const THREE = context.window.THREE;
+const profileRenderer = { shadowMap: {}, setClearColor() {} };
+const profileLight = new THREE.DirectionalLight();
+api.setProfileFixture(profileRenderer, new THREE.Scene(), profileLight, new THREE.HemisphereLight());
+context.window.innerWidth = 390;
+context.window.matchMedia = () => ({ matches: true });
+state.worldMeta.shadersEnabled = true;
+state.worldMeta.superOptimization = false;
+api.applyShaderProfile(state);
+assert(profileRenderer.shadowMap.enabled);
+state.worldMeta.superOptimization = true;
+api.applyShaderProfile(state);
+assert(!profileRenderer.shadowMap.enabled);
+assert(!profileLight.castShadow);
+assert(Game.loadingTest.syncTerrainBudgetMs(state) <= 2, 'actual terrain scheduler must use the mobile budget');
+state.worldMeta.superOptimization = false;
+api.applyShaderProfile(state);
+assert(profileRenderer.shadowMap.enabled, 'turning optimization off must restore shader shadows');
+assert(profileLight.castShadow);
+console.log('mobile shadow toggles and terrain scheduler passed');

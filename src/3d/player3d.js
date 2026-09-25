@@ -462,10 +462,21 @@
       return;
     }
 
+    const mobileMoving = Math.hypot(mobileForward, mobileStrafe) > 0.1;
+    let autoJump = false;
+    if (mobileMoving && player.onGround && !inLiquid && Math.hypot(vx, vz) > 0) {
+      const lookAhead = Math.min(0.45, 0.35 * scale);
+      const length = Math.hypot(vx, vz);
+      const aheadX = player.x + vx / length * lookAhead;
+      const aheadZ = player.z + vz / length * lookAhead;
+      autoJump = overlapsSolid(state, aheadX, player.y, aheadZ)
+        && !overlapsSolid(state, aheadX, player.y + 1.01, aheadZ)
+        && !overlapsSolid(state, player.x, player.y + 1.01, player.z);
+    }
     if (inLiquid) {
       player.vy *= 0.82;
       if (inputState.keys.Space || inputState.mobileJump) player.vy = Math.max(player.vy, 3.2 * jumpScale);
-    } else if ((inputState.keys.Space || inputState.mobileJump) && player.onGround) {
+    } else if ((inputState.keys.Space || inputState.mobileJump || actions.jumpPressed || autoJump) && player.onGround) {
       player.vy = JUMP_SPEED * jumpScale;
       player.onGround = false;
     }

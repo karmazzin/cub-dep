@@ -1707,9 +1707,11 @@
   function applyShaderProfile(state) {
     if (!renderer || !scene || !light || !hemiLight) return;
     const enabled = shaderMode(state);
+    const shadows = enabled && !(Game.performance3d && Game.performance3d.isMobileOptimization3D(state));
+    renderer.shadowMap.enabled = shadows;
+    light.castShadow = shadows;
     if (shaderProfileEnabled === enabled) return;
     shaderProfileEnabled = enabled;
-    renderer.shadowMap.enabled = enabled;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.setClearColor(enabled ? 0x9bd4f0 : SKY_COLOR, 1);
     scene.background = new THREE.Color(enabled ? 0x9bd4f0 : SKY_COLOR);
@@ -1723,7 +1725,6 @@
     hemiLight.color.setHex(enabled ? 0xcdefff : 0xbfe4ff);
     hemiLight.groundColor.setHex(enabled ? 0x5c4a36 : 0x3e3428);
     hemiLight.intensity = enabled ? 0.78 : 1.35;
-    light.castShadow = enabled;
     if (enabled) {
       light.shadow.mapSize.width = 1024;
       light.shadow.mapSize.height = 1024;
@@ -3417,7 +3418,8 @@
     const fpsBudget = Number.isFinite(fps) && fps >= 70
       ? baseBudget + 2 + backlogBoost
       : (Number.isFinite(fps) && fps >= 55 ? baseBudget + backlogBoost : baseBudget);
-    const budget = Math.min(maxBudget, fpsBudget);
+    const normalBudget = Math.min(maxBudget, fpsBudget);
+    const budget = Game.performance3d ? Game.performance3d.getMobileWorkBudget3D(state, normalBudget) : normalBudget;
     meshRebuildQueue.sort((a, b) => compareMeshTasksForPlayer(state, a, b));
     do {
       const task = meshRebuildQueue.shift();

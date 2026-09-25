@@ -194,8 +194,40 @@
         player.hotbar[i] = Number.isFinite(items[i]) ? { id: items[i], count: MAX_STACK } : null;
       }
     }
+    ensureMobileGlobe(state);
     updateSelectedBlockFromHotbar(state);
     return player.hotbar;
+  }
+
+  function ensureMobileGlobe(state) {
+    const mobile = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+      || (window.innerWidth > 0 && window.innerWidth <= 820);
+    const ui = state.ui || (state.ui = {});
+    if (!mobile || ui.mobileGlobeReady) return;
+    const hotbar = state.player.hotbar;
+    const globe = Game.blocks.BLOCK.GLOBE;
+    if (hotbar[4] && hotbar[4].id === globe) {
+      ui.mobileGlobeReady = true;
+      return;
+    }
+    const inventory = ensureInventory(state);
+    const sourceSlots = hotbar.some(stack => stack && stack.id === globe) ? hotbar : inventory;
+    const source = sourceSlots.findIndex(stack => stack && stack.id === globe);
+    if (source >= 0) {
+      const stack = sourceSlots[source];
+      sourceSlots[source] = hotbar[4];
+      hotbar[4] = stack;
+    } else {
+      if (hotbar[4]) {
+        const destination = hotbar.some((stack, i) => i !== 4 && !stack) ? hotbar : inventory;
+        const empty = destination.findIndex(stack => !stack);
+        // Retry when space is freed rather than discarding a saved item.
+        if (empty < 0) return;
+        destination[empty] = hotbar[4];
+      }
+      hotbar[4] = { id: globe, count: 1 };
+    }
+    ui.mobileGlobeReady = true;
   }
 
   function updateSelectedBlockFromHotbar(state) {

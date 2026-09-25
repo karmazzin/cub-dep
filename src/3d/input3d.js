@@ -15,6 +15,8 @@
       secondaryReleased: false,
       breakPressed: false,
       placePressed: false,
+      usePressed: false,
+      mobilePlace: false,
       repairPressed: false,
       previewPressed: false,
       lootTablePressed: false,
@@ -32,6 +34,7 @@
     const uiActions = [];
     let lastTouchTime = 0;
     let lastSpacePressTime = -Infinity;
+    let lastMobileJumpTime = -Infinity;
     let lastShiftPressTime = -Infinity;
 
     function canvasPoint(event) {
@@ -199,12 +202,27 @@
         touches.set(event.pointerId, { type: 'break' });
       } else if (control && control.type === 'place') {
         input.placePressed = true;
+        input.mobilePlace = true;
+        touches.set(event.pointerId, { type: 'tap' });
+      } else if (control && control.type === 'use') {
+        input.usePressed = true;
         touches.set(event.pointerId, { type: 'tap' });
       } else if (control && control.type === 'jump') {
         input.mobileJump = true;
+        input.jumpPressed = true;
+        const now = performance.now();
+        if (state.worldMeta && state.worldMeta.mode === 'creative' && now - lastMobileJumpTime <= 360) {
+          input.flyTogglePressed = true;
+          lastMobileJumpTime = -Infinity;
+        } else {
+          lastMobileJumpTime = now;
+        }
         touches.set(event.pointerId, { type: 'jump' });
       } else if (control && control.type === 'repair') {
         input.repairPressed = true;
+        touches.set(event.pointerId, { type: 'tap' });
+      } else if (control && control.type === 'optimization') {
+        input.optimizationTogglePressed = true;
         touches.set(event.pointerId, { type: 'tap' });
       } else if (control && control.type === 'inventory') {
         uiActions.push({ type: 'inventory' });
@@ -257,6 +275,8 @@
       const actions = {
         breakPressed: input.breakPressed,
         placePressed: input.placePressed,
+        usePressed: input.usePressed,
+        mobilePlace: input.mobilePlace,
         repairPressed: input.repairPressed,
         previewPressed: input.previewPressed,
         lootTablePressed: input.lootTablePressed,
@@ -269,6 +289,8 @@
       };
       input.breakPressed = false;
       input.placePressed = false;
+      input.usePressed = false;
+      input.mobilePlace = false;
       input.repairPressed = false;
       input.previewPressed = false;
       input.lootTablePressed = false;
@@ -292,6 +314,8 @@
       input.mouseDy = 0;
       input.breakPressed = false;
       input.placePressed = false;
+      input.usePressed = false;
+      input.mobilePlace = false;
       input.repairPressed = false;
       input.previewPressed = false;
       input.lootTablePressed = false;
@@ -304,6 +328,7 @@
       input.mobileMoveX = 0;
       input.mobileMoveY = 0;
       input.mobileJump = false;
+      lastMobileJumpTime = -Infinity;
       input.mobileActive = false;
       touches.clear();
       uiActions.length = 0;

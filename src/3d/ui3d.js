@@ -523,8 +523,10 @@
       move: { cx: moveCx, cy: moveCy, radius: moveRadius },
       break: { cx: canvas.width - 82, cy: canvas.height - 124, radius: button + 6 },
       place: { cx: canvas.width - 148, cy: canvas.height - 178, radius: button },
+      use: { cx: canvas.width - 148, cy: canvas.height - 252, radius: 27 },
       jump: { cx: canvas.width - 46, cy: canvas.height - 206, radius: button },
       repair: { cx: canvas.width - 150, cy: canvas.height - 92, radius: Math.max(23, button - 5) },
+      optimization: { cx: canvas.width - 152, cy: 34, radius: 23 },
       inventory: { cx: canvas.width - 96, cy: 34, radius: 23 },
       pause: { cx: canvas.width - 40, cy: 34, radius: 23 },
       hotbar: Game.inventory3d && Game.inventory3d.ensureHotbar
@@ -539,7 +541,7 @@
     if (circleHit(x, y, controls.move.cx, controls.move.cy, controls.move.radius + 22)) {
       return { type: 'move', ...controls.move };
     }
-    for (const type of ['break', 'place', 'jump', 'repair', 'inventory', 'pause']) {
+    for (const type of ['break', 'place', 'use', 'jump', 'repair', 'optimization', 'inventory', 'pause']) {
       const control = controls[type];
       if (circleHit(x, y, control.cx, control.cy, control.radius)) return { type, ...control };
     }
@@ -611,6 +613,25 @@
       iconCtx.lineTo(c.cx + 16, c.cy - 16);
       iconCtx.stroke();
     });
+    drawCircleButton(ctx, controls.use, (iconCtx, c) => {
+      iconCtx.lineWidth = 2;
+      iconCtx.beginPath();
+      iconCtx.moveTo(c.cx - 6, c.cy + 6);
+      iconCtx.lineTo(c.cx - 13, c.cy - 3);
+      iconCtx.lineTo(c.cx - 9, c.cy - 6);
+      iconCtx.lineTo(c.cx - 4, c.cy - 2);
+      iconCtx.lineTo(c.cx - 4, c.cy - 17);
+      iconCtx.lineTo(c.cx + 1, c.cy - 17);
+      iconCtx.lineTo(c.cx + 1, c.cy - 7);
+      iconCtx.lineTo(c.cx + 11, c.cy - 4);
+      iconCtx.lineTo(c.cx + 10, c.cy + 6);
+      iconCtx.closePath();
+      iconCtx.stroke();
+      iconCtx.font = 'bold 10px Arial';
+      iconCtx.textAlign = 'center';
+      iconCtx.textBaseline = 'middle';
+      iconCtx.fillText('Исп.', c.cx, c.cy + 17);
+    });
     drawCircleButton(ctx, controls.jump, (iconCtx, c) => {
       iconCtx.beginPath();
       iconCtx.moveTo(c.cx, c.cy - 13);
@@ -624,12 +645,56 @@
       iconCtx.fill();
     });
     drawCircleButton(ctx, controls.repair, (iconCtx, c) => {
+      iconCtx.lineWidth = 2;
+      iconCtx.fillStyle = '#94a8be';
       iconCtx.beginPath();
-      iconCtx.moveTo(c.cx - 11, c.cy + 9);
-      iconCtx.lineTo(c.cx + 8, c.cy - 10);
-      iconCtx.moveTo(c.cx + 2, c.cy - 13);
-      iconCtx.lineTo(c.cx + 12, c.cy - 3);
+      iconCtx.moveTo(c.cx, c.cy - 16);
+      iconCtx.lineTo(c.cx + 14, c.cy - 9);
+      iconCtx.lineTo(c.cx + 14, c.cy + 8);
+      iconCtx.lineTo(c.cx, c.cy + 16);
+      iconCtx.lineTo(c.cx - 14, c.cy + 8);
+      iconCtx.lineTo(c.cx - 14, c.cy - 9);
+      iconCtx.closePath();
+      iconCtx.fill();
       iconCtx.stroke();
+      iconCtx.beginPath();
+      iconCtx.moveTo(c.cx - 14, c.cy - 9);
+      iconCtx.lineTo(c.cx, c.cy - 2);
+      iconCtx.lineTo(c.cx + 14, c.cy - 9);
+      iconCtx.moveTo(c.cx, c.cy - 2);
+      iconCtx.lineTo(c.cx, c.cy + 16);
+      iconCtx.stroke();
+      iconCtx.translate(c.cx, c.cy + 3);
+      iconCtx.rotate(-Math.PI / 5);
+      iconCtx.fillStyle = '#f4d7aa';
+      iconCtx.fillRect(-13, -5, 26, 10);
+      iconCtx.strokeStyle = '#63472e';
+      iconCtx.lineWidth = 1;
+      iconCtx.strokeRect(-13, -5, 26, 10);
+      iconCtx.fillStyle = '#fff2d6';
+      iconCtx.fillRect(-4, -4, 8, 8);
+      iconCtx.fillStyle = '#997b55';
+      for (const x of [-10, 8]) {
+        iconCtx.fillRect(x, -3, 2, 2);
+        iconCtx.fillRect(x, 1, 2, 2);
+      }
+    });
+    drawCircleButton(ctx, controls.optimization, (iconCtx, c) => {
+      const enabled = !!(state.worldMeta && state.worldMeta.superOptimization);
+      iconCtx.fillStyle = enabled ? '#7cf3aa' : '#f5f0df';
+      iconCtx.beginPath();
+      iconCtx.moveTo(c.cx + 2, c.cy - 17);
+      iconCtx.lineTo(c.cx - 10, c.cy);
+      iconCtx.lineTo(c.cx - 1, c.cy);
+      iconCtx.lineTo(c.cx - 4, c.cy + 9);
+      iconCtx.lineTo(c.cx + 11, c.cy - 6);
+      iconCtx.lineTo(c.cx + 2, c.cy - 6);
+      iconCtx.closePath();
+      iconCtx.fill();
+      iconCtx.font = 'bold 9px Arial';
+      iconCtx.textAlign = 'center';
+      iconCtx.textBaseline = 'middle';
+      iconCtx.fillText(enabled ? 'ВКЛ' : 'ВЫКЛ', c.cx, c.cy + 15);
     });
     drawCircleButton(ctx, controls.inventory, (iconCtx, c) => {
       for (let yy = 0; yy < 2; yy += 1) {
@@ -880,8 +945,17 @@
     const y = Math.floor(player.y || 0);
     const z = Math.floor(player.z || 0) - spawnZ;
     const mobile = isMobileHud(canvas);
+    if (mobile) {
+      ctx.fillStyle = 'rgba(8,12,16,0.58)';
+      ctx.fillRect(18, 20, 90, 28);
+      ctx.fillStyle = '#f5f0df';
+      ctx.font = 'bold 14px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`FPS: ${Math.round(state.ui.fps || 0)}`, 28, 34);
+    }
     const flightText = (player.flying ? ` Полет${player.flightBoost ? '+' : ''}` : '')
-      + (state.worldMeta && state.worldMeta.superOptimization ? ' Оптимизация [O]' : '');
+      + (!mobile && state.worldMeta && state.worldMeta.superOptimization ? ' Оптимизация [O]' : '');
     const hudText = mobile
       ? `X:${x} Y:${y} Z:${z}  Биом: ${getCurrentBiomeLabel(state)}${flightText}`
       : `FPS: ${Math.round(state.ui.fps || 0)} X: ${x} Y: ${y} Z: ${z} Биом: ${getCurrentBiomeLabel(state)}${flightText}`;

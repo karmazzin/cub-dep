@@ -4007,6 +4007,9 @@
 
   function syncTerrainBudgetMs(state) {
     const base = Math.max(0.5, CHUNK_SYNC_GENERATE_TIME_BUDGET_MS || 3);
+    if (Game.performance3d && Game.performance3d.isMobileOptimization3D(state)) {
+      return Game.performance3d.getMobileWorkBudget3D(state, base);
+    }
     const maxBudget = Math.max(base, CHUNK_SYNC_GENERATE_MAX_TIME_BUDGET_MS || base);
     const fps = state && state.ui ? state.ui.fps : 0;
     if (!Number.isFinite(fps) || fps <= 0) return base;
@@ -4891,7 +4894,8 @@
     const world = state.world;
     let decorated = 0;
     const startedAt = performance.now();
-    const timeBudget = Math.max(1, CHUNK_DECORATE_TIME_BUDGET_MS || 3);
+    const normalBudget = Math.max(1, CHUNK_DECORATE_TIME_BUDGET_MS || 3);
+    const timeBudget = Game.performance3d ? Game.performance3d.getMobileWorkBudget3D(state, normalBudget) : normalBudget;
     const candidates = [];
     for (let cz = Math.max(0, pcz - radius); cz < Math.min(counts.z, pcz + radius + 1); cz += 1) {
       for (let cx = Math.max(0, pcx - radius); cx < Math.min(counts.x, pcx + radius + 1); cx += 1) {

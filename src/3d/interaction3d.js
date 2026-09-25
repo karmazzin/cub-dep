@@ -1800,11 +1800,12 @@
     return true;
   }
 
-  function placeSelectedBlock(state) {
+  function placeSelectedBlock(state, useOnly = false, placeOnly = false) {
     const stack = Game.inventory3d && Game.inventory3d.getSelectedHotbarStack
       ? Game.inventory3d.getSelectedHotbarStack(state)
       : null;
     const blockId = stack ? stack.id : BLOCK.AIR;
+    if (placeOnly && (blockId === ITEM.NOTE || blockId === ITEM.MAP)) return;
     if (blockId === ITEM.NOTE) {
       if (Game.inventory3d && Game.inventory3d.openNote) Game.inventory3d.openNote(state, stack);
       else setNotice(state, 'Записка недоступна');
@@ -1816,21 +1817,21 @@
       return;
     }
     const hit = raycastBlock(state);
-    if (!hit || !hit.place) return;
-    if (hit.id === BLOCK.CALCULATOR) {
+    if (!hit) return;
+    if (!placeOnly && hit.id === BLOCK.CALCULATOR) {
       openCalculatorForm(state, hit);
       return;
     }
-    if (hit.id === BLOCK.TNT_TABLE) {
+    if (!placeOnly && hit.id === BLOCK.TNT_TABLE) {
       openTntTableForm(state);
       return;
     }
-    if (hit.id === BLOCK.GLOBE) {
+    if (!placeOnly && hit.id === BLOCK.GLOBE) {
       if (Game.openMap) Game.openMap({ allowAnyMode: true });
       else setNotice(state, 'Карта недоступна');
       return;
     }
-    if (isChestBlock(hit.id)) {
+    if (!placeOnly && isChestBlock(hit.id)) {
       if (Game.openChestInventory) Game.openChestInventory(hit.x, hit.y, hit.z);
       else setNotice(state, 'Сундук недоступен');
       return;
@@ -1843,9 +1844,14 @@
       setNotice(state, 'Граница доступна только в редакторе урока');
       return;
     }
-    if (isAnyTntBlock(hit.id) && blockId === BLOCK.TNT_REMOTE && bindTntRemoteTarget(state, hit)) return;
-    if (hit.id === BLOCK.TNT_REMOTE && activateTntRemoteTarget(state)) return;
-    if (isAnyTntBlock(hit.id) && activateDynamite(state, hit.x, hit.y, hit.z, hit.id)) return;
+    if (!placeOnly && isAnyTntBlock(hit.id) && blockId === BLOCK.TNT_REMOTE && bindTntRemoteTarget(state, hit)) return;
+    if (!placeOnly && hit.id === BLOCK.TNT_REMOTE && activateTntRemoteTarget(state)) return;
+    if (!placeOnly && isAnyTntBlock(hit.id) && activateDynamite(state, hit.x, hit.y, hit.z, hit.id)) return;
+    if (useOnly) {
+      setNotice(state, 'Этот блок нельзя использовать');
+      return;
+    }
+    if (!hit.place) return;
     if (!Number.isFinite(blockId) || blockId === BLOCK.AIR) return;
     const { x, y, z } = hit.place;
     if (!inBounds3D(state.world, x, y, z)) return;
@@ -1986,7 +1992,8 @@
     if (actions.repairPressed) repairTargetBlock(state, hit);
     if (actions.previewPressed) togglePreview(state, previewHit);
     if (actions.lootTablePressed) showTargetLootTable(state, hit);
-    if (actions.placePressed) placeSelectedBlock(state);
+    if (actions.usePressed) placeSelectedBlock(state, true);
+    else if (actions.placePressed) placeSelectedBlock(state, false, !!actions.mobilePlace);
   }
 
   const MOB_LABELS = {
