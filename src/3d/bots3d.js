@@ -354,7 +354,8 @@
     state.world.blockDamage[key] = progress;
     if (progress < 1) return false;
     delete state.world.blockDamage[key];
-    return setBlock3D(state, x, y, z, BLOCK.AIR) ? id : false;
+    const noDrop = Game.world3d.isOptimizedFluidWithoutDrop3D && Game.world3d.isOptimizedFluidWithoutDrop3D(state, x, y, z);
+    return setBlock3D(state, x, y, z, BLOCK.AIR) ? (noDrop ? BLOCK.AIR : id) : false;
   }
 
   function initBot(bot) {

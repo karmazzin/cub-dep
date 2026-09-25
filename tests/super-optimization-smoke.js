@@ -15,11 +15,12 @@ for (const file of ['src/world/blocks.js', 'src/3d/constants3d.js', 'src/3d/perf
 const Game = context.window.CubDep;
 const C = Game.constants3d;
 const B = Game.blocks.BLOCK;
-// Optimization must preserve world loading and simulation.
+// Optimization uses a near radius without overwriting the ordinary preference.
 for (const distance of [1, 6, 10, 'auto']) {
   const plain = { chunkRenderDistance: distance };
   const optimized = { ...plain, superOptimization: true };
-  assert.equal(C.getChunkRenderDistanceValue(optimized), C.getChunkRenderDistanceValue(plain));
+  assert.equal(C.getChunkRenderDistanceValue(optimized), 1);
+  assert.equal(optimized.chunkRenderDistance, distance);
   assert.equal(C.isManualChunkRenderDistance(optimized), C.isManualChunkRenderDistance(plain));
 }
 function createState(enabled) {
@@ -34,14 +35,15 @@ for (const current of [state, plain]) {
   current.world.allowChunkCreationWrites = 0;
   Game.fluids3d.addWaterSource3D(current, 40, 1, 40);
   for (let i = 0; i < 12; i++) Game.fluids3d.updateFluids3D(current, 0.14);
-  Game.loadingTest.queueChunksAroundPlayer3D(current, 6);
+  Game.loadingTest.queueChunksAroundPlayer3D(current, C.getChunkRenderDistanceValue(current.worldMeta));
 }
 const blocks = current => JSON.stringify(Array.from(current.world.chunks, ([key, chunk]) => [key, Array.from(chunk.blocks)]));
-assert.equal(blocks(state), blocks(plain), 'water simulation must match normal gameplay');
-assert.equal(Game.world3d.getBlock3D(state, 41, 1, 40), B.WATER);
-const jobs = current => JSON.stringify(current.world.chunkLoading.queue.map(job => job.key));
-assert.equal(jobs(state), jobs(plain), 'generation queues must be identical');
-assert(state.world.chunkLoading.queue.some(job => (job.cx - 2) ** 2 + (job.cz - 2) ** 2 > 1));
+assert.notEqual(blocks(state), blocks(plain), 'optimized fluids must remain still');
+assert.equal(Game.world3d.getBlock3D(state, 40, 1, 40), B.SNOW);
+assert.equal(Game.world3d.getBlock3D(state, 41, 1, 40), B.AIR);
+assert.equal(Game.world3d.getBlock3D(plain, 41, 1, 40), B.WATER);
+assert(state.world.chunkLoading.queue.every(job => (job.cx - 2) ** 2 + (job.cz - 2) ** 2 <= 1));
+assert(plain.world.chunkLoading.queue.some(job => (job.cx - 2) ** 2 + (job.cz - 2) ** 2 > 1));
 
 // Observe actual visibility writes, including invalidation within the same chunk.
 context.THREE = context.window.THREE = require('../vendor/three.min.js');
@@ -50,6 +52,7 @@ load('src/3d/renderer3d.js', `Game.optimizationTest = {
   updateChunkVisibility, drawBlockIcon, applyShaderProfile,
   setProfileFixture: (r, s, l, h) => { renderer = r; scene = s; light = l; hemiLight = h; },
   setIcons: value => { optimizeIcons = value; },
+  setDistantCache: value => { distantImages = value; visibilityCache = null; },
   cacheSize: () => blockIconCache.size,
   addMesh: (key, entry) => { chunkMeshes.set(key, entry); chunkMeshRevision += 1; },
 };`);
@@ -59,7 +62,10 @@ let visible = false;
 const mesh = { set visible(value) { writes++; visible = value; } };
 api.addMesh('5,0,2', { cx: 5, cz: 2, solid: mesh });
 api.updateChunkVisibility(state);
-assert(visible, 'full configured radius must be displayed');
+assert(visible, 'terrain must stay visible until a replacement is ready');
+api.setDistantCache({ hasColumn: () => true });
+api.updateChunkVisibility(state);
+assert(!visible, 'completed distant surface replaces the live mesh');
 const firstWrites = writes;
 for (let i = 0; i < 100; i++) api.updateChunkVisibility(state);
 assert.equal(writes, firstWrites, 'stationary view must reuse visibility results');
@@ -68,7 +74,10 @@ api.updateChunkVisibility(state);
 assert(!visible);
 state.worldMeta.chunkRenderDistance = 6;
 api.updateChunkVisibility(state);
-assert(visible);
+assert(!visible, 'ordinary distance must not override optimization');
+state.player.x = 72;
+api.updateChunkVisibility(state);
+assert(visible, 'near mesh must become visible');
 api.addMesh('5,0,2', { cx: 5, cz: 2, solid: mesh });
 const beforeReplace = writes;
 api.updateChunkVisibility(state);
@@ -115,7 +124,7 @@ key('keyup');
 state.pause = { open: true };
 key('keydown');
 assert(!input.consumeActions().optimizationTogglePressed);
-console.log('optimization: unchanged simulation/loading, visibility and icon caches, keyboard passed');
+console.log('optimization: solid fluids, near loading, visibility and icon caches, keyboard passed');
 
 // Toggling mobile optimization must update shadows even when the shader profile is cached.
 const THREE = context.window.THREE;

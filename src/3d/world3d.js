@@ -145,7 +145,7 @@
     };
   }
 
-  function getBlock3D(state, x, y, z) {
+  function getStoredBlock3D(state, x, y, z) {
     const world = state && state.world;
     const projected = projectGenerationCoords(world, x, z);
     x = projected.x;
@@ -153,6 +153,25 @@
     if (!world || !inBounds3D(world, x, y, z)) return BLOCK.BEDROCK;
     const entry = getChunkForBlock3D(world, x, y, z, false);
     return entry ? entry.chunk.blocks[entry.index] : BLOCK.AIR;
+  }
+
+  function getGameplayBlockId3D(state, id) {
+    if (state && state.worldMeta && state.worldMeta.superOptimization) {
+      if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) return BLOCK.SNOW;
+      if (id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) return BLOCK.STONE;
+    }
+    return id;
+  }
+
+  function getBlock3D(state, x, y, z) {
+    return getGameplayBlockId3D(state, getStoredBlock3D(state, x, y, z));
+  }
+
+  function isOptimizedFluidWithoutDrop3D(state, x, y, z) {
+    const meta = state && state.worldMeta;
+    if (!meta || !meta.superOptimization || (meta.mode && meta.mode !== 'survival')) return false;
+    const stored = getStoredBlock3D(state, x, y, z);
+    return stored === BLOCK.WATER || stored === BLOCK.HOT_WATER || stored === BLOCK.LAVA || stored === BLOCK.VOLCANIC_LAVA;
   }
 
   function chunkKey3D(x, y, z) {
@@ -208,6 +227,7 @@
   }
 
   function disturbStaticWaterNear(state, x, y, z) {
+    if (state.worldMeta && state.worldMeta.superOptimization) return;
     const world = state && state.world;
     if (!world || world.suppressChunkModification) return;
     for (const [dx, dy, dz] of WATER_DISTURB_DIRS) {
@@ -594,6 +614,9 @@
   }
 
   Game.world3d = {
+    isOptimizedFluidWithoutDrop3D,
+    getStoredBlock3D,
+    getGameplayBlockId3D,
     createWorld3D,
     clearWorld3D,
     markChunkModified3D,

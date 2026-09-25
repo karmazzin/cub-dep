@@ -16,6 +16,7 @@
   }
 
   function getChunkRenderDistanceValue(worldMeta) {
+    if (worldMeta && worldMeta.superOptimization) return 1;
     const normalized = normalizeChunkRenderDistance(worldMeta && worldMeta.chunkRenderDistance);
     return normalized === CHUNK_RENDER_DISTANCE_AUTO ? CHUNK_RENDER_DISTANCE : normalized;
   }
@@ -34,6 +35,7 @@
     WORLD_H: 128,
     WORLD_D: 2048,
     CHUNK_SIZE: 16,
+    CHUNK_OPTIMIZATION_PRELOAD_RADIUS: 2,
     CHUNK_RENDER_DISTANCE,
     CHUNK_UNLOAD_DISTANCE,
     CHUNK_RENDER_DISTANCE_AUTO,

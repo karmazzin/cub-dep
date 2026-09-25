@@ -1,7 +1,7 @@
 (() => {
   const Game = window.CubDep;
   const { BLOCK } = Game.blocks;
-  const { clearWorld3D, setBlock3D, getBlock3D, setStaticWater3D, setLava3D, setVolcanicLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
+  const { clearWorld3D, setBlock3D, getStoredBlock3D: getBlock3D, setStaticWater3D, setLava3D, setVolcanicLava3D, setGrassLevel3D, getGrassLevel3D, removeChunk3D, installGeneratedChunk3D, installSavedChunk3D, getChunkSnapshot3D } = Game.world3d;
   const {
     CHUNK_SIZE,
     CHUNK_UNLOAD_DISTANCE,
@@ -622,6 +622,11 @@
   function updateVolcanoes3D(state, dt) {
     if (!state || !state.world || currentDimension(state) === 'underground') return;
     const volcanoes = ensureVolcanoState(state);
+    if (state.worldMeta && state.worldMeta.superOptimization) {
+      volcanoes.active.clear();
+      volcanoes.shake = 0;
+      return;
+    }
     volcanoes.time += Math.max(0, dt || 0);
     volcanoes.lavaTimer = Math.max(0, volcanoes.lavaTimer - dt);
     updateVolcanicCoolingWaves(state, dt);
@@ -3696,6 +3701,12 @@
   }
 
   function isOptimizationChunkNeeded(state, cx, cz) {
+    if (state.worldMeta && state.worldMeta.superOptimization) {
+      const dx = cx - Math.floor(state.player.x / CHUNK_SIZE);
+      const dz = cz - Math.floor(state.player.z / CHUNK_SIZE);
+      const radius = Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS + 1;
+      return dx * dx + dz * dz <= radius * radius || isPendingTeleportColumn(state, cx, cz);
+    }
     return Game.constants3d.isActiveSimulationPosition3D(state, cx * CHUNK_SIZE, cz * CHUNK_SIZE)
       || isPendingTeleportColumn(state, cx, cz);
   }
@@ -3831,6 +3842,7 @@
       return value;
     };
     const shouldQueueVerticalChunk = (cx, cy, cz) => {
+      if (state.worldMeta && state.worldMeta.superOptimization) return true;
       if (!usingSyncFallback || manualDistance) return true;
       const surface = surfaceChunkRange(cx, cz);
       if (Math.abs(cy - pcy) <= 1) return true;
@@ -3888,7 +3900,7 @@
       loading.queue = loading.queue.filter((job) => {
         const dx = job.cx - pcx;
         const dz = job.cz - pcz;
-        const keepRadius = manualDistance
+        const keepRadius = manualDistance || (state.worldMeta && state.worldMeta.superOptimization)
           ? effectiveRadius + 1
           : (usingSyncFallback ? effectiveRadius : CHUNK_UNLOAD_DISTANCE);
         const keep = (dx * dx + dz * dz <= keepRadius * keepRadius || isPendingTeleportColumn(state, job.cx, job.cz))
@@ -5034,7 +5046,8 @@
 
   function ensureChunksAroundPlayer3D(state, radius = null) {
     if (!state || !state.world || !state.player) return 0;
-    const effectiveRadius = Number.isFinite(radius) ? radius : getChunkRenderDistanceValue(state.worldMeta);
+    const effectiveRadius = Number.isFinite(radius) ? radius : (state.worldMeta && state.worldMeta.superOptimization
+      ? Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS : getChunkRenderDistanceValue(state.worldMeta));
     const manualDistance = isManualChunkRenderDistance(state.worldMeta);
     const seed = worldSeed(state);
     const pcx = Math.floor(state.player.x / CHUNK_SIZE);
@@ -5060,7 +5073,7 @@
     if (currentDimension(state) !== 'underground') generated += ensureTreeHousesAroundPlayer3D(state);
     perf.decorateMs = performance.now() - t0;
     t0 = performance.now();
-    unloadDistantChunks3D(state, manualDistance ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE);
+    unloadDistantChunks3D(state, manualDistance || (state.worldMeta && state.worldMeta.superOptimization) ? effectiveRadius + 1 : CHUNK_UNLOAD_DISTANCE);
     perf.unloadMs = performance.now() - t0;
     const loading = state.world.chunkLoading;
     perf.terrainQueue = loading ? loading.queue.length : 0;

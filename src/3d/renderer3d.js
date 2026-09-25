@@ -12,6 +12,12 @@
   let chunkMeshRevision = 0;
   let visibilityCache = null;
   let optimizeIcons = false;
+  let optimizationWorld = null;
+  let optimizationEnabled = false;
+  let distantImages = null;
+  let nearMeshKey = '';
+  const surfaceColumns = new Map();
+  let pendingSurfaceColumns = new Set();
   const blockIconCache = new Map();
   let solidMaterial = null;
   let shaderSolidMaterial = null;
@@ -863,6 +869,10 @@
   }
 
   function getRenderedBlockId(state, id, x, y, z) {
+    if (state.worldMeta && state.worldMeta.superOptimization) {
+      const stored = Game.world3d.getStoredBlock3D(state, x, y, z);
+      if (stored !== id) return stored;
+    }
     if (id === BLOCK.DIRT && getGrassLevel3D && getGrassLevel3D(state, x, y, z) > 0) return BLOCK.GRASS;
     if (id === BLOCK.GRASS) return BLOCK.GRASS;
     return id;
@@ -1050,7 +1060,12 @@
     let visibleChunks = 0;
     let visibleMeshes = 0;
     for (const entry of chunkMeshes.values()) {
-      const visible = isChunkInRenderDistance(entry, playerChunk, renderDistance);
+      let visible = isChunkInRenderDistance(entry, playerChunk, renderDistance);
+      if (state.worldMeta && state.worldMeta.superOptimization) {
+        const cached = distantImages && distantImages.hasColumn(entry.cx, entry.cz);
+        // A complete cached surface takes over; otherwise retain live terrain.
+        visible = cached ? visible && !pendingSurfaceColumns.has(`${entry.cx},${entry.cz}`) : true;
+      }
       if (entry.solid) entry.solid.visible = visible;
       if (entry.water) entry.water.visible = visible;
       if (entry.lava) entry.lava.visible = visible;
@@ -2065,8 +2080,17 @@
   }
 
   function updateSteamParticles(state) {
+    if (state.worldMeta && state.worldMeta.superOptimization) {
+      if (steamGroup && steamGroup.visible) {
+        steamGroup.visible = false;
+        for (const particle of steamParticles) { particle.active = false; particle.mesh.visible = false; }
+      }
+      lastSteamUpdate = 0;
+      return;
+    }
     ensureSteamParticles();
     if (!steamGroup) return;
+    steamGroup.visible = true;
     const now = performance.now() * 0.001;
     const dt = Math.min(0.05, lastSteamUpdate ? now - lastSteamUpdate : 0);
     lastSteamUpdate = now;
@@ -2162,6 +2186,14 @@
   }
 
   function updateLavaEmbers(state) {
+    if (state.worldMeta && state.worldMeta.superOptimization) {
+      if (lavaEmberGroup && lavaEmberGroup.visible) {
+        lavaEmberGroup.visible = false;
+        for (const ember of lavaEmbers) { ember.active = false; ember.mesh.visible = false; }
+      }
+      lastLavaEmberUpdate = 0;
+      return;
+    }
     ensureLavaEmbers();
     if (!lavaEmberGroup) return;
     const enabled = shaderMode(state);
@@ -3256,6 +3288,13 @@
     ensureMaterials();
 
     const key = chunkKey(cx, cy, cz);
+    if (state.worldMeta && state.worldMeta.superOptimization && !state.world.chunks.has(key)) {
+      const old = chunkMeshes.get(key);
+      // Data streaming must not destroy the only visible representation.
+      if (old && old[mode]) return meshStats(old[mode]);
+    }
+    surfaceColumns.set(`${cx},${cz}`, { cx, cz });
+    if (distantImages && state.world.chunks.has(key)) distantImages.invalidate(cx, cz);
     const entry = chunkMeshes.get(key) || { cx, cy, cz, solid: null, water: null, lava: null };
     entry.cx = cx;
     entry.cy = cy;
@@ -3305,6 +3344,8 @@
     for (const key of chunkKeys) {
       const parsed = parseChunkKey(key);
       if (!parsed) continue;
+      if (state.worldMeta && state.worldMeta.superOptimization
+        && !isChunkInRenderDistance(parsed, getPlayerChunk(state.player), Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)) continue;
       const solid = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'solid');
       const water = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'water');
       const lava = setChunkMesh(state, parsed.cx, parsed.cy, parsed.cz, 'lava');
@@ -3335,12 +3376,12 @@
     };
   }
 
-  function chunkModeFlags(world, key) {
+  function chunkModeFlags(world, key, state) {
     const chunk = world && world.chunks ? world.chunks.get(key) : null;
     const flags = { solid: false, water: false, lava: false };
     if (!chunk || !chunk.blocks) return flags;
     for (let i = 0; i < chunk.blocks.length; i += 1) {
-      const id = chunk.blocks[i];
+      const id = Game.world3d.getGameplayBlockId3D(state, chunk.blocks[i]);
       if (id === BLOCK.AIR) continue;
       if (id === BLOCK.WATER || id === BLOCK.HOT_WATER) flags.water = true;
       else if (id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA) flags.lava = true;
@@ -3382,16 +3423,39 @@
 
   function enqueueDirtyChunkMeshes(state) {
     if (!state.world.dirtyChunks.size) return;
+    if (state.worldMeta && state.worldMeta.superOptimization && distantImages) {
+      const rebuildColumns = new Set();
+      for (const key of state.world.dirtyChunks) {
+        if (!state.world.chunks.has(key)) continue;
+        const parsed = parseChunkKey(key);
+        if (parsed && distantImages.hasColumn(parsed.cx, parsed.cz)
+          && isChunkInRenderDistance(parsed, getPlayerChunk(state.player), Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)) {
+          rebuildColumns.add(`${parsed.cx},${parsed.cz}`);
+        }
+      }
+      // A cached surface owns the entire vertical column. Replacing it from
+      // just one edited chunk would lose the other, already released meshes.
+      for (const key of state.world.chunks.keys()) {
+        const parsed = parseChunkKey(key);
+        if (rebuildColumns.has(`${parsed.cx},${parsed.cz}`)) state.world.dirtyChunks.add(key);
+      }
+    }
     const modes = ['solid', 'water', 'lava'];
     const deferred = new Set();
     for (const key of state.world.dirtyChunks) {
       const parsed = parseChunkKey(key);
       if (!parsed) continue;
+      if (state.worldMeta && state.worldMeta.superOptimization && state.world.chunks.has(key)
+        && !isChunkInRenderDistance(parsed, getPlayerChunk(state.player), Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)) {
+        // Keep the last seen image until this column can actually be rebuilt.
+        deferred.add(key);
+        continue;
+      }
       if (state.world.chunks.has(key) && !Game.constants3d.isActiveSimulationPosition3D(state, parsed.cx * CHUNK_SIZE, parsed.cz * CHUNK_SIZE)) {
         deferred.add(key);
         continue;
       }
-      const flags = chunkModeFlags(state.world, key);
+      const flags = chunkModeFlags(state.world, key, state);
       for (const mode of modes) {
         if (!shouldQueueMeshMode(state, key, mode, flags)) continue;
         const taskKey = `${key}:${mode}`;
@@ -3425,6 +3489,11 @@
       const task = meshRebuildQueue.shift();
       if (!task) break;
       meshRebuildQueued.delete(task.taskKey);
+      if (state.worldMeta && state.worldMeta.superOptimization && state.world.chunks.has(task.key)
+        && !isChunkInRenderDistance(task, getPlayerChunk(state.player), Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)) {
+        state.world.dirtyChunks.add(task.key);
+        continue;
+      }
       if (state.world.chunks.has(task.key) && !Game.constants3d.isActiveSimulationPosition3D(state, task.cx * CHUNK_SIZE, task.cz * CHUNK_SIZE)) {
         state.world.dirtyChunks.add(task.key);
         continue;
@@ -3450,6 +3519,12 @@
   }
 
   function setWorld(state) {
+    if (distantImages) distantImages.clear();
+    surfaceColumns.clear();
+    pendingSurfaceColumns.clear();
+    optimizationWorld = state.world;
+    optimizationEnabled = !!(state.worldMeta && state.worldMeta.superOptimization);
+    nearMeshKey = '';
     disposeSheepMeshes();
     disposeBotMeshes();
     disposePetMeshes();
@@ -3485,9 +3560,115 @@
     }
   }
 
+  function syncOptimizationMode(state) {
+    const enabled = !!(state.worldMeta && state.worldMeta.superOptimization);
+    const changed = optimizationWorld !== state.world || optimizationEnabled !== enabled;
+    if (changed) {
+      if (distantImages) distantImages.clear();
+      surfaceColumns.clear();
+      pendingSurfaceColumns.clear();
+      optimizationWorld = state.world;
+      optimizationEnabled = enabled;
+      nearMeshKey = '';
+      visibilityCache = null;
+      meshRebuildQueue = [];
+      meshRebuildQueued.clear();
+      if (enabled && state.ui && state.ui.preview && state.ui.preview.type === 'fluid') state.ui.preview = null;
+      // A mode change changes geometry, never the canonical saved blocks.
+      for (const key of state.world.chunks.keys()) {
+        const parsed = parseChunkKey(key);
+        if (!enabled || isChunkInRenderDistance(parsed, getPlayerChunk(state.player), Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)) state.world.dirtyChunks.add(key);
+      }
+    }
+    if (!enabled) return;
+    const playerChunk = getPlayerChunk(state.player);
+    const key = `${playerChunk.cx},${playerChunk.cz}`;
+    if (key === nearMeshKey) return;
+    nearMeshKey = key;
+    for (const chunkKey of state.world.chunks.keys()) {
+      const parsed = parseChunkKey(chunkKey);
+      if (!chunkMeshes.has(chunkKey) && isChunkInRenderDistance(parsed, playerChunk, Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)
+        && (isChunkInRenderDistance(parsed, playerChunk, 1) || !distantImages || !distantImages.hasColumn(parsed.cx, parsed.cz))) state.world.dirtyChunks.add(chunkKey);
+    }
+  }
+
+  function updateDistantImages(state) {
+    if (!optimizationEnabled || !Game.distantImages3d) return;
+    if (!distantImages) distantImages = Game.distantImages3d.create(scene);
+    const playerChunk = getPlayerChunk(state.player);
+    const pending = new Set();
+    for (const key of state.world.dirtyChunks) {
+      if (!state.world.chunks.has(key)) continue;
+      const parsed = parseChunkKey(key);
+      if (parsed && (isChunkInRenderDistance(parsed, playerChunk, Game.constants3d.CHUNK_OPTIMIZATION_PRELOAD_RADIUS)
+        || distantImages.hasColumn(parsed.cx, parsed.cz))) pending.add(`${parsed.cx},${parsed.cz}`);
+    }
+    for (const task of meshRebuildQueue) pending.add(`${task.cx},${task.cz}`);
+    const loading = state.world.chunkLoading;
+    if (loading) {
+      const include = job => { if (job) pending.add(`${job.cx},${job.cz}`); };
+      for (const job of loading.queue || []) include(job);
+      for (const job of (loading.pendingIds || new Map()).values()) include(job);
+      include(loading.syncJob);
+      for (const key of loading.loadingSaved || []) include(parseChunkKey(key));
+    }
+    pendingSurfaceColumns = pending;
+    const columns = new Map();
+    for (const [key, column] of surfaceColumns) {
+      columns.set(key, { ...column, ready: !pending.has(key), meshes: [] });
+    }
+    for (const entry of chunkMeshes.values()) {
+      const key = `${entry.cx},${entry.cz}`;
+      let column = columns.get(key);
+      if (!column) {
+        column = { cx: entry.cx, cz: entry.cz, ready: !pending.has(key), meshes: [] };
+        columns.set(key, column);
+      }
+      for (const mode of ['solid', 'water', 'lava']) if (entry[mode]) column.meshes.push(entry[mode]);
+    }
+    for (const column of columns.values()) {
+      column.chunkKeys = [];
+      if (!distantImages.canRefresh(state, column.cx, column.cz)) {
+        column.ready = false;
+        pending.add(`${column.cx},${column.cz}`);
+      }
+    }
+    for (const key of state.world.chunks.keys()) {
+      const parsed = parseChunkKey(key);
+      const column = columns.get(`${parsed.cx},${parsed.cz}`);
+      if (column) column.chunkKeys.push(key);
+    }
+    distantImages.update(state, renderer, camera, Array.from(columns.values()), performance.now());
+    // Readiness can change without crossing a chunk boundary.
+    visibilityCache = null;
+    for (const [key, entry] of chunkMeshes) {
+      if (isChunkInRenderDistance(entry, playerChunk, 1)) continue;
+      if (pending.has(`${entry.cx},${entry.cz}`) || !distantImages.isCurrent(entry.cx, entry.cz)) continue;
+      for (const mode of ['solid', 'water', 'lava']) {
+        const mesh = entry[mode];
+        if (!mesh) continue;
+        if (debugInfo) {
+          const stats = meshStats(mesh);
+          debugInfo.vertices -= stats.vertices;
+          debugInfo.triangles -= stats.triangles;
+          debugInfo.chunkMeshes -= stats.meshes;
+        }
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+      }
+      chunkMeshes.delete(key);
+      chunkMeshRevision += 1;
+    }
+    for (const [key, column] of columns) {
+      if (!isChunkInRenderDistance(column, playerChunk, 1) && !pending.has(key) && distantImages.isCurrent(column.cx, column.cz)) surfaceColumns.delete(key);
+    }
+    if (debugInfo) debugInfo.distantImages = distantImages.size();
+  }
+
   function render(state, overlayCtx, overlayCanvas) {
     if (!renderer || !scene || !camera) return;
     optimizeIcons = !!(state.worldMeta && state.worldMeta.superOptimization);
+    syncOptimizationMode(state);
     if (!optimizeIcons && blockIconCache.size) blockIconCache.clear();
     if (Game.performance3d) {
       const ratio = Game.performance3d.getRenderPixelRatio3D(state, window.innerWidth, window.innerHeight, window.devicePixelRatio);
@@ -3572,7 +3753,7 @@
       }
     }
     updateCracks(state);
-    updateFluidTextureAnimation();
+    if (!optimizeIcons) updateFluidTextureAnimation();
     updateSkyLayer(player);
     updateSteamParticles(state);
     updateLavaEmbers(state);
@@ -3595,6 +3776,7 @@
       debugInfo.queuedChunks = state.world && state.world.lastQueuedChunks ? state.world.lastQueuedChunks : 0;
       debugInfo.pendingChunks = state.world && state.world.lastPendingChunks ? state.world.lastPendingChunks : 0;
     }
+    updateDistantImages(state);
     updateChunkVisibility(state);
     renderer.render(scene, camera);
     drawUI3D(overlayCtx, overlayCanvas, state);

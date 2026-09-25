@@ -944,6 +944,7 @@
   }
 
   function buildFluidPreview(state, hit) {
+    if (state.worldMeta && state.worldMeta.superOptimization) return { type: 'fluid', fluidId: hit.id, cells: [], truncated: false };
     const fluidId = hit.id;
     const maxLevel = maxPreviewFluidLevel(fluidId);
     const queue = [{ x: hit.x, y: hit.y, z: hit.z, level: 0 }];
@@ -1179,6 +1180,11 @@
       return false;
     }
     if (!canExplodeBlock(id) || explosion.broken >= (explosion.blockLimit || CUSTOM_EXPLOSION_BLOCK_LIMIT)) return false;
+    if (suppressFluidDrop(state, x, y, z)) {
+      const removed = setBlock3D(state, x, y, z, BLOCK.AIR);
+      if (removed) activateFluidAroundChange(state, x, y, z);
+      return removed;
+    }
     if (custom.movingBlocks && id !== BLOCK.CUSTOM_TNT && !isDynamiteBlock(id) && canSpawnMovingBlock(state)) {
       const speed = Math.min(30, Math.max(5, Math.sqrt(Math.abs(custom.power)) * 1.4));
       const velocity = pushVelocityFromCenter(explosion, x, y, z, speed);
@@ -1415,7 +1421,7 @@
             destroyedActiveKeys.add(coordKey(x, y, z));
             continue;
           }
-          if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
+          if (!suppressFluidDrop(state, x, y, z) && Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
           if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
             broken += 1;
             activateFluidAroundChange(state, x, y, z);
@@ -1534,7 +1540,7 @@
             continue;
           }
           if (!canExplodeBlock(id)) continue;
-          if (Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
+          if (!suppressFluidDrop(state, x, y, z) && Game.inventory3d && Game.inventory3d.addMinedItem) Game.inventory3d.addMinedItem(state, id, 1);
           if (setBlock3D(state, x, y, z, BLOCK.AIR)) {
             explosion.broken += 1;
             activateFluidAroundChange(state, x, y, z);
@@ -1616,20 +1622,26 @@
     }
   }
 
+  function suppressFluidDrop(state, x, y, z) {
+    return !!(Game.world3d.isOptimizedFluidWithoutDrop3D && Game.world3d.isOptimizedFluidWithoutDrop3D(state, x, y, z));
+  }
+
   function breakBlockAt(state, x, y, z) {
     if (!inBounds3D(state.world, x, y, z)) return null;
     const id = getBlock3D(state, x, y, z);
     const expandedBreakable = isExpandedBlockAssortmentWorld(state) && isRegisteredBlockId(id);
     if (id === BLOCK.AIR) return null;
     if (!expandedBreakable && (id === BLOCK.BEDROCK || id === BLOCK.WATER || id === BLOCK.HOT_WATER || id === BLOCK.LAVA || id === BLOCK.VOLCANIC_LAVA)) return null;
-    const dropId = isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
+    const noDrop = suppressFluidDrop(state, x, y, z);
+    const originalId = noDrop ? Game.world3d.getStoredBlock3D(state, x, y, z) : id;
+    const dropId = noDrop ? BLOCK.AIR : isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
       ? (id === BLOCK.STONE_CHEST ? ITEM.FILLED_STONE_CHEST : ITEM.FILLED_CHEST)
       : (id === BLOCK.BASALT ? BLOCK.BLACKSTONE : id);
     const dropData = isChestBlock(id) && Game.inventory3d && Game.inventory3d.filledChestDataFromWorld
       ? Game.inventory3d.filledChestDataFromWorld(state, x, y, z)
       : (id === BLOCK.CUSTOM_TNT ? customTntStackData(customTntDataAt(state, x, y, z)) : null);
     let collected = true;
-    if (Game.inventory3d && Game.inventory3d.addMinedItem) {
+    if (!noDrop && Game.inventory3d && Game.inventory3d.addMinedItem) {
       const result = Game.inventory3d.addMinedItem(state, dropId, 1, dropData);
       if (result.remaining > 0) {
         collected = false;
@@ -1639,9 +1651,9 @@
       activateFluidAroundChange(state, x, y, z);
       if (state.world.blockDamage) delete state.world.blockDamage[coordKey(x, y, z)];
       syncNearbyStrangePortals(state, x, y, z);
-      const label = Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel({ id: dropId, count: 1, data: dropData || undefined }) : (BLOCK_LABELS[dropId] || `ID ${dropId}`);
+      const label = noDrop ? BLOCK_LABELS[originalId] : Game.inventory3d && Game.inventory3d.getStackLabel ? Game.inventory3d.getStackLabel({ id: dropId, count: 1, data: dropData || undefined }) : (BLOCK_LABELS[dropId] || `ID ${dropId}`);
       if (Game.education3d && Game.education3d.onBlockMined) Game.education3d.onBlockMined(state, id);
-      return { id, dropId, dropData, label, collected };
+      return { id, dropId, dropData, label, collected, noDrop };
     }
     return null;
   }
@@ -1656,15 +1668,18 @@
     let broken = 0;
     let allCollected = true;
     let firstLabel = '';
+    let removedWithoutDrops = 0;
     for (const cell of cells) {
       const result = breakBlockAt(state, cell.x, cell.y, cell.z);
       if (!result) continue;
       broken += 1;
+      if (result.noDrop) removedWithoutDrops += 1;
       if (!firstLabel) firstLabel = result.label;
       if (!result.collected) allCollected = false;
     }
     if (!broken) return;
-    if (broken === 1) setNotice(state, allCollected ? `Добыто: ${firstLabel}` : `Сломано: ${firstLabel}, инвентарь полон`);
+    if (removedWithoutDrops === broken) setNotice(state, broken === 1 ? `Убрано: ${firstLabel}` : `Убрано блоков: ${broken}`);
+    else if (broken === 1) setNotice(state, allCollected ? `Добыто: ${firstLabel}` : `Сломано: ${firstLabel}, инвентарь полон`);
     else setNotice(state, allCollected ? `Добыто блоков: ${broken}` : `Сломано блоков: ${broken}, инвентарь полон`);
     if (Game.audio && Game.audio.playDig) Game.audio.playDig();
   }
@@ -1779,12 +1794,15 @@
     }
     const targetId = getBlock3D(state, x, y, z);
     if (!canReplaceForPlacement(targetId)) return false;
-    if (isSolidBlock3D(placedBlockId) && blockOverlapsPlayer(state, x, y, z)) return false;
+    const gameplayId = Game.world3d.getGameplayBlockId3D ? Game.world3d.getGameplayBlockId3D(state, placedBlockId) : placedBlockId;
+    if (isSolidBlock3D(gameplayId) && blockOverlapsPlayer(state, x, y, z)) return false;
     let placed = false;
     if (blockId === BLOCK.WATER && Game.fluids3d && Game.fluids3d.addWaterSource3D) {
       placed = Game.fluids3d.addWaterSource3D(state, x, y, z);
     } else if (blockId === BLOCK.LAVA && Game.fluids3d && Game.fluids3d.addLavaSource3D) {
       placed = Game.fluids3d.addLavaSource3D(state, x, y, z);
+    } else if (blockId === BLOCK.VOLCANIC_LAVA && Game.fluids3d && Game.fluids3d.addVolcanicLavaSource3D) {
+      placed = Game.fluids3d.addVolcanicLavaSource3D(state, x, y, z);
     } else {
       placed = setBlock3D(state, x, y, z, placedBlockId);
     }
@@ -1899,7 +1917,7 @@
     let placed = 0;
     let blockedByPlayer = false;
     let blockedByUnloadedChunk = false;
-    const selectedBlockIsSolid = isSolidBlock3D(placedBlockId);
+    const selectedBlockIsSolid = isSolidBlock3D(Game.world3d.getGameplayBlockId3D ? Game.world3d.getGameplayBlockId3D(state, placedBlockId) : placedBlockId);
     for (const cell of cells) {
       if (placed >= available) break;
       if (selectedBlockIsSolid && inBounds3D(state.world, cell.x, cell.y, cell.z) && blockOverlapsPlayer(state, cell.x, cell.y, cell.z)) blockedByPlayer = true;

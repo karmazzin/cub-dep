@@ -3,6 +3,11 @@
   const { BLOCK } = Game.blocks;
   const { getBlock3D, setBlock3D, getFluidLevel3D, setWater3D, setLava3D, setVolcanicLava3D, setHotWater3D, isFluidSource3D, isBlockChunkLoaded3D, inBounds3D, isSolidBlock3D } = Game.world3d;
   const STATIC_WATER_LEVEL = Game.world3d.STATIC_WATER_LEVEL;
+  const { getStoredBlock3D } = Game.world3d;
+
+  function optimized(state) {
+    return !!(state && state.worldMeta && state.worldMeta.superOptimization);
+  }
 
   const MAX_FLUID_LEVEL = 4;
   const HOT_WATER_MAX_FLUID_LEVEL = 7;
@@ -53,7 +58,7 @@
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z) || !inBounds3D(world, x, y - 2, z)) return false;
     const middle = getBlock3D(state, x, y - 1, z);
-    const heat = getBlock3D(state, x, y - 2, z);
+    const heat = getStoredBlock3D(state, x, y - 2, z);
     return isSolidBlock3D(middle) && (heat === BLOCK.LAVA || heat === BLOCK.VOLCANIC_LAVA);
   }
 
@@ -77,7 +82,7 @@
         const nx = x + dx;
         const nz = z + dz;
         if (!inBounds3D(state.world, nx, y, nz)) continue;
-        if (getBlock3D(state, nx, y, nz) === BLOCK.HOT_WATER) count += 1;
+        if (getStoredBlock3D(state, nx, y, nz) === BLOCK.HOT_WATER) count += 1;
       }
     }
     return Math.max(1, count);
@@ -115,6 +120,13 @@
   }
 
   function getGeyserInfo3D(state, x, y, z) {
+    if (optimized(state)) {
+      if (getStoredBlock3D(state, x, y, z) !== BLOCK.HOT_WATER
+        || !isFluidSource3D(state, x, y, z, BLOCK.HOT_WATER)
+        || !isActiveGeyser3D(state, x, y, z)) return null;
+      const hotWaterCount = countHotWaterNearGeyser(state, x, y, z);
+      return { x, y, z, hotWaterCount, height: geyserHeightForHotWaterCount(hotWaterCount) };
+    }
     const fluids = ensureFluidState(state);
     return fluids.geysers.get(geyserKey(x, y, z)) || null;
   }
@@ -131,12 +143,14 @@
   }
 
   function addActiveFluidCell(state, x, y, z) {
+    if (optimized(state)) return;
     const world = state && state.world;
     if (!world || !inBounds3D(world, x, y, z)) return;
     ensureFluidState(state).active.add(geyserKey(x, y, z));
   }
 
   function addActiveFluidNeighbors(state, x, y, z, target = null) {
+    if (optimized(state)) return;
     const set = target || ensureFluidState(state).active;
     const world = state && state.world;
     if (!world) return;
@@ -203,6 +217,7 @@
   }
 
   function cleanupDisconnectedFluidsNear(state, x, y, z) {
+    if (optimized(state)) return;
     const world = state && state.world;
     if (!world) return;
     for (const [dx, dy, dz] of ACTIVE_DIRS) {
@@ -380,18 +395,20 @@
     }
   }
 
-  function tickFluids(state) {
+  function tickFluids(state, immediateKeys = null) {
     const fluids = ensureFluidState(state);
     const moves = [];
     const px = Math.floor(state.player.x);
     const pz = Math.floor(state.player.z);
-    if (!fluids.active.size) seedActiveFluidCellsNearPlayer(state, px, pz);
-    if (!fluids.active.size) {
+    if (!immediateKeys && !fluids.active.size) seedActiveFluidCellsNearPlayer(state, px, pz);
+    if (!immediateKeys && !fluids.active.size) {
       fluids.geysers.clear();
       return;
     }
-    const queuedKeys = Array.from(fluids.active);
-    fluids.active.clear();
+    const queuedKeys = immediateKeys || Array.from(fluids.active);
+    if (immediateKeys) {
+      for (const key of immediateKeys) fluids.active.delete(key);
+    } else fluids.active.clear();
     const allActiveKeys = queuedKeys;
     const activeKeys = allActiveKeys.slice(0, ACTIVE_FLUID_TICK_LIMIT);
     let bounds = null;
@@ -442,6 +459,16 @@
 
   function updateFluids3D(state, dt) {
     const fluids = ensureFluidState(state);
+    if (optimized(state)) {
+      fluids.accumulator = 0;
+      fluids.optimizationPaused = true;
+      // Keep pending fronts for resuming; optimized writes never enqueue work.
+      return;
+    }
+    if (fluids.optimizationPaused) {
+      fluids.optimizationPaused = false;
+      seedActiveFluidCellsNearPlayer(state, Math.floor(state.player.x), Math.floor(state.player.z));
+    }
     fluids.accumulator += dt;
     let ticks = 0;
     while (fluids.accumulator >= TICK_INTERVAL && ticks < MAX_TICKS_PER_FRAME) {
@@ -452,17 +479,23 @@
     if (fluids.accumulator >= TICK_INTERVAL) fluids.accumulator = TICK_INTERVAL * 0.5;
   }
 
-  function stepImmediateFluid3D(state) {
+  function stepImmediateFluid3D(state, x, y, z) {
+    if (optimized(state)) return;
     const fluids = ensureFluidState(state);
     if (!fluids.active.size || !state || !state.player) return;
-    tickFluids(state);
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+      // Placement must never wait behind the world's background fluid queue.
+      const local = new Set();
+      addActiveFluidNeighbors(state, x, y, z, local);
+      tickFluids(state, Array.from(local));
+    } else tickFluids(state);
   }
 
   function addWaterSource3D(state, x, y, z) {
     if (!isFluidCellLoaded(state, x, y, z)) return false;
     const changed = setWater3D(state, x, y, z, 0, true);
     addActiveFluidNeighbors(state, x, y, z);
-    if (changed) stepImmediateFluid3D(state);
+    if (changed) stepImmediateFluid3D(state, x, y, z);
     return changed;
   }
 
@@ -470,7 +503,7 @@
     if (!isFluidCellLoaded(state, x, y, z)) return false;
     const changed = setLava3D(state, x, y, z, 0, true);
     addActiveFluidNeighbors(state, x, y, z);
-    if (changed) stepImmediateFluid3D(state);
+    if (changed) stepImmediateFluid3D(state, x, y, z);
     return changed;
   }
 
@@ -478,7 +511,7 @@
     if (!isFluidCellLoaded(state, x, y, z)) return false;
     const changed = setVolcanicLava3D(state, x, y, z, 0, true);
     addActiveFluidNeighbors(state, x, y, z);
-    if (changed) stepImmediateFluid3D(state);
+    if (changed) stepImmediateFluid3D(state, x, y, z);
     return changed;
   }
 
@@ -488,6 +521,7 @@
   }
 
   function activateFluidAroundLoadedChunk3D(state, bounds) {
+    if (optimized(state)) return;
     const world = state && state.world;
     if (!world || !bounds) return;
     for (let y = bounds.minY; y < bounds.maxY; y += 1) {
@@ -503,6 +537,7 @@
   }
 
   function activateVolcanicLavaCoolingWave3D(state, wave) {
+    if (optimized(state)) return;
     const world = state && state.world;
     if (!world || !world.chunks || !wave) return;
     const size = Game.constants3d.CHUNK_SIZE;
